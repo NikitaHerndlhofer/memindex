@@ -1,0 +1,11 @@
+{
+  "name": "@memex/sources",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": { ".": "./src/index.ts" },
+  "dependencies": {
+    "@memex/model": "workspace:*",
+    "zod": "^4.4.3"
+  }
+}

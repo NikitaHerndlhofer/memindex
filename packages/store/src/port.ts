@@ -1,0 +1,284 @@
+/**
+ * The storage port. One interface, two adapters (SQLite default, Postgres opt-in).
+ *
+ * Hidden behind it: SQL dialect (FTS5 vs tsvector, trigram vtable vs pg_trgm, vec0 vs pgvector),
+ * locking (BEGIN IMMEDIATE + WAL vs SELECT … FOR UPDATE), the per-item diffing transaction,
+ * supersedence, the append-only guard, the migration ledger and gate, derived objects (vector
+ * tables, facet views), the filtered-KNN strategy, and the read-only query path.
+ *
+ * Deliberately NOT here: embedding, chunking, talking to sources, fusing rankings. Those are
+ * engine policy and must behave identically across backends.
+ */
+
+import type {
+  Capture,
+  ChunkDraft,
+  ChunkerId,
+  ContentHash,
+  Facets,
+  IsoTime,
+  ItemDraft,
+  ItemKey,
+  ItemKind,
+  LocationId,
+  ProducerId,
+  Revision,
+  Sighting,
+  SourceId,
+  VectorSpace,
+} from "@memex/model";
+
+export type Backend = "sqlite" | "postgres";
+
+/** Parsed once from config / MEMEX_STORE. Never a raw string past this point. */
+export type StoreConfig =
+  | { readonly backend: "sqlite"; readonly path: string }
+  | { readonly backend: "postgres"; readonly url: string };
+
+export interface OpenStoreOptions {
+  /** Per-source facet declarations → generated `<source>_items` views. */
+  readonly facets: ReadonlyMap<SourceId, Facets>;
+  /** The active vector space; its table is ensured on open. */
+  readonly vectorSpace: VectorSpace;
+}
+
+export interface WriteOpenOptions extends OpenStoreOptions {
+  readonly mode: "write";
+  readonly producer: ProducerId;
+  /** Recorded in the producer table and the migration ledger. */
+  readonly binaryVersion: string;
+}
+
+export interface ReadOpenOptions extends OpenStoreOptions {
+  readonly mode: "read";
+}
+
+// ─── Read side (agents, recipes, search) ───────────────────────────────────────
+
+export interface ReadStore {
+  readonly backend: Backend;
+  readonly schema: SchemaStatus;
+  /** Single-modality ranked retrieval. Hybrid fusion happens in the engine. */
+  search(req: StoreSearch): Promise<readonly RankedChunk[]>;
+  /**
+   * Consumer SQL over the view contract, read-only (sqlite: separate `mode=ro` connection with
+   * `query_only`; postgres: READ ONLY transaction + statement_timeout). When `hits` is given it is
+   * prepended as `WITH hits(...) AS (VALUES …)` so the same SQL text runs on both backends.
+   * `:name` params are bound natively (sqlite) or rewritten to `$n` (postgres).
+   */
+  run(sql: string, opts: RunOptions): AsyncIterable<Row>;
+  /** Stored items for copy/rechunk/reparse, ordered by item_key for resumable cursors. */
+  streamItems(filter: StreamFilter): AsyncIterable<StoredItem>;
+  stats(): Promise<StoreStats>;
+  close(): Promise<void>;
+}
+
+export type SearchVia = "keyword" | "fuzzy" | "vector";
+
+export interface StoreSearch {
+  readonly via: SearchVia;
+  /** keyword/fuzzy: user text; the adapter escapes it into its own query syntax. */
+  readonly text?: string;
+  /** vector: query embedding in `space`. */
+  readonly vector?: Float32Array;
+  readonly space?: VectorSpace;
+  readonly filter: ChunkFilter;
+  readonly k: number;
+}
+
+export interface ChunkFilter {
+  readonly source?: readonly SourceId[];
+  readonly kind?: readonly ItemKind[];
+  readonly since?: IsoTime;
+  readonly items?: readonly ItemKey[];
+  /** Default false: superseded items are excluded. */
+  readonly includeSuperseded?: boolean;
+}
+
+export interface RankedChunk {
+  readonly chunkId: string;
+  readonly itemKey: ItemKey;
+  readonly turnKey: string;
+  /** 1-based within this modality. */
+  readonly rank: number;
+  /** bm25 / ts_rank / trigram similarity / (1 - cosine distance). Higher is better. */
+  readonly score: number;
+  readonly snippet: string;
+}
+
+export type HitVia = "keyword" | "fuzzy" | "semantic" | "hybrid";
+
+/** The `hits` relation. Identical columns on both backends. */
+export interface Hit extends RankedChunk {
+  readonly via: HitVia;
+}
+
+export const HIT_COLUMNS = ["rank", "score", "via", "chunk_id", "item_key", "turn_key", "snippet"] as const;
+
+export interface RunOptions {
+  readonly hits?: readonly Hit[];
+  readonly params?: Readonly<Record<string, string | number | null>>;
+  /** Default 15s. */
+  readonly timeoutMs?: number;
+  /** Default 10k. The stream ends with a truncation marker row rather than silently cutting. */
+  readonly maxRows?: number;
+}
+
+export type Row = Readonly<Record<string, string | number | null>>;
+
+// ─── Write side (producers) ────────────────────────────────────────────────────
+
+export interface WriteStore extends ReadStore {
+  readonly producer: ProducerId;
+
+  /**
+   * Record sightings for this producer at this location (seen_at, revision, locator,
+   * attachments; clears gone_at if the item came back). Returns the keys whose content must be
+   * read: unknown items, or items whose stored revision is older than the sighting's.
+   * Idempotent; batched.
+   */
+  triage(source: SourceId, location: LocationId, sightings: readonly Sighting[]): Promise<readonly ItemKey[]>;
+
+  /**
+   * The write. One transaction per item under the item lock:
+   *   lock → load head + turn/chunk hashes → planItemWrite (pure, shared) →
+   *   stale|same: refresh the observation only → apply: upsert item/turns/chunks, delete turns
+   *   and chunks absent from the draft (items are never deleted), insert the capture if given,
+   *   recompute the supersedence group, write the observation → commit.
+   * Vectors are untouched: keyed by content hash, unchanged text keeps its vector.
+   * A crash anywhere commits nothing; the next triage still says "newer".
+   */
+  apply(write: ItemWrite): Promise<ApplyOutcome>;
+
+  /**
+   * Producer- and location-scoped deletion after a COMPLETE listing: set gone_at on this
+   * producer's observations at `location` whose key is not in `present`. Never touches other
+   * producers or locations, never deletes rows.
+   */
+  reconcileGone(source: SourceId, location: LocationId, present: ReadonlySet<ItemKey>): Promise<{ readonly markedGone: number }>;
+
+  /** Compare-and-swap rechunk: applies only if the item's revision hash still equals `expectedHash`. */
+  replaceChunks(
+    key: ItemKey,
+    expectedHash: string,
+    chunker: ChunkerId,
+    chunks: readonly ChunkDraft[],
+  ): Promise<"replaced" | "conflict">;
+
+  readonly vectors: VectorRepo;
+  readonly ledger: Ledger;
+}
+
+export interface ItemWrite {
+  readonly source: SourceId;
+  readonly location: LocationId;
+  readonly draft: ItemDraft;
+  readonly revision: Revision;
+  readonly sighting: Sighting;
+  readonly chunker: ChunkerId;
+  readonly chunks: readonly ChunkDraft[];
+  /** Plugin parser version that produced `draft`. Stored versions are never lowered. */
+  readonly parserVersion: number;
+  /** Raw source record of this revision, for sources that keep captures. */
+  readonly capture?: Capture;
+}
+
+export type ApplyOutcome =
+  | { readonly kind: "applied"; readonly turnsChanged: number; readonly chunksAdded: number; readonly chunksRemoved: number }
+  | { readonly kind: "same" }
+  | { readonly kind: "stale"; readonly stored: Revision };
+
+export interface VectorRepo {
+  /** Content hashes of live, embeddable chunks with no vector in `space`. `prefer` items first. */
+  backlog(space: VectorSpace, opts: { readonly limit: number; readonly prefer?: readonly ItemKey[] }): Promise<readonly PendingEmbed[]>;
+  backlogSize(space: VectorSpace): Promise<number>;
+  /** Insert-if-absent. Two producers embedding the same text race harmlessly. Returns rows inserted. */
+  put(space: VectorSpace, vectors: readonly { readonly hash: ContentHash; readonly vector: Float32Array }[]): Promise<number>;
+  /** Delete vectors no live chunk references. */
+  gc(space: VectorSpace): Promise<number>;
+}
+
+export interface PendingEmbed {
+  readonly hash: ContentHash;
+  readonly embedText: string;
+}
+
+/** Producer-scoped bookkeeping. No global single-row bookmarks exist anywhere. */
+export interface Ledger {
+  getCursor(source: SourceId, location: LocationId, name: string): Promise<string | null>;
+  setCursor(source: SourceId, location: LocationId, name: string, value: string): Promise<void>;
+  loadJob(jobId: string): Promise<JobRecord | null>;
+  saveJob(rec: JobRecord): Promise<void>;
+}
+
+export interface JobRecord {
+  readonly jobId: string;
+  readonly codeVersion: number;
+  readonly state: "running" | "done" | "failed";
+  /** Opaque, job-defined, resumable. */
+  readonly cursor: string | null;
+  readonly done: number;
+  readonly total: number | null;
+  readonly error: string | null;
+  readonly updatedAt: IsoTime;
+}
+
+export interface StoredItem {
+  readonly source: SourceId;
+  readonly draft: ItemDraft;
+  readonly revision: Revision;
+  readonly producer: ProducerId;
+  readonly chunker: ChunkerId;
+  readonly parserVersion: number;
+  readonly supersededBy: ItemKey | null;
+  /** Latest capture for the stored revision, when the source keeps captures. */
+  readonly capture: Capture | null;
+}
+
+export interface StreamFilter {
+  readonly source?: SourceId;
+  /** Items whose chunks were not produced by this chunker id. */
+  readonly staleChunker?: ChunkerId;
+  /** Items with a capture whose parser version is below this. */
+  readonly parserBelow?: number;
+  readonly afterKey?: ItemKey;
+  readonly limit: number;
+}
+
+export interface StoreStats {
+  readonly itemsBySource: Readonly<
+    Record<string, { readonly live: number; readonly superseded: number; readonly gone: number }>
+  >;
+  readonly chunks: number;
+  readonly embedBacklog: Readonly<Record<string, number>>;
+  readonly producers: readonly { readonly id: ProducerId; readonly host: string; readonly lastSeen: IsoTime | null }[];
+}
+
+// ─── Schema status ─────────────────────────────────────────────────────────────
+
+export interface SchemaStatus {
+  readonly applied: number;
+  readonly shipped: number;
+  /** View contract version stamped into the installed skill. */
+  readonly contract: number;
+  readonly state: "current" | "behind" | "ahead";
+}
+
+export class StoreError extends Error {
+  constructor(
+    readonly code:
+      | "schema_behind"
+      | "schema_ahead"
+      | "schema_tampered"
+      | "schema_gap"
+      | "busy"
+      | "readonly"
+      | "missing"
+      | "legacy_sql",
+    readonly fix: string,
+    detail?: string,
+  ) {
+    super(detail ? `${code}: ${detail}` : code);
+    this.name = "StoreError";
+  }
+}
