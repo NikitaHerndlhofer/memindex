@@ -8,7 +8,8 @@
  *           recording_vec / recording_chunk_vec only where the legacy embed text hashes to a chunk
  *           the current chunker produced
  *   gone    reconcileGone at the synthetic `legacy:swrag` location: rows with source_deleted_at
- *   verify  keys, captures, gone set and vector reconciliation; stored in the job_run cursor
+ *   verify  keys, captures, gone set and vector reconciliation; stored in the job_run cursor.
+ *           `memindex import swrag --verify-only` reruns the store checks read-only (verifyLegacyImport)
  */
 
 import type { Database } from "bun:sqlite";
@@ -40,18 +41,21 @@ import {
   type ImportState,
   type LegacyContext,
   legacyImportJob,
+  NO_TALLY_LINE,
   openLegacy,
   pickTally,
   placeholders,
   resultLine,
   rootMessage,
   type StepResult,
+  seedingLine,
   storeItemKeys,
   storeObservations,
   type Tally,
   throughputLine,
   userVersion,
   Vec0Reader,
+  type VerifyContext,
   type VerifyReport,
   vectorSpaceMatches,
 } from "./legacy-sqlite.ts";
@@ -218,9 +222,8 @@ async function seedVectors(
     lc.space,
     [...seeds].map(([hash, vector]) => ({ hash, vector })),
   );
-  bump(tally, "vec_put", seeds.size);
-  bump(tally, "vec_inserted", inserted);
-  bump(tally, "vec_not_inserted", seeds.size - inserted);
+  bump(tally, "vec_offered", seeds.size);
+  bump(tally, "vec_written", inserted);
   bump(tally, "vectors_ms", Date.now() - started);
 }
 
@@ -261,14 +264,15 @@ async function step(lc: LegacyContext, state: ImportState): Promise<StepResult> 
   }
 }
 
+/** `tally`: the import run's counters; null in verify-only, which reads no job_run row. */
 export async function verifySwrag(
-  lc: LegacyContext,
+  vc: VerifyContext,
   db: Database,
-  tally: Readonly<Tally>,
+  tally: Readonly<Tally> | null,
 ): Promise<VerifyReport> {
   checkArchive(db);
-  const store = lc.ctx.store;
-  const source = findPlugin(lc.ctx.registry, SOURCE).id;
+  const store = vc.store;
+  const source = findPlugin(vc.registry, SOURCE).id;
   const rows = db
     .query("SELECT recording_id_hex AS id, source_deleted_at AS deleted, superseded_by AS sup FROM recording")
     .all() as { id: string; deleted: string | null; sup: string | null }[];
@@ -300,21 +304,13 @@ export async function verifySwrag(
   const storeSuperseded = [...items.values()].filter((s) => s !== null).length;
 
   const legacyShort = hasTable(db, "recording_vec_rowids")
-    ? new Vec0Reader(db, "recording_vec", lc.dim, "id").count()
+    ? new Vec0Reader(db, "recording_vec", vc.dim, "id").count()
     : 0;
   const legacyChunk = hasTable(db, "recording_chunk_vec_rowids")
-    ? new Vec0Reader(db, "recording_chunk_vec", lc.dim, "rowid").count()
+    ? new Vec0Reader(db, "recording_chunk_vec", vc.dim, "rowid").count()
     : 0;
-  const t = (k: string) => tally[k] ?? 0;
-  const mismatch = {
-    centroid_dropped: t("vec_centroid_dropped"),
-    short_stale_embed_text: t("vec_short_stale_embed_text"),
-    short_text_not_produced: t("vec_short_text_not_produced"),
-    chunk_text_not_produced: t("vec_chunk_text_not_produced"),
-    item_not_imported: t("vec_item_not_imported"),
-  };
-  const accounted = t("vec_matched") + Object.values(mismatch).reduce((a, b) => a + b, 0);
   const legacyVectors = legacyShort + legacyChunk;
+  const vectorsLine = `  vectors    legacy ${legacyVectors} (recording_vec ${legacyShort}, recording_chunk_vec ${legacyChunk})`;
 
   const checks = {
     keys: missing.length === 0,
@@ -322,16 +318,29 @@ export async function verifySwrag(
     gone: goneNotDeleted.length === 0 && deletedNotGone.length === 0,
   };
   const lines = [
-    `import-swrag verification (${lc.archivePath})`,
+    `import-swrag verification (${vc.archivePath})`,
     `  items      legacy ${legacyKeys.size}, in store ${[...legacyKeys].length - missing.length}, missing ${missing.length}${missing.length ? ` (${missing.slice(0, 5).join(", ")}${missing.length > 5 ? ", …" : ""})` : ""}`,
     `  captures   ${withCapture}/${legacyKeys.size} items have a capture for their stored revision ${JSON.stringify(captures)}`,
     `  gone       legacy source_deleted_at ${legacyDeleted.size}, gone at legacy:swrag ${gone.size} (gone but not deleted ${goneNotDeleted.length}, deleted but not gone ${deletedNotGone.length})`,
     `  superseded legacy ${legacySuperseded}, store ${storeSuperseded}`,
-    `  vectors    legacy ${legacyVectors} (recording_vec ${legacyShort}, recording_chunk_vec ${legacyChunk}); seeded ${t("vec_matched")} (put ${t("vec_put")} after per-batch hash dedup; new rows ${t("vec_inserted")}, hash already stored ${t("vec_not_inserted")}); not seeded ${JSON.stringify(mismatch)}; unaccounted ${legacyVectors - accounted}`,
-    `  outcomes   ${JSON.stringify(pickTally(tally, ["applied", "same", "stale", "invalid", "apply_error", "chunks", "marked_gone"]))}`,
-    throughputLine(tally, ", incl. vector seeding"),
-    `  result     ${resultLine(checks)}`,
   ];
+  if (tally) {
+    const t = (k: string) => tally[k] ?? 0;
+    const mismatch = {
+      centroid_dropped: t("vec_centroid_dropped"),
+      short_stale_embed_text: t("vec_short_stale_embed_text"),
+      short_text_not_produced: t("vec_short_text_not_produced"),
+      chunk_text_not_produced: t("vec_chunk_text_not_produced"),
+      item_not_imported: t("vec_item_not_imported"),
+    };
+    const accounted = t("vec_matched") + Object.values(mismatch).reduce((a, b) => a + b, 0);
+    lines.push(
+      `${vectorsLine}; ${seedingLine(tally)}; not seeded ${JSON.stringify(mismatch)}; unaccounted ${legacyVectors - accounted}`,
+      `  outcomes   ${JSON.stringify(pickTally(tally, ["applied", "same", "stale", "invalid", "apply_error", "chunks", "marked_gone"]))}`,
+      throughputLine(tally, ", incl. vector seeding"),
+    );
+  } else lines.push(vectorsLine, NO_TALLY_LINE);
+  lines.push(`  result     ${resultLine(checks)}`);
   return {
     ok: Object.values(checks).every(Boolean),
     missing: missing.length,
@@ -342,18 +351,10 @@ export async function verifySwrag(
 
 export const importSwragJob = legacyImportJob({
   id: SWRAG_JOB_ID,
-  codeVersion: 1,
+  codeVersion: 2,
   describe: "Import the legacy superwhisper-rag archive (read-only) into superwhisper items, then verify",
   firstPhase: "items",
   defaultPath: defaultSwragPath,
   step,
-  async verify(lc, state) {
-    const db = openLegacy(lc.archivePath);
-    try {
-      return await verifySwrag(lc, db, state?.tally ?? {});
-    } finally {
-      db.close();
-    }
-  },
   vectorSpaceOk: (space) => vectorSpaceMatches(space, "bge-m3", 1024),
 });

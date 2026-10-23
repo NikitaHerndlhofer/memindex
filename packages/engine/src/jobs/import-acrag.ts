@@ -9,7 +9,8 @@
  *            clipForEmbed(text), exactly what acrag sent to bge-m3; the rechunk job converts them.
  *   vectors  sequential scan of chunk_vec (keyed by chunk rowid), seeded under
  *            sha256(clipForEmbed(chunk.text)) for chunks the items phase emitted
- *   verify   keys, chunk counts and vector reconciliation; stored in the job_run cursor
+ *   verify   keys, chunk counts and vector reconciliation; stored in the job_run cursor.
+ *            `memindex import acrag --verify-only` reruns the store checks read-only (verifyLegacyImport)
  */
 
 import type { Database } from "bun:sqlite";
@@ -44,17 +45,20 @@ import {
   type LegacyContext,
   legacyImportJob,
   legacyTime,
+  NO_TALLY_LINE,
   openLegacy,
   pickTally,
   placeholders,
   resultLine,
   rootMessage,
   type StepResult,
+  seedingLine,
   storeItemKeys,
   type Tally,
   throughputLine,
   userVersion,
   Vec0Reader,
+  type VerifyContext,
   type VerifyReport,
   vectorSpaceMatches,
 } from "./legacy-sqlite.ts";
@@ -480,7 +484,7 @@ async function vectorsPhase(lc: LegacyContext, db: Database, state: ImportState)
   const tally = state.tally;
   const reader = new Vec0Reader(db, "chunk_vec", lc.dim, "rowid");
   let current = state;
-  let offered = 0;
+  let offeredNow = 0;
   async function* batches() {
     let after = current.after === null ? 0 : Number(current.after);
     for (;;) {
@@ -488,21 +492,26 @@ async function vectorsPhase(lc: LegacyContext, db: Database, state: ImportState)
       if (ids.length === 0) return;
       const seeds = new Map<ContentHash, Float32Array>();
       for (const id of ids) for (const [h, v] of seedsOf(db, reader, id, tally)) seeds.set(h, v);
-      offered += seeds.size;
+      bump(tally, "vec_offered", seeds.size);
+      offeredNow += seeds.size;
       yield [...seeds].map(([hash, vector]) => ({ hash, vector }));
       after = ids[ids.length - 1] as number;
       current = { ...current, after: String(after) };
       await lc.checkpoint(current);
     }
   }
-  const inserted = await lc.ctx.store.vectors.bulkPut(
-    lc.space,
-    batches(),
-    lc.maintenanceWorkMem ? { maintenanceWorkMem: lc.maintenanceWorkMem } : undefined,
-  );
-  bump(tally, "vec_put", offered);
-  bump(tally, "vec_inserted", inserted);
-  bump(tally, "vec_not_inserted", offered - inserted);
+  let inserted: number;
+  try {
+    inserted = await lc.ctx.store.vectors.bulkPut(
+      lc.space,
+      batches(),
+      lc.maintenanceWorkMem ? { maintenanceWorkMem: lc.maintenanceWorkMem } : undefined,
+    );
+  } catch (e) {
+    bump(tally, "vec_written_unknown", offeredNow);
+    throw e;
+  }
+  bump(tally, "vec_written", inserted);
   bump(tally, "vectors_ms", Date.now() - started);
   return { ...current, phase: "verify", after: null };
 }
@@ -531,13 +540,14 @@ async function step(lc: LegacyContext, state: ImportState): Promise<StepResult> 
   }
 }
 
+/** `tally`: the import run's counters; null in verify-only, which reads no job_run row. */
 export async function verifyAcrag(
-  lc: LegacyContext,
+  vc: VerifyContext,
   db: Database,
-  tally: Readonly<Tally>,
+  tally: Readonly<Tally> | null,
 ): Promise<VerifyReport> {
   checkArchive(db);
-  const source = findPlugin(lc.ctx.registry, SOURCE).id;
+  const source = findPlugin(vc.registry, SOURCE).id;
   const convs = db.query("SELECT id, agent_name, superseded_by FROM conversation").all() as Pick<
     ConversationRow,
     "id" | "agent_name" | "superseded_by"
@@ -549,33 +559,41 @@ export async function verifyAcrag(
     if (why) bump(skipped, why);
     else legacyKeys.add(itemKey(SOURCE, c.id));
   }
-  const items = await storeItemKeys(lc.ctx.store, source);
+  const items = await storeItemKeys(vc.store, source);
   const missing = [...legacyKeys].filter((k) => !items.has(k)).sort();
   const legacyChunks = (db.query("SELECT count(*) AS n FROM chunk").get() as { n: number }).n;
   const legacyVectors = hasTable(db, "chunk_vec_rowids")
-    ? new Vec0Reader(db, "chunk_vec", lc.dim, "rowid").count()
+    ? new Vec0Reader(db, "chunk_vec", vc.dim, "rowid").count()
     : 0;
-  const t = (k: string) => tally[k] ?? 0;
-  const notSeeded = pickTally(tally, [
-    "vec_conversation_skipped",
-    "vec_orphan_no_chunk_row",
-    "vec_chunk_without_part",
-    "vec_duplicate_chunk_dropped",
-    "vec_blank_chunk",
-  ]);
-  const accounted = t("vec_matched") + Object.values(notSeeded).reduce((a, b) => a + b, 0);
-  const stats = await lc.ctx.store.stats();
+  const stats = await vc.store.stats();
   const checks = { keys: missing.length === 0 };
   const lines = [
-    `import-acrag verification (${lc.archivePath})`,
+    `import-acrag verification (${vc.archivePath})`,
     `  items      legacy importable ${legacyKeys.size} (of ${convs.length}; skipped ${JSON.stringify(skipped)}), in store ${legacyKeys.size - missing.length}, missing ${missing.length}${missing.length ? ` (${missing.slice(0, 5).join(", ")}${missing.length > 5 ? ", …" : ""})` : ""}`,
-    `  chunks     legacy ${legacyChunks}, emitted ${t("chunks")} (dropped: duplicate ${t("chunks_duplicate_dropped")}, blank ${t("chunks_blank_dropped")}, without part ${t("chunks_without_part")}; text capped ${t("chunks_text_capped")}); turns ${t("turns")} (messages without parts ${t("messages_without_parts")})`,
-    `  vectors    legacy ${legacyVectors}, read ${t("vec_legacy_read")}; seeded ${t("vec_matched")} (put ${t("vec_put")} after per-batch hash dedup; new rows ${t("vec_inserted")}, hash already stored ${t("vec_not_inserted")}); not seeded ${JSON.stringify(notSeeded)}; unaccounted ${legacyVectors - accounted}`,
-    `  backlog    ${JSON.stringify(stats.embedBacklog)} (store-wide, chunks awaiting embedding)`,
-    `  outcomes   ${JSON.stringify(pickTally(tally, ["applied", "same", "stale", "invalid", "apply_error"]))}`,
-    throughputLine(tally),
-    `  result     ${resultLine(checks)}`,
   ];
+  if (tally) {
+    const t = (k: string) => tally[k] ?? 0;
+    const notSeeded = pickTally(tally, [
+      "vec_conversation_skipped",
+      "vec_orphan_no_chunk_row",
+      "vec_chunk_without_part",
+      "vec_duplicate_chunk_dropped",
+      "vec_blank_chunk",
+    ]);
+    const accounted = t("vec_matched") + Object.values(notSeeded).reduce((a, b) => a + b, 0);
+    lines.push(
+      `  chunks     legacy ${legacyChunks}, emitted ${t("chunks")} (dropped: duplicate ${t("chunks_duplicate_dropped")}, blank ${t("chunks_blank_dropped")}, without part ${t("chunks_without_part")}; text capped ${t("chunks_text_capped")}); turns ${t("turns")} (messages without parts ${t("messages_without_parts")})`,
+      `  vectors    legacy ${legacyVectors}, read ${t("vec_legacy_read")}; ${seedingLine(tally)}; not seeded ${JSON.stringify(notSeeded)}; unaccounted ${legacyVectors - accounted}`,
+    );
+  } else lines.push(`  chunks     legacy ${legacyChunks}`, `  vectors    legacy ${legacyVectors}`);
+  lines.push(`  backlog    ${JSON.stringify(stats.embedBacklog)} (store-wide, chunks awaiting embedding)`);
+  if (tally) {
+    lines.push(
+      `  outcomes   ${JSON.stringify(pickTally(tally, ["applied", "same", "stale", "invalid", "apply_error"]))}`,
+      throughputLine(tally),
+    );
+  } else lines.push(NO_TALLY_LINE);
+  lines.push(`  result     ${resultLine(checks)}`);
   return {
     ok: missing.length === 0,
     missing: missing.length,
@@ -586,18 +604,10 @@ export async function verifyAcrag(
 
 export const importAcragJob = legacyImportJob({
   id: ACRAG_JOB_ID,
-  codeVersion: 1,
+  codeVersion: 2,
   describe: "Import the legacy acrag archive (read-only) into cursor items with its vectors, then verify",
   firstPhase: "items",
   defaultPath: defaultAcragPath,
   step,
-  async verify(lc, state) {
-    const db = openLegacy(lc.archivePath);
-    try {
-      return await verifyAcrag(lc, db, state?.tally ?? {});
-    } finally {
-      db.close();
-    }
-  },
   vectorSpaceOk: (space) => vectorSpaceMatches(space, "bge-m3", 1024),
 });

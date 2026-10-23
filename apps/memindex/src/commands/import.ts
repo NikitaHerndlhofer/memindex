@@ -1,3 +1,4 @@
+import { verifyLegacyImport } from "@memindex/engine";
 import { defineCommand } from "citty";
 import { z } from "zod";
 import { action, out, withArchive } from "../context.ts";
@@ -29,7 +30,10 @@ export const importCommand = defineCommand({
   args: {
     legacy: { type: "positional", required: true, description: "swrag | acrag" },
     archive: { type: "string", description: "Legacy SQLite file (default: the app's standard location)" },
-    "verify-only": { type: "boolean", description: "Only re-run the verification and store its report" },
+    "verify-only": {
+      type: "boolean",
+      description: "Only re-run the store checks, read-only: prints the report, writes nothing",
+    },
     restart: { type: "boolean", description: "Forget the saved cursor and import from the start" },
     budget: {
       type: "string",
@@ -47,9 +51,13 @@ export const importCommand = defineCommand({
     if (!parsed.success)
       throw new UsageError(parsed.error.issues.map((i) => `${String(i.path[0])}: ${i.message}`).join("; "));
     const a = parsed.data;
+    if (a["verify-only"]) {
+      const report = await verifyLegacyImport(a.legacy, a.archive ? { archive: a.archive } : {});
+      out(a.json ? `${JSON.stringify(report)}\n` : `${report.text}\n`);
+      return report.ok ? EXIT.ok : EXIT.user;
+    }
     const jobArgs: Record<string, string> = {
       ...(a.archive ? { archive: a.archive } : {}),
-      ...(a["verify-only"] ? { verifyOnly: "1" } : {}),
       ...(a.restart ? { restart: "1" } : {}),
       ...(a.concurrency ? { concurrency: String(a.concurrency) } : {}),
       ...(a["maintenance-work-mem"] ? { maintenanceWorkMem: a["maintenance-work-mem"] } : {}),
@@ -64,7 +72,7 @@ export const importCommand = defineCommand({
       out,
     );
     if (report.error) return EXIT.user;
-    if (!a["verify-only"] && report.remaining !== 0) {
+    if (report.remaining !== 0) {
       out(
         `budget exhausted before the import finished; run \`memindex import ${a.legacy}\` again to resume\n`,
       );

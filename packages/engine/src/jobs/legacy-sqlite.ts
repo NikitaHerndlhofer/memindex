@@ -27,8 +27,9 @@ import {
   type SourceId,
   type VectorSpace,
 } from "@memindex/model";
-import type { WriteStore } from "@memindex/store";
+import type { ReadStore } from "@memindex/store";
 import { errorMessage } from "../ingest.ts";
+import type { Registry } from "../registry.ts";
 import { oneShotJob } from "./oneshot.ts";
 import type { JobContext, JobDef, JobReport } from "./types.ts";
 
@@ -217,11 +218,17 @@ export interface StepResult {
   readonly finished: boolean;
 }
 
-export interface LegacyContext {
-  readonly ctx: JobContext;
+/** What a verification reads: views and streamItems, never the caller's producer identity. */
+export interface VerifyContext {
+  readonly store: ReadStore;
+  readonly registry: Registry;
   readonly archivePath: string;
-  readonly space: VectorSpace;
   readonly dim: number;
+}
+
+export interface LegacyContext extends VerifyContext {
+  readonly ctx: JobContext;
+  readonly space: VectorSpace;
   /** False when the active vector space isn't the one the legacy vectors were made in. */
   readonly seedVectors: boolean;
   readonly concurrency: number;
@@ -244,7 +251,6 @@ export interface LegacySpec {
   defaultPath(home: string): string;
   vectorSpaceOk(space: VectorSpace): boolean;
   step(lc: LegacyContext, state: ImportState): Promise<StepResult>;
-  verify(lc: LegacyContext, state: ImportState | null): Promise<VerifyReport>;
 }
 
 const MAX_NOTES = 20;
@@ -283,6 +289,8 @@ function legacyContext(ctx: JobContext, spec: LegacySpec, notes: string[]): Lega
   let latest: ImportState | null = null;
   return {
     ctx,
+    store: ctx.store,
+    registry: ctx.registry,
     archivePath,
     space: ctx.embedder.space,
     dim: ctx.embedder.space.dim,
@@ -309,10 +317,7 @@ function legacyContext(ctx: JobContext, spec: LegacySpec, notes: string[]): Lega
   };
 }
 
-/**
- * oneShotJob plus two arguments: `verifyOnly=1` re-runs verification and stores the report in the
- * job_run row; `restart=1` drops the saved cursor first.
- */
+/** oneShotJob plus `restart=1`, which drops the saved cursor first. */
 export function legacyImportJob(spec: LegacySpec): JobDef {
   const inner = oneShotJob({
     id: spec.id,
@@ -383,38 +388,9 @@ export function legacyImportJob(spec: LegacySpec): JobDef {
           });
         }
       }
-      if (ctx.args.verifyOnly === "1") return verifyOnly(ctx, spec);
       return inner.run(ctx, budget);
     },
   };
-}
-
-async function verifyOnly(ctx: JobContext, spec: LegacySpec): Promise<JobReport> {
-  const lc = legacyContext(ctx, spec, []);
-  const rec = await ctx.store.ledger.loadJob(spec.id);
-  const saved = rec && rec.codeVersion === spec.codeVersion ? parseState(rec.cursor) : null;
-  let report: VerifyReport;
-  try {
-    report = await spec.verify(lc, saved);
-  } catch (e) {
-    return { id: spec.id, done: 0, remaining: null, error: errorMessage(e) };
-  }
-  ctx.log.info(report.text);
-  const state: ImportState = {
-    ...(saved ?? { archivePath: lc.archivePath, phase: spec.firstPhase, after: null, tally: {}, notes: [] }),
-    report,
-  };
-  await ctx.store.ledger.saveJob({
-    jobId: spec.id,
-    codeVersion: spec.codeVersion,
-    state: rec?.state ?? "running",
-    cursor: JSON.stringify(state),
-    done: rec?.done ?? 0,
-    total: rec?.total ?? null,
-    error: report.ok ? null : report.summary,
-    updatedAt: isoTime(Date.now()),
-  });
-  return { id: spec.id, done: 0, remaining: report.missing, error: report.ok ? null : report.summary };
 }
 
 /** Bounded-parallel map; the store serializes per item, so independent items can overlap. */
@@ -434,7 +410,7 @@ export async function eachLimit<T>(xs: readonly T[], n: number, fn: (x: T) => Pr
 const PROBE = { maxRows: 50_000_000, timeoutMs: 600_000 } as const;
 
 async function probe(
-  store: WriteStore,
+  store: ReadStore,
   sql: string,
   params: Record<string, string>,
 ): Promise<Record<string, unknown>[]> {
@@ -448,7 +424,7 @@ async function probe(
 
 /** item_key → superseded_by for every item of `source`. */
 export async function storeItemKeys(
-  store: WriteStore,
+  store: ReadStore,
   source: SourceId,
 ): Promise<Map<ItemKey, string | null>> {
   const rows = await probe(store, "SELECT item_key, superseded_by FROM items_all WHERE source = :source", {
@@ -457,18 +433,39 @@ export async function storeItemKeys(
   return new Map(rows.map((r) => [r.item_key as ItemKey, (r.superseded_by as string | null) ?? null]));
 }
 
-/** item_key → gone? for this producer's observations at `location`. */
+/** item_key → gone at `location`, i.e. no producer's observation there is live. */
 export async function storeObservations(
-  store: WriteStore,
+  store: ReadStore,
   source: SourceId,
   location: LocationId,
 ): Promise<Map<ItemKey, boolean>> {
   const rows = await probe(
     store,
-    "SELECT item_key, gone_at FROM observations WHERE source = :source AND location_id = :location AND producer_id = :producer",
-    { source, location, producer: store.producer },
+    `SELECT item_key, min(CASE WHEN gone_at IS NULL THEN 0 ELSE 1 END) AS gone FROM observations
+     WHERE source = :source AND location_id = :location GROUP BY item_key`,
+    { source, location },
   );
-  return new Map(rows.map((r) => [r.item_key as ItemKey, r.gone_at !== null && r.gone_at !== undefined]));
+  return new Map(rows.map((r) => [r.item_key as ItemKey, Number(r.gone) === 1]));
+}
+
+/** The import's counters live in its job_run row, which verify-only (read mode) does not read. */
+export const NO_TALLY_LINE =
+  "  counters   not shown by --verify-only: the import run keeps them in its job_run row (shown in its own report)";
+
+/**
+ * vec_matched legacy vectors whose hash an imported chunk carries → vec_offered distinct hashes
+ * handed to put/bulkPut (a batch is a Map by hash) → vec_written rows the store inserted, or
+ * vec_written_unknown when the bulkPut that took them threw before returning its count.
+ */
+export function seedingLine(t: Readonly<Tally>): string {
+  const n = (k: string) => t[k] ?? 0;
+  const unknown = n("vec_written_unknown");
+  return [
+    `written ${n("vec_written")} of ${n("vec_matched")} matched (duplicate hash within a batch ${n("vec_matched") - n("vec_offered")}`,
+    `, hash already stored ${n("vec_offered") - n("vec_written") - unknown}`,
+    unknown > 0 ? `, put by a failed bulkPut so not counted ${unknown}` : "",
+    ")",
+  ].join("");
 }
 
 export function throughputLine(t: Readonly<Tally>, itemsNote = ""): string {
