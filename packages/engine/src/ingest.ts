@@ -2,9 +2,10 @@ import type { ItemKey, Sighting, SourceId } from "@memindex/model";
 import type { Location, SourceKit, SourcePlugin } from "@memindex/sources";
 import type { WriteStore } from "@memindex/store";
 import { tryLock } from "./lock.ts";
-import type { Log, Registry } from "./registry.ts";
+import type { Log } from "./log.ts";
+import type { Registry } from "./registry.ts";
 
-export const TRIAGE_BATCH = 500;
+const TRIAGE_BATCH = 500;
 /** Applied keys remembered per run so the post-ingest embed serves them first. */
 const PREFER_CAP = 1_000;
 
@@ -162,7 +163,6 @@ async function processBatch(
 ): Promise<void> {
   const toRead = new Set(await deps.store.triage(plugin.id, loc.id, batch));
   if (toRead.size === 0) return;
-  const chunker = deps.registry.chunker(plugin.chunker);
   for (const sighting of batch) {
     if (!toRead.has(sighting.key)) continue;
     try {
@@ -174,18 +174,19 @@ async function processBatch(
       const meta = plugin.meta.safeParse(res.draft.meta);
       if (!meta.success || res.draft.key !== sighting.key) {
         const why = meta.success ? `draft key ${res.draft.key} ≠ sighting key` : meta.error.message;
-        deps.log(`skipping invalid item ${sighting.key}`, { source: plugin.id, error: why });
+        deps.log.warn(`skipping invalid item ${sighting.key}`, { source: plugin.id, error: why });
         tally.count(sighting.key, "invalid");
         continue;
       }
       const draft = { ...res.draft, meta: meta.data };
+      const chunker = deps.registry.chunkerFor(plugin.id, draft.kind);
       const outcome = await deps.store.apply({
         source: plugin.id,
         location: loc.id,
         draft,
         revision: sighting.revision,
         sighting,
-        chunker: plugin.chunker,
+        chunker: chunker.id,
         chunks: chunker.chunk(draft),
         parserVersion: plugin.parserVersion,
         ...(res.capture ? { capture: res.capture } : {}),

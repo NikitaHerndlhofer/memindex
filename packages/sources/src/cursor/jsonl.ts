@@ -9,8 +9,8 @@
  * lines do repeat (≈5k), so a turn key is `j<sha256(line)[:16]>.<occurrence>`, never a line number.
  */
 
-import { readFileSync, statSync } from "node:fs";
-import { basename, dirname } from "node:path";
+import { readdirSync, readFileSync, statSync } from "node:fs";
+import { basename, dirname, join } from "node:path";
 import {
   type ItemDraft,
   isoTime,
@@ -21,7 +21,7 @@ import {
   type TurnDraft,
   turnKey,
 } from "@memindex/model";
-import { blockToPart } from "../blocks.ts";
+import { blockToPart } from "../agent-chat/blocks.ts";
 import { asRecord, asString, parseJson, repoFromPath, resolveDashedPath, UUID } from "../util.ts";
 import type { CursorMeta } from "./meta.ts";
 
@@ -52,15 +52,63 @@ function toRole(role: unknown): Role {
 
 const USER_QUERY = /<user_query>\s*([\s\S]*?)\s*<\/user_query>/;
 
+function messageBlocks(obj: Record<string, unknown> | null): unknown[] {
+  const msg = asRecord(obj?.message);
+  if (!msg) return [];
+  if (Array.isArray(msg.content)) return msg.content;
+  return typeof msg.content === "string" ? [{ type: "text", text: msg.content }] : [];
+}
+
+/** The prompt a subagent transcript starts with: its first user message's `<user_query>`. */
+export function subagentPrompt(contents: string): string | null {
+  for (const line of contents.split("\n")) {
+    if (line.trim().length === 0) continue;
+    const obj = asRecord(parseJson(line));
+    if (obj?.role !== "user") continue;
+    const part = messageBlocks(obj)
+      .map(blockToPart)
+      .find((p) => p?.kind === "text");
+    const q = part ? (USER_QUERY.exec(part.text)?.[1] ?? part.text).trim() : "";
+    return q || null;
+  }
+  return null;
+}
+
+/**
+ * The JSONL mirror has no tool results, so a `Task` call is linked to the child transcript (in
+ * `<composerId>/subagents/`) whose prompt equals the call's `input.prompt`. Each child links once.
+ */
+function blockParts(block: unknown, children: Map<string, string>): Part[] {
+  const part = blockToPart(block);
+  if (!part) return [];
+  const input = asRecord(asRecord(block)?.input);
+  const prompt = part.kind === "tool_call" ? asString(input?.prompt)?.trim() : undefined;
+  const child = prompt ? children.get(prompt) : undefined;
+  if (!prompt || !child) return [part];
+  children.delete(prompt);
+  return [
+    part,
+    {
+      kind: "subagent",
+      text: asString(input?.description) ?? part.toolName ?? "subagent",
+      toolName: part.toolName,
+      ref: itemKey("cursor", child),
+    },
+  ];
+}
+
+/** `children`: subagent prompt → child composerId. */
 export function parseTranscript(
   path: string,
   contents: string,
   mtimeMs: number,
   birthtimeMs: number,
+  children: ReadonlyMap<string, string> = new Map(),
 ): ItemDraft<CursorMeta> {
   const composerId = composerIdFromPath(path);
   if (!composerId) throw new Error(`cursor jsonl: not a transcript path: ${path}`);
   const occurrences = new Map<string, number>();
+  const unlinked = new Map(children);
   const turns: TurnDraft[] = [];
   let title: string | null = null;
 
@@ -70,14 +118,8 @@ export function parseTranscript(
     const occ = occurrences.get(digest) ?? 0;
     occurrences.set(digest, occ + 1);
     const obj = asRecord(parseJson(line));
-    const msg = asRecord(obj?.message);
-    if (!obj || !msg) continue;
-    const blocks = Array.isArray(msg.content)
-      ? msg.content
-      : typeof msg.content === "string"
-        ? [{ type: "text", text: msg.content }]
-        : [];
-    const parts = blocks.map(blockToPart).filter((p): p is Part => p !== null);
+    if (!obj || !asRecord(obj.message)) continue;
+    const parts = messageBlocks(obj).flatMap((b) => blockParts(b, unlinked));
     if (parts.length === 0) continue;
     const role = toRole(obj.role);
     if (!title && role === "user") {
@@ -116,6 +158,30 @@ export function parseTranscript(
   };
 }
 
+/** Prompt → composerId for the transcripts in `<dir of path>/subagents/`. */
+function subagentPrompts(path: string): Map<string, string> {
+  const out = new Map<string, string>();
+  const dir = join(dirname(path), "subagents");
+  let names: string[];
+  try {
+    names = readdirSync(dir).sort();
+  } catch {
+    return out;
+  }
+  for (const name of names) {
+    const child = composerIdFromPath(name);
+    if (!child) continue;
+    let prompt: string | null = null;
+    try {
+      prompt = subagentPrompt(readFileSync(join(dir, name), "utf8"));
+    } catch {
+      continue;
+    }
+    if (prompt && !out.has(prompt)) out.set(prompt, child);
+  }
+  return out;
+}
+
 export function readTranscriptFile(path: string): ItemDraft<CursorMeta> | null {
   let contents: string;
   let st: ReturnType<typeof statSync>;
@@ -125,5 +191,6 @@ export function readTranscriptFile(path: string): ItemDraft<CursorMeta> | null {
   } catch {
     return null;
   }
-  return parseTranscript(path, contents, st.mtimeMs, st.birthtimeMs);
+  const children = parentFromPath(path) ? new Map<string, string>() : subagentPrompts(path);
+  return parseTranscript(path, contents, st.mtimeMs, st.birthtimeMs, children);
 }

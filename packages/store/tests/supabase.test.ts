@@ -5,8 +5,17 @@
  */
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import postgres from "postgres";
-import { migrateStore, openStore, type StoreConfig, StoreError } from "../src/index.ts";
+import {
+  materializeSupabaseProject,
+  migrateStore,
+  openStore,
+  type StoreConfig,
+  StoreError,
+} from "../src/index.ts";
 import { type ContractBackend, type LedgerBreak, P1, runStoreContract, SPACE } from "./contract.ts";
 
 const URL_ = process.env.MEMINDEX_TEST_PG_URL ?? "postgres://postgres:postgres@127.0.0.1:54322/postgres";
@@ -193,5 +202,69 @@ describe("supabase CLI is the migrator", () => {
     const w = await openStore(scratchCfg, opts);
     expect(w.schema.state).toBe("current");
     await w.close();
+  }, 120_000);
+
+  test("materializeSupabaseProject writes the shipped project exactly", () => {
+    const dir = mkdtempSync(join(tmpdir(), "memindex-project-"));
+    try {
+      mkdirSync(join(dir, "supabase", "migrations"), { recursive: true });
+      writeFileSync(join(dir, "supabase", "migrations", "29990101000000_stale.sql"), "SELECT 1;");
+      expect(materializeSupabaseProject(dir)).toEqual({ projectDir: dir });
+      materializeSupabaseProject(dir);
+      const repo = join(import.meta.dir, "../../../supabase");
+      expect(readFileSync(join(dir, "supabase", "config.toml"), "utf8")).toBe(
+        readFileSync(join(repo, "config.toml"), "utf8"),
+      );
+      const sqlFiles = (d: string) =>
+        readdirSync(d)
+          .filter((f) => f.endsWith(".sql"))
+          .sort();
+      const shipped = sqlFiles(join(repo, "migrations"));
+      expect(sqlFiles(join(dir, "supabase", "migrations"))).toEqual(shipped);
+      for (const f of shipped) {
+        expect(readFileSync(join(dir, "supabase", "migrations", f), "utf8")).toBe(
+          readFileSync(join(repo, "migrations", f), "utf8"),
+        );
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a `bun build --compile` binary migrates a fresh database from its embedded migrations", async () => {
+    const db = `memindex_compiled_${process.pid}`;
+    const u = new URL(URL_);
+    u.pathname = `/${db}`;
+    const dir = mkdtempSync(join(tmpdir(), "memindex-compiled-"));
+    await admin.unsafe(`DROP DATABASE IF EXISTS ${db} WITH (FORCE)`);
+    await admin.unsafe(`CREATE DATABASE ${db}`);
+    try {
+      const entry = join(dir, "entry.ts");
+      writeFileSync(
+        entry,
+        `import { migrateStore } from ${JSON.stringify(join(import.meta.dir, "../src/index.ts"))};
+console.log(JSON.stringify(await migrateStore({ backend: "postgres", url: process.argv[2] })));
+`,
+      );
+      const bin = join(dir, "migrate");
+      const build = Bun.spawnSync(["bun", "build", "--compile", entry, "--outfile", bin], { stderr: "pipe" });
+      expect(build.exitCode, build.stderr.toString()).toBe(0);
+      rmSync(entry);
+      const run = Bun.spawnSync([bin, u.toString()], { cwd: dir, stdout: "pipe", stderr: "pipe" });
+      expect(run.exitCode, run.stderr.toString()).toBe(0);
+      const status = JSON.parse(run.stdout.toString().trim());
+      expect(status).toMatchObject({ state: "current", applied: status.shipped });
+      const s = postgres(u.toString(), { max: 1, onnotice: () => {} });
+      try {
+        const viaBinary =
+          await s`SELECT version, statements, name FROM supabase_migrations.schema_migrations ORDER BY version`;
+        expect(viaBinary.map((r) => ({ ...r }))).toEqual((await ledger()).map((r) => ({ ...r })));
+      } finally {
+        await s.end();
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      await admin.unsafe(`DROP DATABASE IF EXISTS ${db} WITH (FORCE)`);
+    }
   }, 120_000);
 });

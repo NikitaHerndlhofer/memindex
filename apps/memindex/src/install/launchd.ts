@@ -7,7 +7,7 @@ export const PLIST_LABEL = "com.memindex.watch";
 /** Labels of the apps memindex replaces; their watchers are booted out on install. */
 export const LEGACY_LABELS = ["com.superwhisper-rag.watch", "com.acrag.watch"] as const;
 
-export function plistPath(home: string, label = PLIST_LABEL): string {
+function plistPath(home: string, label = PLIST_LABEL): string {
   return join(home, "Library", "LaunchAgents", `${label}.plist`);
 }
 

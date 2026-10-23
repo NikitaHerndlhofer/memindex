@@ -1,3 +1,5 @@
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type GateVerdict, judgeLedger, type LedgerRow, schemaStatus, VIEW_CONTRACT } from "./gate.ts";
 import { MIGRATIONS } from "./migrations.gen.ts";
@@ -13,6 +15,7 @@ import {
   type WriteOpenOptions,
   type WriteStore,
 } from "./port.ts";
+import { materializeSupabaseProject } from "./project.ts";
 
 const MIGRATE_FIX = "memindex migrate";
 
@@ -46,27 +49,34 @@ export async function openStore(
 export interface MigrateOptions {
   /** Supabase CLI executable. Default: $MEMINDEX_SUPABASE_BIN or `supabase` on PATH. */
   readonly supabaseBin?: string;
-  /** Directory containing `supabase/migrations`. Default: $MEMINDEX_SUPABASE_DIR or the repo root. */
-  readonly projectDir?: string;
 }
 
 /**
  * `memindex migrate`: applies pending migrations with `supabase migration up --db-url`, the only
- * migrator, so the CLI's ledger stays the single source of truth. Returns the gate's view after.
+ * migrator, so the CLI's ledger stays the single source of truth. The migrations are the ones
+ * embedded in this binary, written to a throwaway project directory. Returns the gate's view after.
  */
 export async function migrateStore(cfg: StoreConfig, opts: MigrateOptions = {}): Promise<SchemaStatus> {
   const url = postgresUrl(cfg);
   const bin = opts.supabaseBin ?? process.env.MEMINDEX_SUPABASE_BIN ?? "supabase";
-  const workdir = opts.projectDir ?? process.env.MEMINDEX_SUPABASE_DIR ?? join(import.meta.dir, "../../..");
-  const proc = Bun.spawn([bin, "migration", "up", "--db-url", url, "--workdir", workdir], {
-    stdout: "pipe",
-    stderr: "pipe",
-  });
-  const [code, out, err] = await Promise.all([
-    proc.exited,
-    new Response(proc.stdout).text(),
-    new Response(proc.stderr).text(),
-  ]);
+  const workdir = mkdtempSync(join(tmpdir(), "memindex-migrate-"));
+  let code: number;
+  let out: string;
+  let err: string;
+  try {
+    materializeSupabaseProject(workdir);
+    const proc = Bun.spawn([bin, "migration", "up", "--db-url", url, "--workdir", workdir], {
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    [code, out, err] = await Promise.all([
+      proc.exited,
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+    ]);
+  } finally {
+    rmSync(workdir, { recursive: true, force: true });
+  }
   if (code !== 0) {
     throw new Error(
       `supabase migration up failed (exit ${code}): ${(err || out).trim().replaceAll(url, "<db-url>")}`,

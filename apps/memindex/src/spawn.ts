@@ -26,6 +26,31 @@ export function run(cmd: readonly string[], opts: { readonly timeoutMs?: number 
   }
 }
 
+/** `run` without blocking the event loop (long installs keep spinners and signals alive). */
+export async function runAsync(
+  cmd: readonly string[],
+  opts: { readonly timeoutMs?: number; readonly cwd?: string } = {},
+): Promise<RunResult> {
+  try {
+    const p = Bun.spawn({
+      cmd: [...cmd],
+      stdin: "ignore",
+      stdout: "pipe",
+      stderr: "pipe",
+      ...(opts.cwd ? { cwd: opts.cwd } : {}),
+      ...(opts.timeoutMs !== undefined ? { timeout: opts.timeoutMs } : {}),
+    });
+    const [stdout, stderr, code] = await Promise.all([
+      new Response(p.stdout).text(),
+      new Response(p.stderr).text(),
+      p.exited,
+    ]);
+    return { exitCode: p.signalCode ? 128 + (SIGNALS[p.signalCode] ?? 0) : code, stdout, stderr };
+  } catch (e) {
+    return { exitCode: 127, stdout: "", stderr: e instanceof Error ? e.message : String(e) };
+  }
+}
+
 const SIGNALS: Readonly<Record<string, number>> = {
   SIGHUP: 1,
   SIGINT: 2,

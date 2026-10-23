@@ -75,10 +75,16 @@ export function contentHash(embedText: string): ContentHash {
 }
 
 export function chunkerId(name: string, version: number): ChunkerId {
-  if (!/^[a-z][a-z0-9-]*$/.test(name) || !Number.isInteger(version) || version < 1) {
+  if (!/^[a-z][a-z0-9-]*(\.[a-z][a-z0-9-]*)*$/.test(name) || !Number.isInteger(version) || version < 1) {
     throw new Error(`invalid chunker id: ${name}@${version}`);
   }
   return `${name}@${version}` as ChunkerId;
+}
+
+/** `<owner>.<name>@<stock version>+<6-hex config hash>`: a stock chunker as one plugin configured it. */
+export function stockChunkerId(owner: string, name: string, version: number, configHash: string): ChunkerId {
+  if (!/^[0-9a-f]{6}$/.test(configHash)) throw new Error(`invalid chunker config hash: ${configHash}`);
+  return `${chunkerId(`${owner}.${name}`, version)}+${configHash}` as ChunkerId;
 }
 
 export function locationId(resolvedPath: string): LocationId {

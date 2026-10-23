@@ -1,53 +1,101 @@
 import { vectorSpace } from "@memindex/model";
+import { Ollama } from "ollama";
+import pLimit from "p-limit";
+import pRetry, { AbortError } from "p-retry";
 import { z } from "zod";
-import { type Embedder, EmbedError, type EmbedHealth, type OllamaOptions } from "./types.ts";
+import {
+  EmbedError,
+  type EmbedHealth,
+  type OllamaEmbedder,
+  type OllamaOptions,
+  type PullProgress,
+} from "./types.ts";
 
 const EmbedResponse = z.object({ embeddings: z.array(z.array(z.number())) });
-const TagsResponse = z.object({
+const ListResponse = z.object({
   models: z.array(z.object({ name: z.string().optional(), model: z.string().optional() })).optional(),
 });
+const PullEvent = z.object({
+  status: z.string(),
+  digest: z.string().optional(),
+  total: z.number().optional(),
+  completed: z.number().optional(),
+});
 
-const DEFAULTS = { batchSize: 32, timeoutMs: 180_000, keepAlive: "15m", retries: 3, backoffMs: 200 } as const;
+const DEFAULTS = {
+  batchSize: 32,
+  concurrency: 2,
+  timeoutMs: 180_000,
+  keepAlive: "15m",
+  retries: 3,
+  backoffMs: 200,
+} as const;
+const HEALTH_TIMEOUT_MS = 2_000;
 
 /** 400 is the one non-transient status worth reacting to: Ollama's answer to an oversized batch. */
 class BatchRejected extends Error {}
 
-export function createOllamaEmbedder(opts: OllamaOptions): Embedder {
+/** `ollama`'s ResponseError isn't exported; it carries the HTTP status as `status_code`. */
+function httpStatus(e: unknown): number | null {
+  if (!(e instanceof Error) || e.name !== "ResponseError" || !("status_code" in e)) return null;
+  return typeof e.status_code === "number" ? e.status_code : null;
+}
+
+/** A client whose every request gets its own timeout (an aborted signal stays aborted). */
+function client(host: string, timeoutMs: number | null): Ollama {
+  if (timeoutMs === null) return new Ollama({ host });
+  const timed = (input: string | URL | Request, init?: RequestInit) => {
+    const timeout = AbortSignal.timeout(timeoutMs);
+    const signal = init?.signal ? AbortSignal.any([init.signal, timeout]) : timeout;
+    return fetch(input, { ...init, signal });
+  };
+  return new Ollama({ host, fetch: Object.assign(timed, { preconnect: fetch.preconnect }) });
+}
+
+export function createOllamaEmbedder(opts: OllamaOptions): OllamaEmbedder {
   const host = opts.host.replace(/\/+$/, "");
   const space = vectorSpace(opts.model, opts.dim);
   const batchSize = Math.max(1, opts.batchSize ?? DEFAULTS.batchSize);
-  const timeoutMs = opts.timeoutMs ?? DEFAULTS.timeoutMs;
   const keepAlive = opts.keepAlive ?? DEFAULTS.keepAlive;
   const retries = opts.retries ?? DEFAULTS.retries;
   const backoffMs = opts.backoffMs ?? DEFAULTS.backoffMs;
+  const limit = pLimit(Math.max(1, opts.concurrency ?? DEFAULTS.concurrency));
+  const ollama = client(host, opts.timeoutMs ?? DEFAULTS.timeoutMs);
 
-  async function post(texts: readonly string[]): Promise<Float32Array[]> {
-    const body = JSON.stringify({ model: opts.model, input: texts, truncate: true, keep_alive: keepAlive });
-    let lastErr = "no attempt made";
-    for (let attempt = 0; attempt <= retries; attempt++) {
-      if (attempt > 0) await Bun.sleep(backoffMs * 2 ** (attempt - 1));
-      let res: Response;
-      try {
-        // A fresh timeout signal per attempt: an aborted signal stays aborted.
-        res = await fetch(`${host}/api/embed`, {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body,
-          signal: AbortSignal.timeout(timeoutMs),
-        });
-      } catch (e) {
-        lastErr = errorMessage(e);
-        continue;
-      }
-      if (res.ok) return parseVectors(await res.json().catch(() => null), texts.length);
-      const detail = await res.text().catch(() => "");
-      if (res.status === 400) throw new BatchRejected(`HTTP 400: ${detail}`);
-      if (res.status < 500 && res.status !== 429) {
-        throw new EmbedError("bad_response", `ollama /api/embed HTTP ${res.status}: ${detail}`);
-      }
-      lastErr = `HTTP ${res.status}: ${detail}`;
+  /** Retries network errors, timeouts, 5xx and 429; everything else ends the attempt loop. */
+  async function post(texts: readonly string[]): Promise<unknown> {
+    try {
+      return await pRetry(
+        async () => {
+          try {
+            return await ollama.embed({
+              model: opts.model,
+              input: [...texts],
+              truncate: true,
+              keep_alive: keepAlive,
+            });
+          } catch (e) {
+            const status = httpStatus(e);
+            if (status === 400) throw new AbortError(new BatchRejected(`HTTP 400: ${errorMessage(e)}`));
+            if (status !== null && status < 500 && status !== 429) {
+              throw new AbortError(
+                new EmbedError("bad_response", `ollama /api/embed HTTP ${status}: ${errorMessage(e)}`),
+              );
+            }
+            if (e instanceof SyntaxError) {
+              throw new AbortError(
+                new EmbedError("bad_response", `unparseable /api/embed body: ${e.message}`),
+              );
+            }
+            throw e;
+          }
+        },
+        { retries, minTimeout: backoffMs, factor: 2, randomize: false },
+      );
+    } catch (e) {
+      if (e instanceof BatchRejected || e instanceof EmbedError) throw e;
+      throw new EmbedError("unreachable", `ollama at ${host}: ${errorMessage(e)}`);
     }
-    throw new EmbedError("unreachable", `ollama at ${host}: ${lastErr}`);
   }
 
   function parseVectors(json: unknown, expected: number): Float32Array[] {
@@ -71,7 +119,7 @@ export function createOllamaEmbedder(opts: OllamaOptions): Embedder {
 
   async function embedBatch(texts: readonly string[]): Promise<Float32Array[]> {
     try {
-      return await post(texts);
+      return parseVectors(await post(texts), texts.length);
     } catch (e) {
       if (!(e instanceof BatchRejected)) throw e;
       if (texts.length === 1)
@@ -84,29 +132,29 @@ export function createOllamaEmbedder(opts: OllamaOptions): Embedder {
   return {
     space,
     async embed(texts) {
-      const out: Float32Array[] = [];
-      for (let i = 0; i < texts.length; i += batchSize) {
-        out.push(...(await embedBatch(texts.slice(i, i + batchSize))));
-      }
-      return out;
+      const batches: (readonly string[])[] = [];
+      for (let i = 0; i < texts.length; i += batchSize) batches.push(texts.slice(i, i + batchSize));
+      return (await Promise.all(batches.map((b) => limit(() => embedBatch(b))))).flat();
     },
     async health(): Promise<EmbedHealth> {
-      let res: Response;
+      let raw: unknown;
       try {
-        res = await fetch(`${host}/api/tags`, { signal: AbortSignal.timeout(2_000) });
+        raw = await client(host, HEALTH_TIMEOUT_MS).list();
       } catch (e) {
+        const status = httpStatus(e);
         return {
           ok: false,
           reason: "unreachable",
-          detail: `cannot reach Ollama at ${host}: ${errorMessage(e)}`,
+          detail:
+            status === null
+              ? `cannot reach Ollama at ${host}: ${errorMessage(e)}`
+              : `Ollama at ${host} responded HTTP ${status}`,
         };
       }
-      if (!res.ok)
-        return { ok: false, reason: "unreachable", detail: `Ollama at ${host} responded HTTP ${res.status}` };
-      const tags = TagsResponse.safeParse(await res.json().catch(() => null));
-      if (!tags.success)
+      const list = ListResponse.safeParse(raw);
+      if (!list.success)
         return { ok: false, reason: "unreachable", detail: `unexpected /api/tags body from ${host}` };
-      const have = (tags.data.models ?? []).some((m) => {
+      const have = (list.data.models ?? []).some((m) => {
         const name = m.name ?? m.model ?? "";
         return name === opts.model || name.startsWith(`${opts.model}:`);
       });
@@ -117,6 +165,28 @@ export function createOllamaEmbedder(opts: OllamaOptions): Embedder {
             reason: "model_missing",
             detail: `embed model "${opts.model}" not pulled; run: ollama pull ${opts.model}`,
           };
+    },
+    async pull(model, onProgress) {
+      let connected = false;
+      try {
+        for await (const raw of await client(host, null).pull({ model, stream: true })) {
+          connected = true;
+          const ev = PullEvent.safeParse(raw);
+          if (!ev.success) continue;
+          const { status, total, completed } = ev.data;
+          const progress: PullProgress = {
+            status,
+            ...(total !== undefined ? { total } : {}),
+            ...(completed !== undefined ? { completed } : {}),
+          };
+          onProgress?.(progress);
+        }
+      } catch (e) {
+        throw new EmbedError(
+          !connected && httpStatus(e) === null ? "unreachable" : "bad_response",
+          `ollama pull ${model} at ${host}: ${errorMessage(e)}`,
+        );
+      }
     },
   };
 }

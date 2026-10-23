@@ -69,10 +69,39 @@ function recipeRow(r: Recipe): string {
   return `| \`${r.name}\` | ${params || "—"} | ${r.summary}${mode} |`;
 }
 
+export interface SkillScope {
+  readonly sources: readonly SourceId[];
+  /**
+   * `search.defaultSources` from the config file. MEMINDEX_SOURCES is per shell, so it is not
+   * rendered: the skill must not change with the environment of whoever refreshes it.
+   */
+  readonly configured: readonly string[] | null;
+}
+
+function scopeSection(scope: SkillScope): string {
+  const ids = scope.sources.map((s) => `\`${s}\``).join(", ");
+  const configured = scope.configured
+    ? `This install searches only ${scope.configured.map((s) => `\`${s}\``).join(", ")} by default (config \`search.defaultSources\`); pass \`--all-sources\` to search everything.`
+    : "This install searches every source by default.";
+  return `## Scoping to plugins
+
+One index holds every source (${ids}); a search is narrowed by source, never by a separate index.
+
+- \`--source a,b\` searches only those sources (overrides any default).
+- \`--all-sources\` searches everything, ignoring defaults.
+- Without either, the default scope applies: \`MEMINDEX_SOURCES=cursor,claude-code\` in the
+  environment, else config \`search.defaultSources\`, else every source. \`memindex status\` shows it.
+
+${configured} Scoping applies to \`hits\` (search recipes and \`sql --search\`); browse recipes take
+\`--source\` as their own single-source param.
+`;
+}
+
 export function renderSkill(
   recipes: readonly Recipe[],
   sourceNotes: ReadonlyMap<SourceId, string>,
   contract: number,
+  scope: SkillScope,
 ): string {
   const groups = (Object.keys(GROUP_TITLES) as Recipe["group"][])
     .map((g) => {
@@ -122,9 +151,10 @@ SQL
 
 Search flags (\`q\` and \`sql\`): \`--search <text>\` (sql only; for \`q\` the positional is the text),
 \`--mode keyword|fuzzy|semantic|hybrid\`, \`--source a,b\`, \`--kind dictation|meeting|conversation\`,
-\`--since 7d|<ISO>\`, \`--limit n\`, \`--all\` (include superseded). Output: \`--json\` (one array,
-best for agents), \`--csv\`, \`--table\` (default).
+\`--since 7d|<ISO>\`, \`--limit n\`, \`--all\` (include superseded), \`--all-sources\`. Output: \`--json\`
+(one array, best for agents), \`--csv\`, \`--table\` (default).
 
+${scopeSection(scope)}
 ## View contract
 
 ${views}

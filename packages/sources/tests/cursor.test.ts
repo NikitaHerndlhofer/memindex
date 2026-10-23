@@ -1,9 +1,9 @@
 import { Database } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { compareRevision, producerId, type Sighting } from "@memindex/model";
-import { transcriptChunker } from "../src/chunkers/transcript.ts";
+import { compareRevision, itemKey, producerId, type Sighting } from "@memindex/model";
+import { partsChunker } from "../src/agent-chat/chunker.ts";
 import { cursor } from "../src/cursor/index.ts";
 import type { Location } from "../src/index.ts";
 import { cleanup, collect, commit, FIXTURES, makeKit, type TestKit, tmpCopy } from "./helpers.ts";
@@ -127,8 +127,8 @@ describe("cursor state.vscdb", () => {
     ).toBe("newer");
     const draftAfter = await readOne(dbLoc, after as Sighting);
     expect(draftAfter.turns.map((t) => t.key)).toEqual([B.user, inserted, B.asst, B.tool, B.diff] as never);
-    const idsBefore = transcriptChunker.chunk(draftBefore).map((c) => c.id);
-    const idsAfter = new Set(transcriptChunker.chunk(draftAfter).map((c) => c.id));
+    const idsBefore = partsChunker.chunk(draftBefore).map((c) => c.id);
+    const idsAfter = new Set(partsChunker.chunk(draftAfter).map((c) => c.id));
     for (const id of idsBefore) expect(idsAfter.has(id)).toBe(true);
     expect(idsAfter.size).toBe(idsBefore.length + 1);
   });
@@ -192,6 +192,54 @@ describe("cursor state.vscdb", () => {
     });
   });
 
+  test("subagent tool calls become `subagent` parts referencing the child item", async () => {
+    const done = "66666666-6666-4666-8666-666666666666";
+    const running = "77777777-7777-4777-8777-777777777777";
+    const childDone = "00000000-0000-4000-8000-0000000000bb";
+    const childRunning = "00000000-0000-4000-8000-0000000000cc";
+    writable((db) => {
+      const row = db
+        .query<{ value: Uint8Array }, [string]>("SELECT value FROM cursorDiskKV WHERE key = ?")
+        .get(`composerData:${CID}`);
+      const cd = JSON.parse(new TextDecoder().decode(row?.value));
+      cd.fullConversationHeadersOnly.push({ bubbleId: done, type: 2 }, { bubbleId: running, type: 2 });
+      cd.subagentComposerIds = [childDone, childRunning];
+      db.run("DELETE FROM cursorDiskKV WHERE key = ?", [`composerData:${CID}`]);
+      putKv(db, `composerData:${CID}`, cd);
+      putKv(db, `bubbleId:${CID}:${done}`, {
+        type: 2,
+        toolFormerData: {
+          name: "task_v2",
+          toolCallId: "Task_0_a",
+          rawArgs: JSON.stringify({ description: "Explore the repo", prompt: "long prompt" }),
+          result: JSON.stringify({ agentId: childDone }),
+        },
+      });
+      putKv(db, `bubbleId:${CID}:${running}`, {
+        type: 2,
+        toolFormerData: {
+          name: "task_v2",
+          toolCallId: "Task_1_b",
+          rawArgs: JSON.stringify({ description: "Still running" }),
+        },
+      });
+      db.run(
+        "INSERT INTO composerHeaders (composerId, createdAt, lastUpdatedAt, isSubagent, value) VALUES (?, 1, 1, 1, ?)",
+        [childRunning, JSON.stringify({ subagentInfo: { parentComposerId: CID, toolCallId: "Task_1_b" } })],
+      );
+    });
+    const d = await readOne(dbLoc, (await cursor.sight?.(CID, dbLoc, kit)) as Sighting);
+    const partsOf = (key: string) => d.turns.find((t) => t.key === key)?.parts;
+    expect(partsOf(done)?.map((p) => [p.kind, p.text, p.ref ?? null])).toEqual([
+      ["tool_call", JSON.stringify({ description: "Explore the repo", prompt: "long prompt" }), null],
+      ["subagent", "Explore the repo", `cursor:${childDone}`],
+    ]);
+    expect(partsOf(running)?.map((p) => [p.kind as string, (p.ref as string | undefined) ?? null])).toEqual([
+      ["tool_call", null],
+      ["subagent", `cursor:${childRunning}`],
+    ]);
+  });
+
   test("sight looks up one composer; unknown ids are null", async () => {
     expect((await cursor.sight?.(CID, dbLoc, kit))?.key as string).toBe(`cursor:${CID}`);
     expect(await cursor.sight?.("ffffffff-0000-4000-8000-000000000000", dbLoc, kit)).toBeNull();
@@ -200,6 +248,7 @@ describe("cursor state.vscdb", () => {
 
 const P1 = producerId("11111111-1111-4111-8111-111111111111");
 const P2 = producerId("22222222-2222-4222-8222-222222222222");
+const REV = { fidelity: 1, at: 0, hash: "h" };
 
 describe("cursor agent-transcripts", () => {
   test("JSONL maps to the same item key as state.vscdb, and state.vscdb wins by fidelity", async () => {
@@ -247,6 +296,32 @@ describe("cursor agent-transcripts", () => {
     expect(s?.key as string).toBe(`cursor:${SUB}`);
     const d = await readOne(jsonlLoc, s as Sighting);
     expect(d).toMatchObject({ parentKey: `cursor:${CID}`, tags: ["subagent"], meta: { isSubagent: true } });
+  });
+
+  test("a Task call links to the subagent transcript that starts with its prompt", async () => {
+    const root = join(dir, "cursor-projects");
+    cpSync(join(FIXTURES, "cursor-projects"), root, { recursive: true });
+    const parent = join(root, "Users-fixture-proj", "agent-transcripts", CID, `${CID}.jsonl`);
+    const task = {
+      role: "assistant",
+      message: {
+        content: [
+          {
+            type: "tool_use",
+            name: "Task",
+            input: { description: "Delegate it", prompt: "SUBAGENT_TASK_PLACEHOLDER\n" },
+          },
+          { type: "tool_use", name: "Task", input: { description: "Orphan", prompt: "no such child" } },
+        ],
+      },
+    };
+    writeFileSync(parent, `${readFileSync(parent, "utf8")}\n${JSON.stringify(task)}\n`);
+    const d = await readOne(jsonlLoc, { key: itemKey("cursor", CID), revision: REV, locator: parent });
+    expect(d.turns.at(-1)?.parts.map((p) => [p.kind, p.text, p.ref ?? null])).toEqual([
+      ["tool_call", JSON.stringify(task.message.content[0]?.input), null],
+      ["subagent", "Delegate it", `cursor:${SUB}`],
+      ["tool_call", JSON.stringify(task.message.content[1]?.input), null],
+    ]);
   });
 
   test("listing fingerprint short-circuits an unchanged tree", async () => {

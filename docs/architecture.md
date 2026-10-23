@@ -83,16 +83,24 @@ SELECT * FROM memindex.search('rate limiter', :query_embedding, 'bge-m3@1024', '
 
 ### Chunking
 
-A plugin picks a chunker per item kind. Chunkers are pure, versioned (`name@n`), and a version
-bump makes the `rechunk` job pending.
-- **`parts@1`, structured chats.** Each part is its own chunk, so a tool result never shares a
-  vector with the prose around it. A part over the size limit is split along its structure: lines
-  for code, tool output and diffs; paragraphs, then sentences, for prose. Pieces overlap slightly
-  and carry a `[kind: i/n]` header. Small parts stay whole.
-- **`words@1`, dictation.** Exactly swrag's windows (300 words, 50 overlap, single chunk under
-  500 words, embed text `[<mode>] <text>`), so imported vectors match. Raw transcripts are
-  keyword-only.
-- **`speaker@1`, meetings.** Splits on speaker turns first, then windows long turns.
+Each plugin declares its chunkers per item kind (`chunkers: { default, ...perKind }`). It either
+configures a stock chunker from `@memindex/chunkers` or implements `Chunker` itself.
+- **Stock chunkers** (`@memindex/chunkers`, depends only on `model`): `partsChunker` (structured
+  turns and parts), `wordWindowChunker`, `speakerTurnChunker`, `recursiveTextChunker`, plus the
+  primitives they're built from (word windows, a synchronous port of `@langchain/textsplitters`
+  checked against the library, `[kind i/n]` headers) for custom chunkers.
+- **Ids are derived, never hand-bumped.** A stock chunker's id is
+  `<owner>.<name>@<stockVersion>+<hash of resolved options>`, so changing an option or fixing a
+  stock algorithm re-chunks exactly the items it affects. Custom chunkers choose their own
+  versioned id with `chunkerId(...)`.
+- The engine asks `registry.chunkerFor(source, kind)`; stored items whose chunker id is unknown or
+  outdated are stale, and the `rechunk` job converts them.
+
+| In-tree chunker                              | Stock factory        | Behavior                                                                                                                                                                                                       |
+| -------------------------------------------- | -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `agent-chat.parts@1+…` (cursor, claude-code) | `partsChunker`       | One chunk per part, so tool output never shares a vector with prose. Parts over 1,800 chars split with 200 overlap: code by language, tool output by lines, diffs by hunks, prose by paragraphs then sentences |
+| `superwhisper.words@1+…` (dictation)         | `wordWindowChunker`  | Byte-identical to swrag (300 words, 50 overlap, one chunk up to 500 words, embed prefix `[{meta.mode}] `), so imported vectors match. Raw transcripts are keyword-only                                         |
+| `superwhisper.speaker@1+…` (meeting)         | `speakerTurnChunker` | The summary uses the dictation chunker; speaker turns from `meta.json` embed as `[speaker] text`, long turns window at ~300 words, tiny turns are keyword-only                                                 |
 
 ## Multi-producer correctness
 
@@ -151,9 +159,9 @@ settle, exposing `search` and recipes as tools.
 ## Packages
 
 ```
+model  ←  chunkers  ←  sources
 model  ←  embed
 model  ←  store
-model  ←  sources
 model, store, embed, sources  ←  engine  ←  apps/memindex
 ```
 

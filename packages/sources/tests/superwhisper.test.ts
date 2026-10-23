@@ -1,11 +1,11 @@
 import { Database } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, readdirSync, rmSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { contentHash } from "@memindex/model";
-import { wordsChunker } from "../src/chunkers/words.ts";
+import { contentHash, type ItemDraft, isoTime, type Sighting } from "@memindex/model";
 import type { Location } from "../src/index.ts";
+import { speakerChunker, wordsChunker } from "../src/superwhisper/chunkers.ts";
 import { superwhisper } from "../src/superwhisper/index.ts";
 import { normalizeDatetime } from "../src/superwhisper/record.ts";
 import { cleanup, collect, commit, makeKit, type TestKit, tmpCopy } from "./helpers.ts";
@@ -31,6 +31,13 @@ afterEach(() => {
   kit.dispose();
   cleanup(dir);
 });
+
+async function readMeeting(): Promise<ItemDraft> {
+  const s = (await collect(await superwhisper.scan(location, kit))).find((x) => x.key.includes("ABC222"));
+  const r = s ? await superwhisper.read(s, location, kit) : null;
+  if (!r) throw new Error("no draft for ABC222");
+  return r.draft;
+}
 
 function rewrite(sql: string, params: (string | number)[]): void {
   const db = new Database(location.path);
@@ -167,6 +174,87 @@ describe("superwhisper read", () => {
       kinds.set(s.key, (await superwhisper.read(s, location, kit))?.draft.kind ?? "");
     expect(kinds.get(`superwhisper:${"ABC222".padEnd(32, "0")}`)).toBe("meeting");
     expect(kinds.get(`superwhisper:${ID_111}`)).toBe("dictation");
+  });
+
+  test("diarized meetings: summary turn `u`, then one turn per consecutive speaker run", async () => {
+    const metaPath = join(dir, "superwhisper", "recordings", "1779000100", "meta.json");
+    const meta = JSON.parse(readFileSync(metaPath, "utf8"));
+    writeFileSync(metaPath, JSON.stringify({ ...meta, kind: "meeting" }));
+    const v1 = await readMeeting();
+    const summaryText = v1.turns[0]?.parts[0]?.text;
+    writeFileSync(
+      metaPath,
+      JSON.stringify({
+        ...meta,
+        kind: "meeting",
+        speakers: [
+          { number: 0, name: "Kim" },
+          { number: 1, name: "Speaker 2" },
+          { number: 2, name: "Kim" },
+        ],
+        segments: [
+          { start: 0.5, end: 0.9, text: "Before", words: [] },
+          { start: 1, end: 2, text: "Hi", speaker: 0, words: [] },
+          { start: 2, end: 3, text: " there.", speaker: 2, words: [] },
+          { start: 3, end: 4, text: "Hello", speaker: 1, words: [] },
+          { start: 4, end: 5, text: "   ", speaker: 0, words: [] },
+          { start: 5, end: 6, text: "again.", words: [] },
+          { start: 6, end: 7, text: "Ok.", speaker: 3, words: [] },
+        ],
+      }),
+    );
+    const s = (await collect(await superwhisper.scan(location, kit))).find((x) => x.key.includes("ABC222"));
+    const r = await superwhisper.read(s as Sighting, location, kit);
+    if (!r) throw new Error("no draft");
+    const d = r.draft;
+    expect(d.kind).toBe("meeting");
+    const t0 = Date.parse(d.startedAt);
+    expect(d.turns).toEqual([
+      {
+        key: "u",
+        role: "speaker",
+        at: d.startedAt,
+        speaker: null,
+        parts: [{ kind: "transcript", text: summaryText }],
+      },
+      {
+        key: "s0",
+        role: "speaker",
+        at: isoTime(t0 + 500),
+        speaker: "Kim",
+        parts: [{ kind: "transcript", text: "Before Hi there." }],
+      },
+      {
+        key: "s3",
+        role: "speaker",
+        at: isoTime(t0 + 3000),
+        speaker: "Speaker 2",
+        parts: [{ kind: "transcript", text: "Hello again." }],
+      },
+      {
+        key: "s6",
+        role: "speaker",
+        at: isoTime(t0 + 6000),
+        speaker: "Speaker 4",
+        parts: [{ kind: "transcript", text: "Ok." }],
+      },
+    ] as never);
+    expect(superwhisper.parseCapture?.(JSON.parse(JSON.stringify(r.capture)))).toEqual(d);
+
+    const legacySummary = wordsChunker.chunk(v1).filter((c) => c.embed);
+    expect(speakerChunker.chunk(d).filter((c) => c.turnKey === "u")).toEqual(legacySummary);
+  });
+
+  test("a meeting without speaker segments keeps the single `u` turn and chunks like words@1", async () => {
+    const metaPath = join(dir, "superwhisper", "recordings", "1779000100", "meta.json");
+    const meta = JSON.parse(readFileSync(metaPath, "utf8"));
+    writeFileSync(metaPath, JSON.stringify({ ...meta, kind: "meeting" }));
+    const d = await readMeeting();
+    expect(d.kind).toBe("meeting");
+    expect(d.turns.map((t) => [t.key, t.parts.map((p) => p.kind)])).toEqual([
+      ["u", ["transcript", "transcript_raw"]],
+    ] as never);
+    expect(speakerChunker.chunk(d)).toEqual(wordsChunker.chunk(d));
   });
 
   test("vanished row reads as null", async () => {

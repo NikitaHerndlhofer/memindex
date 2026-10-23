@@ -48,7 +48,6 @@ import { StoreError } from "../port.ts";
 import {
   capture,
   chunk,
-  chunkVector,
   cursor,
   item,
   itemTag,
@@ -363,6 +362,8 @@ export class PgWriteStore extends PgReadStore implements WriteStore {
       backlog: (space, opts) => this.backlog(space, opts),
       backlogSize: (space) => this.backlogSize(space),
       put: (space, vectors) => this.putVectors(space, vectors),
+      bulkPut: (space, batches, opts) =>
+        this.bulkPutVectors(space, batches, opts?.maintenanceWorkMem ?? "1GB"),
       gc: (space) => this.gc(space),
     };
     this.ledger = {
@@ -388,9 +389,15 @@ export class PgWriteStore extends PgReadStore implements WriteStore {
       });
     await this.ensureSpace(space);
     for (const [source, f] of facets) {
-      await this.db.execute(
-        sql`SELECT memindex.ensure_facet_view(${source}::text, ${JSON.stringify(f)}::jsonb)`,
-      );
+      try {
+        await this.db.execute(
+          sql`SELECT memindex.ensure_facet_view(${source}::text, ${JSON.stringify(f)}::jsonb)`,
+        );
+      } catch (e) {
+        const cause = e instanceof Error && e.cause instanceof Error ? e.cause : e;
+        if (pgCode(cause) !== "P0001") throw e;
+        throw new Error(`facets of source ${source}: ${(cause as Error).message}`, { cause: e });
+      }
     }
   }
 
@@ -634,19 +641,37 @@ export class PgWriteStore extends PgReadStore implements WriteStore {
     if (vectors.length === 0) return 0;
     await this.ensureSpace(space);
     let n = 0;
-    for (const batch of chunked(vectors, 200)) {
-      const rows = await this.db
-        .insert(chunkVector)
-        .values(
-          batch.map((x) => ({
-            space: space.id,
-            contentHash: x.hash,
-            embedding: vecLiteral(space, x.vector),
-          })),
-        )
-        .onConflictDoNothing({ target: [chunkVector.space, chunkVector.contentHash] })
-        .returning({ h: chunkVector.contentHash });
-      n += rows.length;
+    for (const batch of chunked(vectors, 1000)) {
+      const [r] = await this.conn.client.unsafe(
+        `WITH ins AS (
+           INSERT INTO memindex.chunk_vector (space, content_hash, embedding)
+           SELECT $1::text, u.h, u.e::extensions.halfvec FROM unnest($2::text[], $3::text[]) AS u(h, e)
+           ON CONFLICT (space, content_hash) DO NOTHING RETURNING 1)
+         SELECT count(*)::int AS n FROM ins`,
+        [space.id, batch.map((x) => x.hash), batch.map((x) => vecLiteral(space, x.vector))],
+      );
+      n += v.num(v.rec(r, "put count"), "n");
+    }
+    return n;
+  }
+
+  private async bulkPutVectors(
+    space: VectorSpace,
+    batches:
+      | AsyncIterable<readonly { readonly hash: ContentHash; readonly vector: Float32Array }[]>
+      | Iterable<readonly { readonly hash: ContentHash; readonly vector: Float32Array }[]>,
+    maintenanceWorkMem: string,
+  ): Promise<number> {
+    await this.ensureSpace(space);
+    await this.db.execute(sql`SELECT memindex.drop_vector_index(${space.id}::text)`);
+    let n = 0;
+    try {
+      for await (const batch of batches) n += await this.putVectors(space, batch);
+    } finally {
+      await this.conn.client.begin(async (tx) => {
+        await tx`SELECT set_config('maintenance_work_mem', ${maintenanceWorkMem}, true)`;
+        await tx`SELECT memindex.ensure_vector_space(${space.id}::text, ${space.model}::text, ${space.dim}::int)`;
+      });
     }
     return n;
   }

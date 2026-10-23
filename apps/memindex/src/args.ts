@@ -14,22 +14,26 @@ import { UsageError } from "./errors.ts";
 import { formatFrom, type OutputFormat } from "./render.ts";
 import type { StdinSource } from "./stdin.ts";
 
-export const OUTPUT_ARGS = {
+const OUTPUT_ARGS = {
   json: { type: "boolean", description: "One JSON array (best for agents)" },
   csv: { type: "boolean", description: "CSV with a header row" },
   table: { type: "boolean", description: "Aligned columns (default)" },
 } as const satisfies ArgsDef;
 
-export const FILTER_ARGS = {
+const FILTER_ARGS = {
   mode: { type: "string", description: "keyword | fuzzy | semantic | hybrid" },
-  source: { type: "string", description: "Source ids, comma-separated" },
+  source: { type: "string", description: "Source ids, comma-separated (overrides the default scope)" },
+  "all-sources": {
+    type: "boolean",
+    description: "Search every source, ignoring MEMINDEX_SOURCES / config defaults",
+  },
   kind: { type: "string", description: "dictation | meeting | conversation, comma-separated" },
   since: { type: "string", description: "7d | 12h | 2w | ISO date" },
   limit: { type: "string", description: "Max hits (sql) or rows (recipes)" },
   all: { type: "boolean", description: "Include superseded items" },
 } as const satisfies ArgsDef;
 
-export const PARAM_ARG = {
+const PARAM_ARG = {
   param: { type: "string", description: "Bind a :name placeholder, k=v (repeatable)" },
 } as const satisfies ArgsDef;
 
@@ -74,6 +78,7 @@ const Filters = z.object({
     .optional(),
   limit: z.coerce.number().int().positive().max(100_000).optional(),
   all: z.boolean().optional(),
+  "all-sources": z.boolean().optional(),
 });
 type Filters = z.infer<typeof Filters>;
 
@@ -89,12 +94,14 @@ function parseFilters(args: Record<string, unknown>): Filters {
     const issue = r.error.issues[0];
     throw new UsageError(`--${String(issue?.path[0] ?? "?")}: ${issue?.message ?? "invalid"}`);
   }
+  if (r.data.source && r.data["all-sources"]) throw new UsageError("pass either --source or --all-sources");
   return r.data;
 }
 
 function filterOf(f: Filters): SearchSpec["filter"] {
   return {
     ...(f.source ? { source: f.source } : {}),
+    ...(f["all-sources"] ? { allSources: true } : {}),
     ...(f.kind ? { kind: f.kind } : {}),
     ...(f.since ? { since: f.since } : {}),
     ...(f.all ? { includeSuperseded: true } : {}),
@@ -130,7 +137,7 @@ function outputFormat(args: Record<string, unknown>): OutputFormat {
   }
 }
 
-const SEARCH_ONLY = ["mode", "source", "kind", "since", "all", "limit"] as const;
+const SEARCH_ONLY = ["mode", "source", "kind", "since", "all", "all-sources", "limit"] as const;
 
 /** `memindex sql`: SQL comes from stdin only (quoting-safe); a positional is a usage error, as in swrag/acrag. */
 export async function parseSqlCommand(rawArgs: readonly string[], stdin: StdinSource): Promise<ParsedQuery> {
@@ -208,7 +215,7 @@ export function parseQCommand(rawArgs: readonly string[]): ParsedQ {
     };
   }
 
-  for (const k of ["mode", "kind", "since", "all"] as const) {
+  for (const k of ["mode", "kind", "since", "all", "all-sources"] as const) {
     if (filters[k] !== undefined)
       throw new UsageError(`--${k} applies to search recipes only; ${recipe.name} is not one`);
   }

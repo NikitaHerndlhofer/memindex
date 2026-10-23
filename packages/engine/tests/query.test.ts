@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type ItemKey, sourceId } from "@memindex/model";
@@ -14,10 +14,19 @@ import {
   renderSkill,
   resolveQuery,
   rrf,
+  type SearchSpec,
   sqlParams,
   VIEW_CONTRACT,
 } from "../src/index.ts";
-import { FakeStore, fakeEmbedder, fakePlugin, fakeRegistry, noopKit, PRODUCER } from "./fakes.ts";
+import {
+  FakeStore,
+  fakeEmbedder,
+  fakePlugin,
+  fakeRegistry,
+  noopKit,
+  PRODUCER,
+  recordingLog,
+} from "./fakes.ts";
 
 const hit = (chunkId: string, rank: number, snippet = chunkId): RankedChunk => ({
   chunkId,
@@ -195,7 +204,7 @@ describe("Archive.query", () => {
       registry: fakeRegistry([fakePlugin({ entries: [] })]),
       embedder: fakeEmbedder(),
       kit: noopKit,
-      log: () => {},
+      log: recordingLog(),
     });
   }
 
@@ -230,12 +239,15 @@ describe("Archive.query", () => {
     const embedder = fakeEmbedder();
     const archive = await openArchive({
       mode: "read",
-      config: await loadConfig({ HOME: tmpdir(), MEMINDEX_CONFIG_DIR: mkdtempSync(join(tmpdir(), "memindex-q-")) }),
+      config: await loadConfig({
+        HOME: tmpdir(),
+        MEMINDEX_CONFIG_DIR: mkdtempSync(join(tmpdir(), "memindex-q-")),
+      }),
       storeInstance: store,
       registry: fakeRegistry([fakePlugin({ entries: [] })]),
       embedder,
       kit: noopKit,
-      log: () => {},
+      log: recordingLog(),
     });
     const drain = async (q: Parameters<typeof archive.query>[0]) => {
       for await (const _ of archive.query(q));
@@ -267,8 +279,74 @@ describe("Archive.query", () => {
   });
 });
 
+describe("search scope", () => {
+  const other = { ...fakePlugin({ entries: [] }), id: sourceId("other") };
+  async function scoped(env: Record<string, string>, file?: unknown) {
+    const dir = mkdtempSync(join(tmpdir(), "memindex-scope-"));
+    if (file) writeFileSync(join(dir, "config.json"), JSON.stringify(file));
+    const store = new FakeStore();
+    const archive = await openArchive({
+      mode: "write",
+      config: await loadConfig({ HOME: dir, MEMINDEX_CONFIG_DIR: dir, ...env }),
+      storeInstance: store,
+      producer: PRODUCER,
+      registry: fakeRegistry([fakePlugin({ entries: [] }), other]),
+      embedder: fakeEmbedder(),
+      kit: noopKit,
+      log: recordingLog(),
+    });
+    const sourcesOf = async (filter: SearchSpec["filter"]) => {
+      for await (const _ of archive.query({
+        sql: "SELECT 1",
+        search: { text: "q", mode: "keyword", filter },
+      }));
+      const hits = store.runs.at(-1)?.opts.hits as StoreSearch | undefined;
+      if (!hits) throw new Error("expected a search request");
+      return hits.filter.source ?? null;
+    };
+    return { archive, sourcesOf };
+  }
+
+  test("no default searches everything", async () => {
+    const { sourcesOf, archive } = await scoped({});
+    expect(await sourcesOf({})).toBeNull();
+    expect((await archive.status()).search).toEqual({ defaultSources: null, from: null });
+  });
+
+  test("config defaults apply; --source overrides; allSources ignores them", async () => {
+    const { sourcesOf, archive } = await scoped({}, { search: { defaultSources: ["other"] } });
+    expect(await sourcesOf({})).toEqual([sourceId("other")]);
+    expect(await sourcesOf({ source: ["fake"] })).toEqual([sourceId("fake")]);
+    expect(await sourcesOf({ allSources: true })).toBeNull();
+    await expect(sourcesOf({ source: ["fake"], allSources: true })).rejects.toThrow(/not both/);
+    expect((await archive.status()).search).toEqual({ defaultSources: ["other"], from: "config" });
+    expect(archive.skill()).toContain("This install searches only `other` by default");
+  });
+
+  test("MEMINDEX_SOURCES beats the config file and is not rendered into the skill", async () => {
+    const { sourcesOf, archive } = await scoped(
+      { MEMINDEX_SOURCES: "fake, other" },
+      { search: { defaultSources: ["other"] } },
+    );
+    expect(await sourcesOf({})).toEqual([sourceId("fake"), sourceId("other")]);
+    expect((await archive.status()).search.from).toBe("env");
+    expect(archive.skill()).toContain("This install searches every source by default.");
+  });
+
+  test("an unknown default source fails at open, naming the setting", async () => {
+    await expect(scoped({ MEMINDEX_SOURCES: "fake,typo" })).rejects.toThrow(
+      /MEMINDEX_SOURCES: unknown source typo/,
+    );
+    await expect(scoped({}, { search: { defaultSources: ["nope"] } })).rejects.toThrow(
+      /config search.defaultSources: unknown source nope/,
+    );
+  });
+});
+
+const SCOPE = { sources: [sourceId("superwhisper"), sourceId("cursor")], configured: null };
+
 describe("renderSkill", () => {
-  const md = renderSkill(RECIPES, new Map([[sourceId("superwhisper"), "Dictations live here."]]), 2);
+  const md = renderSkill(RECIPES, new Map([[sourceId("superwhisper"), "Dictations live here."]]), 2, SCOPE);
 
   test("frontmatter is manual-invocation only", () => {
     expect(md.startsWith("---\nname: memindex\ndescription: ")).toBe(true);
@@ -290,12 +368,21 @@ describe("renderSkill", () => {
     expect(md).toContain("### superwhisper\n\nDictations live here.");
   });
 
+  test("teaches how to scope searches to plugins", () => {
+    expect(md).toContain("## Scoping to plugins");
+    expect(md).toContain("`--all-sources`");
+    expect(md).toContain("MEMINDEX_SOURCES=cursor,claude-code");
+    expect(md).toContain("(`superwhisper`, `cursor`)");
+  });
+
   test("teaches no dialect syntax", () => {
     expect(md).not.toMatch(/vec_distance|julianday|embed\)\)|x'/);
   });
 
   test("is deterministic", () => {
-    expect(renderSkill(RECIPES, new Map([[sourceId("superwhisper"), "Dictations live here."]]), 2)).toBe(md);
+    expect(
+      renderSkill(RECIPES, new Map([[sourceId("superwhisper"), "Dictations live here."]]), 2, SCOPE),
+    ).toBe(md);
   });
 
   test("Archive.skill adds facet views from the registry", async () => {
@@ -308,7 +395,7 @@ describe("renderSkill", () => {
       registry: fakeRegistry([fakePlugin({ entries: [] })]),
       embedder: fakeEmbedder(),
       kit: noopKit,
-      log: () => {},
+      log: recordingLog(),
     });
     expect(archive.skill()).toContain(
       "### fake\n\nFacet view `fake_items`: `n` (int).\n\nFake source notes.",

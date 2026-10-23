@@ -1,28 +1,47 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { contentHash, type ItemDraft, isoTime, itemKey, sha256Hex, turnKey } from "@memindex/model";
-import { chunkText, wordsChunker } from "../src/chunkers/words.ts";
-import { FIXTURES } from "./helpers.ts";
-import { WORD_INPUTS } from "./words-inputs.ts";
+import { speakerChunker, wordsChunker } from "../../src/superwhisper/chunkers.ts";
+import { FIXTURES } from "../helpers.ts";
+import { WORD_INPUTS } from "./windows-inputs.ts";
 
-const GOLDEN = JSON.parse(readFileSync(join(FIXTURES, "words-golden.json"), "utf8")) as Record<
+const GOLDEN = JSON.parse(readFileSync(join(FIXTURES, "golden", "words-windows.json"), "utf8")) as Record<
   string,
   unknown[]
 >;
-const SWRAG_CHUNKER = join(import.meta.dir, "../../../../SuperWhisperRag/src/ingest/chunker.ts");
 
-describe("words@1 reproduces swrag's chunker", () => {
-  for (const [name, input] of Object.entries(WORD_INPUTS)) {
-    test(`golden: ${name}`, () => {
-      expect(chunkText(input)).toEqual(GOLDEN[name] as never);
-    });
-  }
+test("derived chunker ids, owned by the plugin", () => {
+  expect([wordsChunker.id, speakerChunker.id] as string[]).toEqual([
+    "superwhisper.words@1+cfd3a4",
+    "superwhisper.speaker@1+406149",
+  ]);
+});
 
-  test.skipIf(!existsSync(SWRAG_CHUNKER))("live comparison against the swrag checkout", async () => {
-    const swrag = (await import(SWRAG_CHUNKER)) as { chunkText: (s: string) => unknown[] };
-    for (const input of Object.values(WORD_INPUTS))
-      expect(chunkText(input)).toEqual(swrag.chunkText(input) as never);
+test("a meeting's summary turn chunks exactly like a dictation, so swrag's summary vectors are reused", () => {
+  const body = WORD_INPUTS.meetingBracketed ?? "";
+  const summary = swItem(body, { mode: "Meeting", raw: "x" });
+  const meeting: ItemDraft = {
+    ...summary,
+    kind: "meeting",
+    turns: [
+      { ...(summary.turns[0] as ItemDraft["turns"][number]), parts: [{ kind: "transcript", text: body }] },
+      {
+        key: turnKey("s0"),
+        role: "speaker",
+        at: null,
+        speaker: "Kim",
+        parts: [{ kind: "transcript", text: "Let us start the review now." }],
+      },
+    ],
+  };
+  const fromMeeting = speakerChunker.chunk(meeting);
+  expect(fromMeeting.filter((c) => c.turnKey === "u")).toEqual(
+    wordsChunker.chunk(summary).filter((c) => c.embed),
+  );
+  expect(fromMeeting.at(-1)).toMatchObject({
+    turnKey: "s0",
+    embedText: "[Kim] Let us start the review now.",
   });
 });
 
@@ -56,7 +75,7 @@ function swItem(
   };
 }
 
-describe("words@1 embed text = swrag embed_text_hash input", () => {
+describe("superwhisper.words embed text = swrag embed_text_hash input", () => {
   test("short body: one chunk, embedText `[mode] body`, hash = sha256 of it", () => {
     const body = "I need to ship the BullMQ notifications fix today.";
     const chunks = wordsChunker.chunk(swItem(body, { bodyWordCount: 19 }));

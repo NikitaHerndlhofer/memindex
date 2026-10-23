@@ -16,7 +16,10 @@ export interface SearchSpec {
   readonly text: string;
   readonly mode: SearchMode;
   readonly filter: {
+    /** Overrides the archive's default sources. */
     readonly source?: readonly string[];
+    /** Search every source, ignoring the default sources. Exclusive with `source`. */
+    readonly allSources?: boolean;
     readonly kind?: readonly ItemKind[];
     /** "3d" | "12h" | "2w" | ISO date/time. */
     readonly since?: string;
@@ -76,10 +79,29 @@ export function parseSince(v: string, now = Date.now()): IsoTime {
   return isoTime(v);
 }
 
-export function toChunkFilter(spec: SearchSpec, registry: Registry, now = Date.now()): ChunkFilter {
+/** Explicit sources, else none with `allSources`, else the defaults (null: every source). */
+function searchSources(
+  filter: SearchSpec["filter"],
+  defaults: readonly SourceId[] | null,
+): readonly string[] | null {
+  if (filter.source?.length) {
+    if (filter.allSources) throw new Error("pass either sources or allSources, not both");
+    return filter.source;
+  }
+  if (filter.allSources) return null;
+  return defaults;
+}
+
+function toChunkFilter(
+  spec: SearchSpec,
+  registry: Registry,
+  defaults: readonly SourceId[] | null,
+  now = Date.now(),
+): ChunkFilter {
   const f = spec.filter;
+  const sources = searchSources(f, defaults);
   return {
-    ...(f.source?.length ? { source: f.source.map((s): SourceId => findPlugin(registry, s).id) } : {}),
+    ...(sources?.length ? { source: sources.map((s): SourceId => findPlugin(registry, s).id) } : {}),
     ...(f.kind?.length ? { kind: f.kind } : {}),
     ...(f.since ? { since: parseSince(f.since, now) } : {}),
     ...(f.includeSuperseded ? { includeSuperseded: true } : {}),
@@ -90,14 +112,19 @@ export interface SearchDeps {
   readonly store: ReadStore;
   readonly embedder: Embedder;
   readonly registry: Registry;
+  /** Searches without explicit sources are limited to these; null searches everything. */
+  readonly defaultSources: readonly SourceId[] | null;
 }
 
 /**
  * SearchSpec → the store's search request. Query text is embedded here, in-process, so no vector
  * literal ever crosses the shell; ranking and hybrid fusion (RRF k=60) happen once, in the store.
  */
-export async function toStoreSearch(deps: SearchDeps, spec: SearchSpec): Promise<StoreSearch> {
-  const base = { filter: toChunkFilter(spec, deps.registry), k: spec.limit ?? DEFAULT_HIT_LIMIT };
+async function toStoreSearch(deps: SearchDeps, spec: SearchSpec): Promise<StoreSearch> {
+  const base = {
+    filter: toChunkFilter(spec, deps.registry, deps.defaultSources),
+    k: spec.limit ?? DEFAULT_HIT_LIMIT,
+  };
   if (spec.mode === "keyword" || spec.mode === "fuzzy") return { ...base, via: spec.mode, text: spec.text };
   const [vector] = await deps.embedder.embed([spec.text]);
   if (!vector) throw new Error("embedder returned no vector for the query");
@@ -105,10 +132,6 @@ export async function toStoreSearch(deps: SearchDeps, spec: SearchSpec): Promise
   return spec.mode === "semantic"
     ? { ...base, via: "vector", vector, space }
     : { ...base, via: "hybrid", text: spec.text, vector, space, rrfK: RRF_K };
-}
-
-export async function searchHits(deps: SearchDeps, spec: SearchSpec): Promise<readonly Hit[]> {
-  return deps.store.search(await toStoreSearch(deps, spec));
 }
 
 const PARAM_RE = /(?<![:\w]):([a-zA-Z_][a-zA-Z0-9_]*)/g;

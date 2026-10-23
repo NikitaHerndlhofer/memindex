@@ -1,6 +1,8 @@
 import { errorMessage } from "../ingest.ts";
 import { rechunkJob, reparseJob } from "./derived.ts";
 import { embedJob, vecGcJob } from "./embed.ts";
+import { importAcragJob } from "./import-acrag.ts";
+import { importSwragJob } from "./import-swrag.ts";
 import {
   type Budget,
   budget,
@@ -17,7 +19,14 @@ export type { Budget, JobContext, JobDef, JobReport, JobStatus };
 export { budget };
 
 /** THE job list. Order matters for default runs: reshape chunks before embedding them. */
-export const JOBS: readonly JobDef[] = [reparseJob, rechunkJob, embedJob, vecGcJob];
+export const JOBS: readonly JobDef[] = [
+  reparseJob,
+  rechunkJob,
+  embedJob,
+  vecGcJob,
+  importSwragJob,
+  importAcragJob,
+];
 
 export function selectJobs(jobs: readonly JobDef[], only: readonly string[] | undefined): readonly JobDef[] {
   if (!only || only.length === 0) return jobs.filter((j) => j.runByDefault);

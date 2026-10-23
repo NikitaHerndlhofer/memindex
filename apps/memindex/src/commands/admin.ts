@@ -5,13 +5,15 @@ import {
   type MemindexConfig,
   migrateArchive,
   openArchive,
+  pullEmbedModel,
 } from "@memindex/engine";
 import { defineCommand } from "citty";
 import { z } from "zod";
 import { parseParams } from "../args.ts";
-import { action, out, skillTrackFile, withArchive } from "../context.ts";
+import { action, log, out, skillTrackFile, withArchive } from "../context.ts";
 import { describeError, UsageError } from "../errors.ts";
 import { launchAgentLoaded, PLIST_LABEL } from "../install/launchd.ts";
+import { formatPull } from "../install/ollama.ts";
 import { type SkillState, skillStates, skillTargets } from "../install/skill.ts";
 import { fromArray, render } from "../render.ts";
 import { VERSION } from "../version.ts";
@@ -30,6 +32,7 @@ function statusText(
     `producer  ${s.producer ?? "(read-only)"}`,
     `embed     ${s.embed.ok ? `ok (${s.embed.model})` : `${s.embed.reason}: ${s.embed.detail}`}`,
     `sources   ${s.sources.map((x) => `${x.id}${x.enabled ? "" : " (disabled)"}`).join(", ")}`,
+    `search    ${searchScopeText(s.search)}`,
   ];
   for (const [src, n] of Object.entries(s.stats.itemsBySource)) {
     lines.push(`  ${src.padEnd(14)} ${n.live} live, ${n.superseded} superseded, ${n.gone} gone at source`);
@@ -44,6 +47,12 @@ function statusText(
   for (const k of skills) lines.push(`skill     ${k.state.padEnd(8)} ${k.path}`);
   lines.push(`watcher   ${PLIST_LABEL} ${watcher ? "loaded" : "not loaded"}`);
   return `${lines.join("\n")}\n`;
+}
+
+function searchScopeText(scope: ArchiveStatus["search"]): string {
+  if (!scope.defaultSources) return "all sources by default (--source a,b to narrow)";
+  const from = scope.from === "env" ? "MEMINDEX_SOURCES" : "config search.defaultSources";
+  return `${scope.defaultSources.join(", ")} by default (${from}; --all-sources to widen)`;
 }
 
 export const statusCommand = defineCommand({
@@ -152,7 +161,10 @@ interface Check {
   readonly hint?: string;
 }
 
-export async function runDoctor(): Promise<{ ok: boolean; checks: Check[] }> {
+/** `fix`: pull a missing embed model (streamed progress on stderr). */
+export async function runDoctor(
+  opts: { readonly fix?: boolean } = {},
+): Promise<{ ok: boolean; checks: Check[] }> {
   const checks: Check[] = [];
   let cfg: MemindexConfig;
   try {
@@ -167,7 +179,24 @@ export async function runDoctor(): Promise<{ ok: boolean; checks: Check[] }> {
     });
     return { ok: false, checks };
   }
-  const embed = await checkEmbedder({ config: cfg });
+  let embed = await checkEmbedder({ config: cfg });
+  if (opts.fix && !embed.ok && embed.reason === "model_missing") {
+    log.start(`pulling ${cfg.ollama.model}`);
+    let last = "";
+    try {
+      await pullEmbedModel(
+        (p) => {
+          const line = formatPull(p);
+          if (line.split("%")[0] !== last.split("%")[0]) log.info(line);
+          last = line;
+        },
+        { config: cfg },
+      );
+    } catch (e) {
+      log.error(describeError(e));
+    }
+    embed = await checkEmbedder({ config: cfg });
+  }
   checks.push({
     name: `Ollama at ${cfg.ollama.host}`,
     ok: embed.ok,
@@ -177,7 +206,7 @@ export async function runDoctor(): Promise<{ ok: boolean; checks: Check[] }> {
       : {
           hint:
             embed.reason === "model_missing"
-              ? `ollama pull ${cfg.ollama.model}`
+              ? `memindex doctor --fix (or: ollama pull ${cfg.ollama.model})`
               : "brew install ollama && brew services start ollama",
         }),
   });
@@ -234,8 +263,9 @@ export function doctorText(checks: readonly Check[]): string {
 
 export const doctorCommand = defineCommand({
   meta: { name: "doctor", description: "Verify the setup and print fixes" },
-  run: action(async () => {
-    const { ok, checks } = await runDoctor();
+  args: { fix: { type: "boolean", description: "Pull the embed model if it is missing" } },
+  run: action(async ({ args }) => {
+    const { ok, checks } = await runDoctor({ fix: args.fix === true });
     out(doctorText(checks));
     return ok ? 0 : 1;
   }),

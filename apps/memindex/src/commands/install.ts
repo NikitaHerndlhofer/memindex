@@ -1,11 +1,20 @@
-import { join } from "node:path";
-import { checkEmbedder, loadConfig } from "@memindex/engine";
+import {
+  checkEmbedder,
+  loadConfig,
+  materializeSupabaseProject,
+  migrateArchive,
+  openArchive,
+  pullEmbedModel,
+} from "@memindex/engine";
 import { defineCommand } from "citty";
-import { action, info, out, skillTrackFile, withArchive } from "../context.ts";
-import { installLaunchAgent, LEGACY_LABELS, uninstallLaunchAgent } from "../install/launchd.ts";
-import { defaultOllamaSteps, ensureOllama } from "../install/ollama.ts";
-import { installSkill, legacySkillPaths, retireLegacySkill, skillTargets } from "../install/skill.ts";
-import { stableBinPath } from "../spawn.ts";
+import { action, log, out, skillTrackFile, withArchive } from "../context.ts";
+import { UsageError } from "../errors.ts";
+import { installLaunchAgent, uninstallLaunchAgent } from "../install/launchd.ts";
+import { installSkill, skillTargets } from "../install/skill.ts";
+import { clackUi, plainUi } from "../install/ui.ts";
+import { installPaths, runInstall } from "../install/wizard.ts";
+import { runAsync, stableBinPath } from "../spawn.ts";
+import { VERSION } from "../version.ts";
 import { doctorText, runDoctor } from "./admin.ts";
 
 export const installSkillCommand = defineCommand({
@@ -27,77 +36,68 @@ export const installSkillCommand = defineCommand({
   }),
 });
 
-/**
- * Idempotent bootstrap: Ollama + model, archive (created and migrated), launchd watcher, agent
- * hooks, skill, legacy swrag/acrag watchers and skills retired, then doctor. Each step is check-and-fix.
- */
 export const installCommand = defineCommand({
   meta: {
     name: "install",
-    description: "Set up Ollama, the archive, the launchd watcher, agent hooks and the skill",
+    description: "Set up local Supabase, Ollama + bge-m3, the launchd watcher, agent hooks and the skill",
   },
   args: {
+    yes: { type: "boolean", alias: "y", description: "Non-interactive: accept every prompt (for scripts)" },
     bin: {
       type: "string",
       description: "Binary path to embed in launchd/hooks (default: Homebrew symlink or this binary)",
     },
+    "skip-supabase": { type: "boolean", description: "Don't check Docker or start the local Supabase stack" },
     "skip-ollama": { type: "boolean", description: "Don't start Ollama or pull the model" },
     "skip-watch": { type: "boolean", description: "Don't install the launchd watcher" },
     "skip-hooks": { type: "boolean", description: "Don't install agent hooks" },
   },
   run: action(async ({ args }) => {
-    const cfg = await loadConfig();
-    if (!args["skip-ollama"]) {
-      const health = await ensureOllama(
-        cfg.ollama.model,
-        defaultOllamaSteps(() => checkEmbedder({ config: cfg }), info),
-      );
-      info(
-        health.ok
-          ? `ollama: ${health.model} ready`
-          : `ollama: ${health.detail} (search and embedding wait until fixed)`,
-      );
-    }
-    const bin = args.bin ?? stableBinPath();
-    await withArchive("write", async (archive) => {
-      info(`archive: ${archive.backend} ready (producer ${archive.producer})`);
-      const home = archive.config.paths.home;
-      for (const label of LEGACY_LABELS) {
-        if (await uninstallLaunchAgent(home, label)) info(`removed legacy watcher ${label}`);
-      }
-      if (!bin) {
-        info(
-          "no stable memindex binary path (development run?); skipping watcher and hooks. Pass --bin to force.",
-        );
-      } else {
-        if (!args["skip-watch"]) {
-          const plist = await installLaunchAgent({
-            binPath: bin,
-            home,
-            logPath: join(archive.config.paths.logDir, "watch.log"),
-          });
-          info(`watcher: ${plist}`);
-        }
-        if (!args["skip-hooks"]) {
-          for (const h of await archive.hooks.install(bin))
-            info(`hooks ${h.source}: ${h.error ?? "installed"}`);
-        }
-      }
-      for (const o of await installSkill(
-        archive.skill(),
-        skillTargets(home),
-        skillTrackFile(archive.config.paths),
-      )) {
-        info(`skill ${o.action}: ${o.path}${o.backup ? ` (previous: ${o.backup})` : ""}`);
-      }
-      for (const p of legacySkillPaths(home)) {
-        const moved = await retireLegacySkill(p);
-        if (moved) info(`retired legacy skill ${p} → ${moved}`);
-      }
-    });
-    info("the watcher catches up on start; run `memindex ingest` to ingest now");
+    const interactive = process.stdin.isTTY === true && process.stdout.isTTY === true;
+    if (!args.yes && !interactive)
+      throw new UsageError("memindex install needs a terminal for its prompts; pass --yes to accept them");
+    const ui = args.yes ? plainUi(log) : clackUi();
+    const env = process.env;
+    const config = await loadConfig(env);
+    ui.intro(`memindex ${VERSION} install`);
+    const results = await runInstall(
+      {
+        paths: installPaths(config, env),
+        config,
+        bin: args.bin ?? stableBinPath(),
+        ui,
+        sh: runAsync,
+        which: (name) => Bun.which(name),
+        sleep: (ms) => Bun.sleep(ms),
+        materialize: materializeSupabaseProject,
+        migrate: () => migrateArchive({ config }),
+        ollama: {
+          health: () => checkEmbedder({ config }),
+          pull: (onProgress) => pullEmbedModel(onProgress, { config }),
+        },
+        launchd: {
+          install: installLaunchAgent,
+          uninstall: (label) => uninstallLaunchAgent(config.paths.home, label),
+        },
+        openArchive: () => openArchive({ mode: "write", config, binaryVersion: VERSION, log }),
+      },
+      {
+        skip: {
+          supabase: args["skip-supabase"] === true,
+          ollama: args["skip-ollama"] === true,
+          watch: args["skip-watch"] === true,
+          hooks: args["skip-hooks"] === true,
+        },
+      },
+    );
+    const failed = results.filter((r) => r.status === "failed");
+    ui.outro(
+      failed.length === 0
+        ? "Done. The watcher catches up on start; `memindex ingest` ingests now."
+        : `${failed.length} step(s) failed: ${failed.map((r) => r.step).join(", ")}. Fix them and re-run \`memindex install\`.`,
+    );
     const { ok, checks } = await runDoctor();
     out(doctorText(checks));
-    return ok ? 0 : 1;
+    return failed.length === 0 && ok ? 0 : 1;
   }),
 });

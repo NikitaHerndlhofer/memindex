@@ -134,6 +134,16 @@ describe("memindex q", () => {
     expect(() => parseQCommand(["sources", "--source", "cursor"])).toThrow(/no source filter/);
   });
 
+  test("--all-sources widens search recipes; exclusive with --source; search only", () => {
+    expect(parseQCommand(["search", "rate limiter", "--all-sources"])).toMatchObject({
+      query: { recipe: "search", search: { text: "rate limiter", filter: { allSources: true } } },
+    });
+    expect(() => parseQCommand(["search", "x", "--all-sources", "--source", "cursor"])).toThrow(
+      /either --source or --all-sources/,
+    );
+    expect(() => parseQCommand(["recent", "--all-sources"])).toThrow(/search recipes only/);
+  });
+
   test("unknown recipes are usage errors", () => {
     expect(() => parseQCommand(["nope"])).toThrow(UsageError);
   });

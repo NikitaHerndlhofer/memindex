@@ -10,8 +10,10 @@
     "build": "bun run scripts/build.ts"
   },
   "dependencies": {
+    "@clack/prompts": "^1.8.1",
     "@memindex/engine": "workspace:*",
     "citty": "^0.1.6",
+    "consola": "^3.4.2",
     "zod": "^4.4.3"
   }
 }

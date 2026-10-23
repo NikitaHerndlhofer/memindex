@@ -13,6 +13,7 @@ import {
   fakeRegistry,
   noopKit,
   PRODUCER,
+  recordingLog,
   SRC,
 } from "./fakes.ts";
 
@@ -40,7 +41,7 @@ async function open(
     embedder: extra.embedder ?? fakeEmbedder(),
     kit: noopKit,
     lockDir: extra.lockDir === undefined ? null : extra.lockDir,
-    log: (m) => extra.logs?.push(m),
+    log: recordingLog(extra.logs),
   });
   return { archive, store };
 }
@@ -233,6 +234,44 @@ describe("jobs", () => {
     const [report] = await archive.jobs.run({ only: ["rechunk"] });
     expect(report).toMatchObject({ id: "rechunk", done: 2, remaining: 0, error: null });
     expect(store.items.get(key("a"))?.item.chunker).toBe(chunkerId("fake", 2));
+  });
+
+  test("ingest picks the chunker per item kind", async () => {
+    const store = new FakeStore();
+    const plugin = fakePlugin({
+      entries: entries(),
+      kind: (e) => (e.native === "b" ? "meeting" : "conversation"),
+      chunkers: { meeting: chunkerId("fake", 2) },
+    });
+    await (await open(plugin, store)).archive.ingest();
+    expect(store.items.get(key("a"))?.item.chunker).toBe(chunkerId("fake", 1));
+    expect(store.items.get(key("b"))?.item.chunker).toBe(chunkerId("fake", 2));
+  });
+
+  test("rechunk staleness is per kind, and unknown (legacy) chunker ids are stale", async () => {
+    const store = new FakeStore();
+    const kinded = (chunkers: Parameters<typeof fakePlugin>[0]["chunkers"]) =>
+      fakePlugin({
+        entries: [...entries(), { native: "c", hash: "h1", text: "gamma" }],
+        kind: (e) => (e.native === "a" ? "conversation" : "meeting"),
+        ...(chunkers ? { chunkers } : {}),
+      });
+    await (await open(kinded(undefined), store)).archive.ingest();
+    const row = store.items.get(key("c"));
+    if (row)
+      store.items.set(key("c"), { ...row, item: { ...row.item, chunker: chunkerId("legacy-swrag", 1) } });
+
+    const { archive } = await open(kinded({ meeting: chunkerId("fake", 2) }), store);
+    const pending = async () => (await archive.jobs.status()).find((j) => j.id === "rechunk")?.pending;
+    expect(await pending()).toBe(2);
+    const [report] = await archive.jobs.run({ only: ["rechunk"] });
+    expect(report).toMatchObject({ done: 2, remaining: 0, error: null });
+    expect([key("a"), key("b"), key("c")].map((k) => store.items.get(k)?.item.chunker)).toEqual([
+      chunkerId("fake", 1),
+      chunkerId("fake", 2),
+      chunkerId("fake", 2),
+    ]);
+    expect(await pending()).toBe(0);
   });
 
   test("reparse replays captures with a newer parser and marks its synthetic location gone", async () => {

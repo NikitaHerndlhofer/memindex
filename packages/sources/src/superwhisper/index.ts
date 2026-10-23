@@ -1,9 +1,9 @@
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { itemKey, locationId, parseItemKey, type Sighting, sourceId } from "@memindex/model";
-import { wordsChunker } from "../chunkers/words.ts";
 import type { Location, SourceDb, SourceKit, SourcePlugin } from "../contract.ts";
 import { blobToString, hashFile, mtimeNs, parseJson } from "../util.ts";
+import { speakerChunker, wordsChunker } from "./chunkers.ts";
 import {
   buildCapture,
   type CaptureBody,
@@ -101,8 +101,12 @@ export const superwhisper: SourcePlugin<SuperWhisperMeta> = {
   kinds: ["dictation", "meeting"],
   meta: SuperWhisperMeta,
   facets: { mode: "text", appName: "text", language: "text", durationMs: "real" },
-  chunker: wordsChunker.id,
-  parserVersion: 1,
+  chunkers: { default: wordsChunker, meeting: speakerChunker },
+  /**
+   * 1: one turn `u` (transcript + transcript_raw) for every recording.
+   * 2: meetings with diarized segments get speaker turns `s<n>` plus the summary as turn `u`.
+   */
+  parserVersion: 2,
   capture: "always",
 
   async locations(kit) {
@@ -142,7 +146,9 @@ export const superwhisper: SourcePlugin<SuperWhisperMeta> = {
   skillNotes: [
     "Super Whisper: one item per recording (`superwhisper:<recording uuid hex>`), kind `dictation` or `meeting`.",
     "Turn `u` has two parts: `transcript` (LLM output when the mode ran one — for meetings that is the summary)",
-    "and `transcript_raw` (verbatim speech, keyword-searchable only). Reprocessings of the same audio share a",
-    "supersede group; default views show only the newest. Facets: mode, appName, language, durationMs.",
+    "and `transcript_raw` (verbatim speech, keyword-searchable only). Diarized meetings instead have turn `u`",
+    "with only the summary, then one turn per speaker run (`s<n>`, `speaker` = the label from Super Whisper).",
+    "Reprocessings of the same audio share a supersede group; default views show only the newest.",
+    "Facets: mode, appName, language, durationMs.",
   ].join("\n"),
 };

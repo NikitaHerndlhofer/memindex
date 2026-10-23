@@ -7,6 +7,7 @@ import {
   chunkerId,
   type ItemDraft,
   type ItemKey,
+  type ItemKind,
   isoTime,
   itemKey,
   type LocationId,
@@ -36,6 +37,7 @@ import type {
   WriteStore,
 } from "@memindex/store";
 import { z } from "zod";
+import type { Log } from "../src/log.ts";
 import type { Registry } from "../src/registry.ts";
 
 export const PRODUCER: ProducerId = producerId("00000000-0000-4000-8000-0000000000aa");
@@ -132,6 +134,16 @@ export class FakeStore implements WriteStore {
       }
       return n;
     },
+    bulkPut: async (
+      space: unknown,
+      batches:
+        | AsyncIterable<readonly { hash: string; vector: Float32Array }[]>
+        | Iterable<readonly { hash: string; vector: Float32Array }[]>,
+    ) => {
+      let n = 0;
+      for await (const b of batches) n += await this.vectors.put(space, b);
+      return n;
+    },
     gc: async () => 0,
   };
 
@@ -181,8 +193,7 @@ export class FakeStore implements WriteStore {
   async close(): Promise<void> {}
 }
 
-export const FakeMeta = z.object({ n: z.number() });
-export type FakeMeta = z.infer<typeof FakeMeta>;
+const FakeMeta = z.object({ n: z.number() });
 
 export interface FakeEntry {
   readonly native: string;
@@ -201,12 +212,15 @@ export function fakePlugin(opts: {
   capture?: boolean;
   parserVersion?: number;
   chunker?: ChunkerId;
+  /** Per-kind overrides on top of `chunker` (the default). */
+  chunkers?: Partial<Record<ItemKind, ChunkerId>>;
+  kind?: (e: FakeEntry) => ItemKind;
 }): SourcePlugin & { reads: string[] } {
   const loc: Location = { id: locationId("/fake"), path: "/fake", label: "fake" };
   const reads: string[] = [];
   const draftOf = (e: FakeEntry): ItemDraft => ({
     key: itemKey(SRC, e.native),
-    kind: "conversation",
+    kind: opts.kind?.(e) ?? "conversation",
     title: e.native,
     startedAt: isoTime("2026-10-01T00:00:00Z"),
     endedAt: null,
@@ -227,10 +241,13 @@ export function fakePlugin(opts: {
   return {
     reads,
     id: SRC,
-    kinds: ["conversation"],
+    kinds: ["conversation", "dictation", "meeting"],
     meta: FakeMeta as z.ZodType<unknown>,
     facets: { n: "int" },
-    chunker: opts.chunker ?? chunkerId("fake", 1),
+    chunkers: {
+      default: fakeChunker(opts.chunker),
+      ...Object.fromEntries(Object.entries(opts.chunkers ?? {}).map(([k, id]) => [k, fakeChunker(id)])),
+    },
     parserVersion: opts.parserVersion ?? 1,
     capture: opts.capture ? "always" : "never",
     async locations() {
@@ -286,12 +303,18 @@ export function fakeChunker(id: ChunkerId = chunkerId("fake", 1)) {
 }
 
 export function fakeRegistry(plugins: SourcePlugin[], chunkers = [fakeChunker()]): Registry {
+  const chunker = (id: ChunkerId) => {
+    const c = chunkers.find((x) => x.id === id);
+    if (!c) throw new Error(`no chunker ${id}`);
+    return c;
+  };
   return {
     all: plugins,
-    chunker: (id) => {
-      const c = chunkers.find((x) => x.id === id);
-      if (!c) throw new Error(`no chunker ${id}`);
-      return c;
+    chunker,
+    chunkerFor: (source, kind) => {
+      const p = plugins.find((x) => x.id === source);
+      if (!p) throw new Error(`no source ${source}`);
+      return chunker((p.chunkers[kind] ?? p.chunkers.default).id);
     },
     facets: () => new Map(plugins.map((p) => [p.id, p.facets])),
   };
@@ -317,6 +340,16 @@ export function fakeEmbedder(dim = 8, fail = false): Embedder & { calls: string[
       return { ok: true, model: "fake" } as const;
     },
   };
+}
+
+/** A Log that keeps `level: message` lines (and drops them when no array is given). */
+export function recordingLog(lines: string[] = []): Log {
+  const at =
+    (level: string) =>
+    (msg: string): void => {
+      lines.push(`${level}: ${msg}`);
+    };
+  return { debug: at("debug"), info: at("info"), warn: at("warn"), error: at("error") };
 }
 
 export const noopKit = (): SourceKit => ({

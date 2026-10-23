@@ -6,7 +6,7 @@ type Handler = (req: Request, body: { input: string[] } | null) => Response | Pr
 let server: ReturnType<typeof Bun.serve> | null = null;
 const requests: {
   path: string;
-  body: { input: string[]; truncate?: boolean; keep_alive?: string } | null;
+  body: { input: string[]; truncate?: boolean; keep_alive?: string; name?: string; stream?: boolean } | null;
 }[] = [];
 
 function serve(handler: Handler): string {
@@ -120,6 +120,65 @@ describe("createOllamaEmbedder", () => {
     const host = serve((_, body) => ok(body));
     expect(await createOllamaEmbedder({ host, model: "m", dim: 3 }).embed([])).toEqual([]);
     expect(requests).toHaveLength(0);
+  });
+
+  test("parallel batches stay bounded by concurrency and keep input order", async () => {
+    let inFlight = 0;
+    let peak = 0;
+    const host = serve(async (_, body) => {
+      inFlight++;
+      peak = Math.max(peak, inFlight);
+      await Bun.sleep(15);
+      inFlight--;
+      return Response.json({ embeddings: (body?.input ?? []).map((t) => vec(Number(t))) });
+    });
+    const e = createOllamaEmbedder({ host, model: "m", dim: 3, batchSize: 1, concurrency: 3 });
+    const inputs = Array.from({ length: 9 }, (_, i) => String(i + 1));
+    const out = await e.embed(inputs);
+    expect(peak).toBe(3);
+    expect(out.map((v) => Math.round((v[0] ?? 0) / (v[1] ?? 1)))).toEqual(inputs.map(Number));
+  });
+
+  test("pull streams progress events until success", async () => {
+    const host = serve((req) => {
+      expect(new URL(req.url).pathname).toBe("/api/pull");
+      const lines = [
+        { status: "pulling manifest" },
+        { status: "downloading", digest: "sha256:x", total: 100, completed: 40 },
+        { status: "downloading", digest: "sha256:x", total: 100, completed: 100 },
+        { status: "success" },
+      ];
+      return new Response(lines.map((l) => `${JSON.stringify(l)}\n`).join(""), {
+        headers: { "content-type": "application/x-ndjson" },
+      });
+    });
+    const events: unknown[] = [];
+    await createOllamaEmbedder({ host, model: "m", dim: 3 }).pull("bge-m3", (p) => events.push(p));
+    expect(events).toEqual([
+      { status: "pulling manifest" },
+      { status: "downloading", total: 100, completed: 40 },
+      { status: "downloading", total: 100, completed: 100 },
+      { status: "success" },
+    ]);
+    expect(requests[0]?.body).toMatchObject({ name: "bge-m3", stream: true });
+  });
+
+  test("pull surfaces a streamed error and an unreachable host", async () => {
+    const host = serve(
+      () =>
+        new Response(
+          `${JSON.stringify({ status: "pulling manifest" })}\n${JSON.stringify({ error: "no such model" })}\n`,
+        ),
+    );
+    const err = await createOllamaEmbedder({ host, model: "m", dim: 3 })
+      .pull("nope")
+      .catch((x: unknown) => x);
+    expect(err).toBeInstanceOf(EmbedError);
+    expect((err as EmbedError).message).toContain("no such model");
+    const down = await createOllamaEmbedder({ host: "http://127.0.0.1:1", model: "m", dim: 3 })
+      .pull("m")
+      .catch((x: unknown) => x);
+    expect((down as EmbedError).code).toBe("unreachable");
   });
 
   test("health: ok, model_missing, unreachable", async () => {

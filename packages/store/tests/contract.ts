@@ -29,6 +29,7 @@ import {
   vectorSpace,
 } from "@memindex/model";
 import {
+  facetColumn,
   type Hit,
   type ItemWrite,
   openStore,
@@ -536,6 +537,37 @@ export function runStoreContract(name: string, backend: () => ContractBackend): 
         expect(await w.vectors.backlogSize(SPACE)).toBe(1);
       });
 
+      test("bulkPut drops and rebuilds the vector index; a crash mid-load is repaired on the next open", async () => {
+        const w = await writer();
+        const ds = Array.from({ length: 60 }, (_, i) =>
+          draftOf(CUR, `bulk${i}`, [turnOf("m", `bulk text ${i}`)]),
+        );
+        for (const d of ds) await w.apply(writeOf(CUR, L1, d, rev("1")));
+        const pending = await w.vectors.backlog(SPACE, { limit: 100 });
+        const vecs = pending.map((p, i) => ({ hash: p.hash, vector: vecNear(i % 4, i) }));
+        const batches = [vecs.slice(0, 25), vecs.slice(25), vecs.slice(0, 10)];
+        expect(await w.vectors.bulkPut(SPACE, batches, { maintenanceWorkMem: "64MB" })).toBe(60);
+        expect(await w.vectors.backlogSize(SPACE)).toBe(0);
+        expect(await b.usesVectorIndex(SPACE)).toBe(true);
+        const hits = await w.search({ via: "vector", vector: vecNear(2, 2), space: SPACE, filter: {}, k: 3 });
+        expect(hits.length).toBe(3);
+
+        const failing = async function* () {
+          yield vecs.slice(0, 5);
+          throw new Error("importer died");
+        };
+        await expect(w.vectors.bulkPut(SPACE, failing())).rejects.toThrow("importer died");
+        expect(await b.usesVectorIndex(SPACE)).toBe(true);
+
+        await b.admin(`SELECT memindex.drop_vector_index('${SPACE.id}')`);
+        expect(await b.usesVectorIndex(SPACE)).toBe(false);
+        expect(
+          (await w.search({ via: "vector", vector: vecNear(2, 2), space: SPACE, filter: {}, k: 3 })).length,
+        ).toBe(3);
+        await writer();
+        expect(await b.usesVectorIndex(SPACE)).toBe(true);
+      });
+
       test("a wrong-dimension vector is refused", async () => {
         const w = await writer();
         await expect(
@@ -763,6 +795,40 @@ export function runStoreContract(name: string, backend: () => ContractBackend): 
         );
       });
 
+      test("camelCase facet keys become snake_case columns; unsafe or colliding names are refused", async () => {
+        const facets = new Map<SourceId, Facets>([
+          [SW, { mode: "text", appName: "text", durationMs: "real", HTTPStatus: "int" }],
+        ]);
+        const w = await writer(P1, facets);
+        await w.apply(
+          writeOf(
+            SW,
+            L1,
+            draftOf(SW, "camel", [turnOf("u", "x")], {
+              meta: { mode: "note", appName: "Cursor", durationMs: 1234.5, HTTPStatus: 404 },
+            }),
+            rev("1"),
+          ),
+        );
+        expect(
+          await rows(w.run("SELECT mode, app_name, duration_ms, http_status FROM superwhisper_items", {})),
+        ).toEqual([{ mode: "note", app_name: "Cursor", duration_ms: 1234.5, http_status: 404 }]);
+        for (const key of Object.keys(facets.get(SW) ?? {})) {
+          expect((await b.admin(`SELECT memindex.facet_column('${key}') AS c`))[0]?.c).toBe(facetColumn(key));
+        }
+        for (const bad of ['x"; DROP TABLE memindex.item; --', "1st", ""]) {
+          await expect(writer(P1, new Map<SourceId, Facets>([[SW, { [bad]: "text" }]]))).rejects.toThrow(
+            /invalid facet name/,
+          );
+        }
+        await expect(
+          writer(P1, new Map<SourceId, Facets>([[SW, { appName: "text", app_name: "text" }]])),
+        ).rejects.toThrow(/same column app_name/);
+        await expect(writer(P1, new Map<SourceId, Facets>([[SW, { itemKey: "text" }]]))).rejects.toThrow(
+          /collides with the items column item_key/,
+        );
+      });
+
       test("the reader role reads views and searches but cannot write; the writer role can write", async () => {
         const ww = await writer(P1, NO_FACETS, await b.roleConfig("writer"));
         expect(
@@ -833,6 +899,48 @@ export function runStoreContract(name: string, backend: () => ContractBackend): 
           w.run("SELECT text FROM chunks WHERE item_key = :k", { params: { k: d.key } }),
         );
         expect(texts).toEqual([{ text: "hi (v2)" }]);
+      });
+
+      test("legacy import: bulk-seeded vectors, a chunker this binary doesn't know, then rechunk", async () => {
+        const w = await writer();
+        const legacy = chunkerId("acrag-legacy", 1);
+        const drafts = Array.from({ length: 30 }, (_, i) =>
+          draftOf(
+            CUR,
+            `legacy${i}`,
+            Array.from({ length: 40 }, (_, t) => turnOf(`m${t}`, `legacy conversation ${i} message ${t}`)),
+          ),
+        );
+        const hashes = drafts.flatMap((d) => chunksOf(d).map((c) => c.contentHash));
+        expect(hashes.length).toBe(1200);
+        const seed = [...hashes, ...hashes.slice(0, 50)].map((hash, i) => ({
+          hash,
+          vector: vecNear(i % 4, i),
+        }));
+        expect(await w.vectors.put(SPACE, seed)).toBe(1200);
+        expect(await w.vectors.put(SPACE, seed.slice(0, 1100))).toBe(0);
+
+        for (const d of drafts) {
+          expect((await w.apply({ ...writeOf(CUR, L1, d, rev("h")), chunker: legacy })).kind).toBe("applied");
+        }
+        expect(await w.vectors.backlogSize(SPACE)).toBe(0);
+        const stale = await collect(w.streamItems({ limit: 100, staleChunker: CHUNKER }));
+        expect(stale.length).toBe(30);
+        expect(stale.every((s) => s.chunker === legacy)).toBe(true);
+        expect(
+          (await rows(w.run("SELECT DISTINCT chunker FROM items WHERE source = 'cursor'", {}))).map(
+            (r) => r.chunker,
+          ),
+        ).toEqual([legacy]);
+
+        for (const s of stale) {
+          expect(await w.replaceChunks(s.draft.key, s.revision.hash, CHUNKER, chunksOf(s.draft))).toBe(
+            "replaced",
+          );
+        }
+        expect(await collect(w.streamItems({ limit: 100, staleChunker: CHUNKER }))).toEqual([]);
+        expect(await w.vectors.backlogSize(SPACE)).toBe(0);
+        expect(await w.vectors.gc(SPACE)).toBe(0);
       });
 
       test("cursors and jobs are producer-scoped", async () => {

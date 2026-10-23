@@ -1,12 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import { budget, type JobContext, oneShotJob } from "../src/index.ts";
-import { FakeStore, fakeEmbedder, fakeRegistry } from "./fakes.ts";
+import { FakeStore, fakeEmbedder, fakeRegistry, recordingLog } from "./fakes.ts";
 
 const ctx = (store: FakeStore): JobContext => ({
   store,
   embedder: fakeEmbedder(),
   registry: fakeRegistry([]),
-  log: () => {},
+  log: recordingLog(),
   args: {},
 });
 

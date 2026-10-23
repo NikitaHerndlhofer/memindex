@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { producerId } from "@memindex/model";
 import { chunkHash, type ItemSnapshot, planItemWrite, turnHash } from "../src/core/plan.ts";
+import { facetColumn } from "../src/facets.ts";
 import {
   bindNamedParams,
   normalizeSql,
@@ -115,5 +116,24 @@ describe("sqltext", () => {
       "CREATE TABLE x (a int) SELECT 'a  b'",
     );
     expect(normalizeSql("SELECT $f$ a ; b $f$")).toBe("SELECT $f$ a ; b $f$");
+  });
+});
+
+describe("facetColumn", () => {
+  test("camelCase meta keys map to snake_case view columns", () => {
+    expect(
+      ["appName", "durationMs", "gitBranch", "repository", "duration_ms", "HTTPStatus", "v2Name", "_x"].map(
+        facetColumn,
+      ),
+    ).toEqual([
+      "app_name",
+      "duration_ms",
+      "git_branch",
+      "repository",
+      "duration_ms",
+      "http_status",
+      "v2_name",
+      "_x",
+    ]);
   });
 });

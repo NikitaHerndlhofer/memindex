@@ -1,5 +1,5 @@
 import type { Part } from "@memindex/model";
-import { asRecord, asString } from "./util.ts";
+import { asRecord, asString } from "../util.ts";
 
 function flatten(content: unknown): string | null {
   if (typeof content === "string") return content || null;

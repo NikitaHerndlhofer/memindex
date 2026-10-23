@@ -9,6 +9,7 @@ import {
   parseStoreSpec,
   watchSources,
 } from "../src/index.ts";
+import { recordingLog } from "./fakes.ts";
 
 let dir: string;
 beforeEach(() => {
@@ -57,7 +58,9 @@ describe("config", () => {
 
   test("invalid config files fail loudly with the path", async () => {
     writeFileSync(join(dir, "config.json"), JSON.stringify({ ollama: { dim: -1 } }));
-    await expect(loadConfig({ HOME: dir, MEMINDEX_CONFIG_DIR: dir })).rejects.toThrow(/config\.json is invalid/);
+    await expect(loadConfig({ HOME: dir, MEMINDEX_CONFIG_DIR: dir })).rejects.toThrow(
+      /config\.json is invalid/,
+    );
     writeFileSync(join(dir, "config.json"), "{nope");
     await expect(loadConfig({ HOME: dir, MEMINDEX_CONFIG_DIR: dir })).rejects.toThrow(/not valid JSON/);
   });
@@ -70,6 +73,8 @@ describe("watchSources", () => {
     const runs: string[] = [];
     let release: (() => void) | null = null;
     const controller = new AbortController();
+    let markReady: () => void = () => {};
+    const ready = new Promise<void>((r) => (markReady = r));
     const done = new Promise<void>((resolve) => {
       let n = 0;
       void watchSources(
@@ -81,14 +86,16 @@ describe("watchSources", () => {
         {
           debounceMs: 30,
           signal: controller.signal,
+          onReady: () => markReady(),
           onRun: () => {
             n++;
             if (n === 3) resolve();
           },
         },
-        () => {},
+        recordingLog(),
       );
     });
+    await ready;
     await Bun.sleep(50);
     expect(runs).toEqual(["s"]);
     for (let i = 0; i < 5; i++) writeFileSync(join(watched, `f${i}`), "x");

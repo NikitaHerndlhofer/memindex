@@ -13,7 +13,7 @@
 
 import type {
   Capture,
-  ChunkerId,
+  Chunker,
   Facets,
   IsoTime,
   ItemDraft,
@@ -65,7 +65,12 @@ export interface SourcePlugin<Meta = unknown> {
   /** Validated at the read() boundary; a draft whose meta fails is logged, not written. */
   readonly meta: z.ZodType<Meta>;
   readonly facets: Facets;
-  readonly chunker: ChunkerId;
+  /**
+   * The plugin owns its chunkers: one per item kind, `default` for the rest. Ids are namespaced by plugin
+   * (`superwhisper.words@1`) so a version bump rechunks only that plugin's items. Resolve with
+   * `registry.chunkerFor`.
+   */
+  readonly chunkers: { readonly default: Chunker } & Readonly<Partial<Record<ItemKind, Chunker>>>;
   /** Bump when read()/parseCapture() output changes; the reparse job replays captures. */
   readonly parserVersion: number;
   /** "always": every revision's raw record is kept (retention-limited sources). */

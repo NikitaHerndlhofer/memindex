@@ -10,6 +10,7 @@ import {
   isoTime,
   itemKey,
   sha256Hex,
+  type TurnDraft,
   turnKey,
 } from "@memindex/model";
 import { z } from "zod";
@@ -60,6 +61,24 @@ const MetaJsonSchema = z.looseObject({
     .optional(),
 });
 
+/**
+ * Meeting diarization in meta.json. `segments` are utterances in older builds and single words in newer
+ * ones (`words[]`, `language` per segment); `speaker` indexes `speakers[].number` and is occasionally
+ * missing. `speakers[].name` is the label the user assigned ("Speaker 1" until renamed).
+ */
+const DiarizationSchema = z.object({
+  segments: z
+    .array(
+      z.looseObject({
+        start: z.number().nullish(),
+        text: z.string().nullish(),
+        speaker: z.number().int().nullish(),
+      }),
+    )
+    .catch([]),
+  speakers: z.array(z.looseObject({ number: z.number().int(), name: z.string().nullish() })).catch([]),
+});
+
 const AudioSchema = z.object({ path: z.string(), sha1: z.string() }).nullable();
 
 export const CaptureBodySchema = z.object({
@@ -83,7 +102,7 @@ export const SuperWhisperMeta = z.object({
   rawWordCount: z.number().nullable(),
   llmWordCount: z.number().nullable(),
   audioPath: z.string().nullable(),
-  /** Super Whisper's word count for the embedded body; `words@1` compares it to the 500-word threshold. */
+  /** Super Whisper's word count for the embedded body; `superwhisper.words@1` compares it to the 500-word threshold. */
   bodyWordCount: z.number().nullable(),
 });
 export type SuperWhisperMeta = z.infer<typeof SuperWhisperMeta>;
@@ -147,6 +166,39 @@ function emptyToNull(v: string | undefined | null): string | null {
   return v == null || v.trim() === "" ? null : v;
 }
 
+/**
+ * Consecutive segments with the same speaker label form one turn keyed `s<index of its first segment>`.
+ * A segment without a speaker belongs to the speaker before it (the first known speaker, at the start).
+ * Empty when no segment names a speaker.
+ */
+export function speakerTurns(metaJson: unknown, startedAt: IsoTime): TurnDraft[] {
+  const parsed = DiarizationSchema.safeParse(metaJson ?? {});
+  if (!parsed.success) return [];
+  const names = new Map(parsed.data.speakers.map((s) => [s.number, emptyToNull(s.name)]));
+  const segments = parsed.data.segments;
+  let current = segments.find((s) => s.speaker != null)?.speaker;
+  if (current == null) return [];
+  const t0 = Date.parse(startedAt);
+  const turns: { key: number; at: number | null; speaker: string; words: string[] }[] = [];
+  segments.forEach((seg, i) => {
+    const text = seg.text?.trim();
+    if (!text) return;
+    current = seg.speaker ?? current;
+    if (current == null) return;
+    const speaker = names.get(current) ?? `Speaker ${current + 1}`;
+    const last = turns[turns.length - 1];
+    if (last?.speaker === speaker) last.words.push(text);
+    else turns.push({ key: i, at: seg.start ?? null, speaker, words: [text] });
+  });
+  return turns.map((t) => ({
+    key: turnKey(`s${t.key}`),
+    role: "speaker",
+    at: t.at === null ? null : isoTime(t0 + Math.round(t.at * 1000)),
+    speaker: t.speaker,
+    parts: [{ kind: "transcript", text: t.words.join(" ") }],
+  }));
+}
+
 export function buildCapture(body: CaptureBody): Capture {
   return { format: CAPTURE_FORMAT, body };
 }
@@ -164,10 +216,27 @@ export function parseCapture(capture: Capture): ItemDraft<SuperWhisperMeta> {
   const startedAt = normalizeDatetime(row.datetime);
   const appName = emptyToNull(pc?.applicationContext?.name);
   const title = emptyToNull(row.title) ?? (transcript.trim() ? transcript.trim().slice(0, 80) : null);
+  const kind = itemKind(row, meta.success ? meta.data.kind : undefined);
+  const speakers = kind === "meeting" ? speakerTurns(metaJson, startedAt) : [];
+  const summary = row.llmResult?.trim() ? row.llmResult : null;
+  const whole: TurnDraft = {
+    key: turnKey("u"),
+    role: "speaker",
+    at: startedAt,
+    speaker: null,
+    parts: [
+      { kind: "transcript", text: transcript },
+      { kind: "transcript_raw", text: raw },
+    ],
+  };
+  const summaryTurn: TurnDraft[] = summary
+    ? [{ ...whole, parts: [{ kind: "transcript", text: summary }] }]
+    : [];
+  const turns = speakers.length === 0 ? [whole] : [...summaryTurn, ...speakers];
 
   return {
     key: itemKey("superwhisper", row.recordingIdHex),
-    kind: itemKind(row, meta.success ? meta.data.kind : undefined),
+    kind,
     title,
     startedAt,
     endedAt: row.duration > 0 ? isoTime(Date.parse(startedAt) + Math.round(row.duration)) : null,
@@ -191,17 +260,6 @@ export function parseCapture(capture: Capture): ItemDraft<SuperWhisperMeta> {
       audioPath: audio?.path ?? null,
       bodyWordCount: body ? sourceBodyWordCount(row) : null,
     },
-    turns: [
-      {
-        key: turnKey("u"),
-        role: "speaker",
-        at: startedAt,
-        speaker: null,
-        parts: [
-          { kind: "transcript", text: transcript },
-          { kind: "transcript_raw", text: raw },
-        ],
-      },
-    ],
+    turns,
   };
 }

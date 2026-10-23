@@ -4,7 +4,7 @@ import type { WriteStore } from "@memindex/store";
 import { errorMessage } from "../ingest.ts";
 import type { Budget, JobDef, JobReport } from "./types.ts";
 
-export const EMBED_BATCH = 64;
+const EMBED_BATCH = 64;
 
 /**
  * backlog → embed (no transaction held) → put. The vector row is the done marker, so a crash

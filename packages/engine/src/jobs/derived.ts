@@ -1,4 +1,4 @@
-import { type ItemKey, locationId } from "@memindex/model";
+import { type Chunker, type ChunkerId, type ItemKey, locationId } from "@memindex/model";
 import type { SourcePlugin } from "@memindex/sources";
 import type { StoredItem, StreamFilter, WriteStore } from "@memindex/store";
 import { errorMessage } from "../ingest.ts";
@@ -32,35 +32,55 @@ async function* pages(store: WriteStore, filter: Filter, budget?: Budget): Async
   }
 }
 
-async function countMatching(store: WriteStore, filters: readonly Filter[]): Promise<number> {
+async function countMatching(items: AsyncIterable<unknown>): Promise<number> {
   let n = 0;
-  for (const f of filters) for await (const _ of pages(store, f)) if (++n >= COUNT_CAP) return n;
+  for await (const _ of items) if (++n >= COUNT_CAP) return n;
   return n;
 }
 
-const rechunkFilters = (ctx: JobContext): Filter[] =>
-  ctx.registry.all.map((p) => ({ source: p.id, staleChunker: p.chunker }));
+async function* concat<T>(lists: readonly AsyncIterable<T>[]): AsyncIterable<T> {
+  for (const l of lists) yield* l;
+}
+
+/**
+ * Items whose stored chunker is not `chunkerFor(source, kind)`, unknown ids (legacy imports)
+ * included. The store filters by one chunker id per pass, so there is one pass per distinct
+ * chunker of the plugin, keeping the items whose kind maps to that chunker.
+ */
+async function* staleChunked(
+  ctx: JobContext,
+  plugin: SourcePlugin,
+  budget?: Budget,
+): AsyncIterable<{ item: StoredItem; chunker: Chunker }> {
+  const ids = new Set<ChunkerId>(
+    Object.values(plugin.chunkers).flatMap((c: Chunker | undefined) => (c ? [c.id] : [])),
+  );
+  for (const id of ids) {
+    for await (const item of pages(ctx.store, { source: plugin.id, staleChunker: id }, budget)) {
+      const chunker = ctx.registry.chunkerFor(plugin.id, item.draft.kind);
+      if (chunker.id === id) yield { item, chunker };
+    }
+  }
+}
 
 const reparsable = (ctx: JobContext): SourcePlugin[] =>
   ctx.registry.all.filter((p) => p.capture === "always" && p.parseCapture !== undefined);
 
+const rechunkPending = (ctx: JobContext) =>
+  countMatching(concat(ctx.registry.all.map((p) => staleChunked(ctx, p))));
+
 export const rechunkJob: JobDef = {
   id: "rechunk",
   kind: "convergent",
-  codeVersion: 1,
-  describe: "Re-chunk items whose chunker differs from their source's current chunker",
+  codeVersion: 2,
+  describe: "Re-chunk items whose chunker differs from their source's current chunker for their kind",
   runByDefault: true,
-  pending: (ctx) => countMatching(ctx.store, rechunkFilters(ctx)),
+  pending: rechunkPending,
   async run(ctx, budget): Promise<JobReport> {
     let done = 0;
     const errors: string[] = [];
     for (const plugin of ctx.registry.all) {
-      const chunker = ctx.registry.chunker(plugin.chunker);
-      for await (const item of pages(
-        ctx.store,
-        { source: plugin.id, staleChunker: plugin.chunker },
-        budget,
-      )) {
+      for await (const { item, chunker } of staleChunked(ctx, plugin, budget)) {
         try {
           const res = await ctx.store.replaceChunks(
             item.draft.key,
@@ -74,12 +94,7 @@ export const rechunkJob: JobDef = {
         }
       }
     }
-    return {
-      id: "rechunk",
-      done,
-      remaining: await countMatching(ctx.store, rechunkFilters(ctx)),
-      error: summarize(errors),
-    };
+    return { id: "rechunk", done, remaining: await rechunkPending(ctx), error: summarize(errors) };
   },
 };
 
@@ -91,8 +106,7 @@ export const reparseJob: JobDef = {
   runByDefault: true,
   pending: (ctx) =>
     countMatching(
-      ctx.store,
-      reparsable(ctx).map((p) => ({ source: p.id, parserBelow: p.parserVersion })),
+      concat(reparsable(ctx).map((p) => pages(ctx.store, { source: p.id, parserBelow: p.parserVersion }))),
     ),
   async run(ctx, budget): Promise<JobReport> {
     let done = 0;
@@ -113,7 +127,6 @@ async function reparseSource(
 ): Promise<number> {
   const parse = plugin.parseCapture;
   if (!parse) return 0;
-  const chunker = ctx.registry.chunker(plugin.chunker);
   let done = 0;
   let touched = false;
   for await (const item of pages(
@@ -127,6 +140,7 @@ async function reparseSource(
       const meta = plugin.meta.safeParse(parsed.meta);
       if (!meta.success) throw new Error(`meta invalid after reparse: ${meta.error.message}`);
       const draft = { ...parsed, meta: meta.data };
+      const chunker = ctx.registry.chunkerFor(plugin.id, draft.kind);
       touched = true;
       const outcome = await ctx.store.apply({
         source: plugin.id,

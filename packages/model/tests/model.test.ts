@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   chunkDraft,
+  chunkerId,
   chunkId,
   compareRevision,
   contentHash,
@@ -8,6 +9,7 @@ import {
   parseItemKey,
   producerId,
   type StampedRevision,
+  stockChunkerId,
   turnKey,
 } from "@memindex/model";
 
@@ -28,6 +30,24 @@ describe("keys", () => {
     expect(parseItemKey(k)).toEqual({ source: "cursor" as never, native: "3f1c" });
     expect(() => itemKey("cursor", "/Users/me/x.jsonl")).toThrow();
     expect(() => itemKey("Cursor", "x")).toThrow();
+  });
+
+  test("chunker ids are `<name>@<version>`, names optionally namespaced by plugin", () => {
+    expect(chunkerId("words", 1) as string).toBe("words@1");
+    expect(chunkerId("superwhisper.words", 1) as string).toBe("superwhisper.words@1");
+    expect(chunkerId("agent-chat.parts", 2) as string).toBe("agent-chat.parts@2");
+    for (const bad of ["Words", "a..b", ".a", "a.", "a.1b", "a@b"])
+      expect(() => chunkerId(bad, 1)).toThrow(/invalid chunker id/);
+    expect(() => chunkerId("words", 0)).toThrow(/invalid chunker id/);
+  });
+
+  test("stock chunker ids carry the owner, the stock version and a 6-hex config hash", () => {
+    expect(stockChunkerId("superwhisper", "words", 1, "0a1b2c") as string).toBe(
+      "superwhisper.words@1+0a1b2c",
+    );
+    for (const bad of ["0A1B2C", "0a1b2", "0a1b2c3", "zzzzzz"])
+      expect(() => stockChunkerId("superwhisper", "words", 1, bad)).toThrow(/invalid chunker config hash/);
+    expect(() => stockChunkerId("Super", "words", 1, "0a1b2c")).toThrow(/invalid chunker id/);
   });
 
   test("chunk ids are stable and position-free", () => {

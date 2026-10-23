@@ -1,6 +1,7 @@
 import type { Embedder } from "@memindex/embed";
 import type { WriteStore } from "@memindex/store";
-import type { Log, Registry } from "../registry.ts";
+import type { Log } from "../log.ts";
+import type { Registry } from "../registry.ts";
 
 export interface JobContext {
   readonly store: WriteStore;

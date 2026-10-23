@@ -5,7 +5,7 @@ import { join } from "node:path";
 import type { IngestReport, IngestRequest } from "@memindex/engine";
 import { defineCommand } from "citty";
 import { z } from "zod";
-import { action, info, out, skillTrackFile, withArchive } from "../context.ts";
+import { action, log, out, skillTrackFile, withArchive } from "../context.ts";
 import { EXIT, UsageError } from "../errors.ts";
 import { refreshSkills, skillTargets } from "../install/skill.ts";
 import { selfInvocation, spawnDetached } from "../spawn.ts";
@@ -86,9 +86,9 @@ export const ingestCommand = defineCommand({
       return r;
     });
     if (a.json) out(`${JSON.stringify(report, null, 2)}\n`);
-    else info(summarize(report));
-    for (const s of report.skipped) info(`skipped ${s.source}: ${s.reason}`);
-    for (const e of report.errors) info(`error ${e.source}${e.key ? ` ${e.key}` : ""}: ${e.message}`);
+    else log.info(summarize(report));
+    for (const s of report.skipped) log.warn(`skipped ${s.source}: ${s.reason}`);
+    for (const e of report.errors) log.error(`${e.source}${e.key ? ` ${e.key}` : ""}: ${e.message}`);
     return report.errors.length > 0 ? EXIT.partialIngest : 0;
   }),
 });
@@ -110,7 +110,7 @@ export const hookCommand = defineCommand({
   run: action(async ({ args }) => {
     const { source, event } = args;
     if (!/^[a-z][a-z0-9-]*$/.test(source) || !/^[A-Za-z][A-Za-z0-9_-]*$/.test(event)) {
-      info(`memindex hook: ignoring malformed source/event ${JSON.stringify([source, event])}`);
+      log.warn(`memindex hook: ignoring malformed source/event ${JSON.stringify([source, event])}`);
       return 0;
     }
     const raw = processStdin.piped ? await processStdin.read() : "";
@@ -119,7 +119,7 @@ export const hookCommand = defineCommand({
       try {
         JSON.parse(raw);
       } catch {
-        info(`memindex hook ${source} ${event}: payload is not JSON; ignoring`);
+        log.warn(`memindex hook ${source} ${event}: payload is not JSON; ignoring`);
         return 0;
       }
       const file = join(
@@ -135,7 +135,10 @@ export const hookCommand = defineCommand({
 });
 
 export const watchCommand = defineCommand({
-  meta: { name: "watch", description: "Event-driven ingest daemon (launchd runs this; see `memindex install`)" },
+  meta: {
+    name: "watch",
+    description: "Event-driven ingest daemon (launchd runs this; see `memindex install`)",
+  },
   args: {
     debounce: { type: "string", description: "Debounce window in ms (default 2000)" },
   },

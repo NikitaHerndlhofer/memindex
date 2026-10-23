@@ -210,6 +210,18 @@ export interface VectorRepo {
     space: VectorSpace,
     vectors: readonly { readonly hash: ContentHash; readonly vector: Float32Array }[],
   ): Promise<number>;
+  /**
+   * put() for imports: drops the space's vector index, puts every batch, then rebuilds the index
+   * once (with `maintenanceWorkMem`, default 1GB). Searches stay correct but scan exactly while it
+   * runs; if the process dies, the next write-mode open rebuilds the index. Returns rows inserted.
+   */
+  bulkPut(
+    space: VectorSpace,
+    batches:
+      | AsyncIterable<readonly { readonly hash: ContentHash; readonly vector: Float32Array }[]>
+      | Iterable<readonly { readonly hash: ContentHash; readonly vector: Float32Array }[]>,
+    opts?: { readonly maintenanceWorkMem?: string },
+  ): Promise<number>;
   /** Delete vectors no live chunk references. */
   gc(space: VectorSpace): Promise<number>;
 }

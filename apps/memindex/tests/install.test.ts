@@ -2,9 +2,9 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import type { EmbedHealth } from "@memindex/engine";
+import type { EmbedHealth, PullProgress } from "@memindex/engine";
 import { PLIST_LABEL, renderPlist } from "../src/install/launchd.ts";
-import { ensureOllama } from "../src/install/ollama.ts";
+import { ensureOllama, formatPull } from "../src/install/ollama.ts";
 import { installSkill, refreshSkills, skillStates, skillTargets } from "../src/install/skill.ts";
 import { fromArray, render } from "../src/render.ts";
 
@@ -70,7 +70,11 @@ describe("skill install (hash-tracked)", () => {
 
 describe("launchd plist", () => {
   test("keepalive agent running `memindex watch`, XML-escaped", () => {
-    const xml = renderPlist({ binPath: "/opt/homebrew/bin/memindex", logPath: "/l/a&b.log", home: "/Users/me" });
+    const xml = renderPlist({
+      binPath: "/opt/homebrew/bin/memindex",
+      logPath: "/l/a&b.log",
+      home: "/Users/me",
+    });
     expect(xml).toContain(`<string>${PLIST_LABEL}</string>`);
     expect(xml).toContain("<string>/opt/homebrew/bin/memindex</string>\n    <string>watch</string>");
     expect(xml).toContain("<key>KeepAlive</key>\n  <true/>");
@@ -81,46 +85,59 @@ describe("launchd plist", () => {
 });
 
 describe("ensureOllama", () => {
-  const steps = (seq: EmbedHealth[], pull = 0) => {
-    const log: string[] = [];
+  const steps = (seq: EmbedHealth[], opts: { confirm?: boolean } = {}) => {
+    const updates: string[] = [];
     let started = 0;
     let pulled = 0;
     return {
-      log,
+      updates,
       counts: () => ({ started, pulled }),
+      task: { update: (m: string) => updates.push(m) },
       steps: {
         health: async () => seq.shift() ?? { ok: true as const, model: "bge-m3" },
-        startService: () => {
+        startService: async () => {
           started++;
         },
-        pullModel: () => {
+        pull: async (onProgress: (p: PullProgress) => void) => {
           pulled++;
-          return pull;
+          onProgress({ status: "pulling manifest" });
+          onProgress({ status: "downloading", total: 200 * 1024 * 1024, completed: 50 * 1024 * 1024 });
         },
         sleep: async () => {},
-        log: (m: string) => log.push(m),
+        confirmPull: async () => opts.confirm ?? true,
       },
     };
   };
   const down: EmbedHealth = { ok: false, reason: "unreachable", detail: "refused" };
   const missing: EmbedHealth = { ok: false, reason: "model_missing", detail: "not pulled" };
 
-  test("starts the service, then pulls the missing model", async () => {
+  test("starts the service, then pulls the missing model with streamed progress", async () => {
     const s = steps([down, down, missing]);
-    expect(await ensureOllama("bge-m3", s.steps)).toEqual({ ok: true, model: "bge-m3" });
+    expect(await ensureOllama("bge-m3", s.steps, s.task)).toEqual({ ok: true, model: "bge-m3" });
     expect(s.counts()).toEqual({ started: 1, pulled: 1 });
+    expect(s.updates).toContain("pulling bge-m3: downloading 25% (50/200 MB)");
   });
 
   test("gives up when the service never comes up", async () => {
     const s = steps(Array.from({ length: 40 }, () => down));
-    expect((await ensureOllama("bge-m3", s.steps, 2_000)).ok).toBe(false);
+    expect((await ensureOllama("bge-m3", s.steps, s.task, 2_000)).ok).toBe(false);
+    expect(s.counts().pulled).toBe(0);
+  });
+
+  test("a declined pull leaves the model missing", async () => {
+    const s = steps([missing], { confirm: false });
+    expect(await ensureOllama("bge-m3", s.steps, s.task)).toEqual(missing);
     expect(s.counts().pulled).toBe(0);
   });
 
   test("healthy is a no-op", async () => {
     const s = steps([]);
-    await ensureOllama("bge-m3", s.steps);
+    await ensureOllama("bge-m3", s.steps, s.task);
     expect(s.counts()).toEqual({ started: 0, pulled: 0 });
+  });
+
+  test("formatPull shows percent and MB when the event has byte counts", () => {
+    expect(formatPull({ status: "verifying sha256 digest" })).toBe("verifying sha256 digest");
   });
 });
 

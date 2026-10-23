@@ -1,2 +1,9 @@
 export { createOllamaEmbedder, l2Normalize } from "./ollama.ts";
-export { type Embedder, EmbedError, type EmbedHealth, type OllamaOptions } from "./types.ts";
+export {
+  type Embedder,
+  EmbedError,
+  type EmbedHealth,
+  type OllamaEmbedder,
+  type OllamaOptions,
+  type PullProgress,
+} from "./types.ts";

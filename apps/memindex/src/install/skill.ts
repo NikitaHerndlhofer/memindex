@@ -43,7 +43,7 @@ async function backupPath(path: string): Promise<string> {
   throw new Error(`no free backup name for ${path}`);
 }
 
-export type SkillAction = "wrote" | "unchanged" | "backed-up" | "refreshed" | "kept-user-edit" | "absent";
+type SkillAction = "wrote" | "unchanged" | "backed-up" | "refreshed" | "kept-user-edit" | "absent";
 export interface SkillOutcome {
   readonly path: string;
   readonly action: SkillAction;

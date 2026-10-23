@@ -24,6 +24,13 @@ export interface OllamaConfig {
   readonly keepAlive?: string;
 }
 
+/** Sources searches are limited to unless the caller passes its own or asks for all. */
+export interface SearchScope {
+  /** null: every source. Ids are checked against the registry when the archive opens. */
+  readonly defaultSources: readonly string[] | null;
+  readonly from: "env" | "config" | null;
+}
+
 export interface MemindexConfig {
   readonly paths: MemindexPaths;
   /** null until the first write-open mints one. */
@@ -31,6 +38,7 @@ export interface MemindexConfig {
   readonly store: StoreConfig;
   readonly ollama: OllamaConfig;
   readonly disabledSources: readonly SourceId[];
+  readonly search: SearchScope;
 }
 
 const ConfigFile = z
@@ -46,6 +54,10 @@ const ConfigFile = z
       .strict()
       .optional(),
     disabledSources: z.array(z.string()).optional(),
+    search: z
+      .object({ defaultSources: z.array(z.string().min(1)).min(1).optional() })
+      .strict()
+      .optional(),
   })
   .strict();
 type ConfigFile = z.infer<typeof ConfigFile>;
@@ -57,7 +69,9 @@ export const OLLAMA_DEFAULTS = { host: "http://127.0.0.1:11434", model: "bge-m3"
 
 export function resolvePaths(env: Env = process.env): MemindexPaths {
   const home = env.HOME ?? homedir();
-  const configDir = env.MEMINDEX_CONFIG_DIR ? resolve(env.MEMINDEX_CONFIG_DIR) : join(home, ".config", "memindex");
+  const configDir = env.MEMINDEX_CONFIG_DIR
+    ? resolve(env.MEMINDEX_CONFIG_DIR)
+    : join(home, ".config", "memindex");
   return {
     home,
     configDir,
@@ -87,13 +101,27 @@ async function readConfigFile(file: string): Promise<ConfigFile> {
   return parsed.data;
 }
 
-/** File, then env overrides (MEMINDEX_STORE, MEMINDEX_OLLAMA_HOST ?? OLLAMA_HOST, MEMINDEX_EMBED_MODEL). */
+function searchScope(env: Env, file: ConfigFile): SearchScope {
+  const fromEnv = (env.MEMINDEX_SOURCES ?? "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  if (fromEnv.length > 0) return { defaultSources: fromEnv, from: "env" };
+  const fromFile = file.search?.defaultSources;
+  return fromFile ? { defaultSources: fromFile, from: "config" } : { defaultSources: null, from: null };
+}
+
+/**
+ * File, then env overrides (MEMINDEX_STORE, MEMINDEX_OLLAMA_HOST ?? OLLAMA_HOST,
+ * MEMINDEX_EMBED_MODEL, MEMINDEX_SOURCES=a,b for the default search scope).
+ */
 export async function loadConfig(env: Env = process.env): Promise<MemindexConfig> {
   const paths = resolvePaths(env);
   const file = await readConfigFile(paths.configFile);
   const storeSpec = env.MEMINDEX_STORE ?? file.store;
   const host = env.MEMINDEX_OLLAMA_HOST ?? env.OLLAMA_HOST ?? file.ollama?.host ?? OLLAMA_DEFAULTS.host;
   return {
+    search: searchScope(env, file),
     paths,
     producerId: file.producerId ? producerId(file.producerId) : null,
     store: parseStoreSpec(storeSpec ?? LOCAL_SUPABASE_URL, paths.home),

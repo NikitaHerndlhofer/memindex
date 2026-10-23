@@ -1,51 +1,45 @@
-import type { EmbedHealth } from "@memindex/engine";
-import { run } from "../spawn.ts";
+import type { EmbedHealth, PullProgress } from "@memindex/engine";
+import type { Task } from "./ui.ts";
 
 export interface OllamaSteps {
   readonly health: () => Promise<EmbedHealth>;
-  readonly startService: () => void;
-  readonly pullModel: (model: string) => number;
+  /** Streams `ollama pull <model>`. */
+  readonly pull: (onProgress: (p: PullProgress) => void) => Promise<void>;
+  /** `brew services start ollama`. */
+  readonly startService: () => Promise<void>;
   readonly sleep: (ms: number) => Promise<void>;
-  readonly log: (msg: string) => void;
+  /** Asked before the multi-GB download. */
+  readonly confirmPull: (model: string) => Promise<boolean>;
 }
 
-export const defaultOllamaSteps = (
-  health: () => Promise<EmbedHealth>,
-  log: (m: string) => void,
-): OllamaSteps => ({
-  health,
-  log,
-  startService: () => {
-    run(["brew", "services", "start", "ollama"], { timeoutMs: 30_000 });
-  },
-  pullModel: (model) =>
-    Bun.spawnSync({ cmd: ["ollama", "pull", model], stdio: ["ignore", "inherit", "inherit"] }).exitCode ?? 1,
-  sleep: (ms) => Bun.sleep(ms),
-});
+const MB = 1024 * 1024;
+
+export function formatPull(p: PullProgress): string {
+  if (!p.total || p.completed === undefined) return p.status;
+  const pct = Math.floor((p.completed / p.total) * 100);
+  return `${p.status} ${pct}% (${Math.round(p.completed / MB)}/${Math.round(p.total / MB)} MB)`;
+}
 
 /** Check-and-fix: start the service if unreachable, pull the model if missing. Returns the final health. */
-export async function ensureOllama(model: string, steps: OllamaSteps, waitMs = 8_000): Promise<EmbedHealth> {
+export async function ensureOllama(
+  model: string,
+  steps: OllamaSteps,
+  task: Pick<Task, "update">,
+  waitMs = 8_000,
+): Promise<EmbedHealth> {
   let h = await steps.health();
   if (!h.ok && h.reason === "unreachable") {
-    steps.log("Ollama not reachable; starting it with `brew services start ollama`");
-    steps.startService();
+    task.update("not reachable; starting it with `brew services start ollama`");
+    await steps.startService();
     for (let waited = 0; waited < waitMs && !h.ok && h.reason === "unreachable"; waited += 500) {
       await steps.sleep(500);
       h = await steps.health();
     }
-    if (!h.ok && h.reason === "unreachable") {
-      steps.log(
-        "Ollama is still unreachable. Install it with `brew install ollama`, then re-run `memindex install`.",
-      );
-      return h;
-    }
+    if (!h.ok && h.reason === "unreachable") return h;
   }
   if (!h.ok && h.reason === "model_missing") {
-    steps.log(`pulling ${model} (one-time, ~2 GB)`);
-    if (steps.pullModel(model) !== 0) {
-      steps.log(`\`ollama pull ${model}\` failed; run it manually`);
-      return h;
-    }
+    if (!(await steps.confirmPull(model))) return h;
+    await steps.pull((p) => task.update(`pulling ${model}: ${formatPull(p)}`));
     h = await steps.health();
   }
   return h;

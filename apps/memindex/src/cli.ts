@@ -1,14 +1,18 @@
 #!/usr/bin/env bun
 import { defineCommand, runMain } from "citty";
+import { LogLevels } from "consola";
 import { doctorCommand, jobsCommand, migrateCommand, pathCommand, statusCommand } from "./commands/admin.ts";
+import { importCommand } from "./commands/import.ts";
 import { hookCommand, ingestCommand, watchCommand } from "./commands/ingest.ts";
 import { installCommand, installSkillCommand } from "./commands/install.ts";
 import { qCommand, sqlCommand } from "./commands/query.ts";
+import { log } from "./context.ts";
 import { VERSION } from "./version.ts";
 
 /** THE command list. Each command parses flags into domain types and calls one Archive method. */
 export const COMMANDS = {
   ingest: ingestCommand,
+  import: importCommand,
   hook: hookCommand,
   sql: sqlCommand,
   q: qCommand,
@@ -33,8 +37,14 @@ export const main = defineCommand({
 
 if (import.meta.main) {
   const argv = process.argv.slice(2);
+  // A global flag: stripped here so no subcommand has to declare it; children inherit the env.
+  const rawArgs = argv.filter((a) => a !== "--verbose");
+  if (rawArgs.length !== argv.length) {
+    process.env.MEMINDEX_VERBOSE = "1";
+    log.level = LogLevels.debug;
+  }
   // citty prints the version through consola, which goes silent under NODE_ENV=test.
-  if (argv.length === 1 && (argv[0] === "--version" || argv[0] === "-v"))
+  if (rawArgs.length === 1 && (rawArgs[0] === "--version" || rawArgs[0] === "-v"))
     process.stdout.write(`${VERSION}\n`);
-  else await runMain(main);
+  else await runMain(main, { rawArgs });
 }

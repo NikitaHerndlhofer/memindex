@@ -9,8 +9,6 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { cpSync, existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { Facets, SourceId } from "@memindex/model";
-import { buildRegistry } from "@memindex/sources";
 import { migrateStore } from "@memindex/store";
 import { SQL } from "bun";
 import {
@@ -20,10 +18,9 @@ import {
   openArchive,
   RECIPES,
   type Recipe,
-  type Registry,
   VIEW_CONTRACT,
 } from "../src/index.ts";
-import { fakeEmbedder } from "./fakes.ts";
+import { fakeEmbedder, recordingLog } from "./fakes.ts";
 
 const ADMIN_URL = process.env.MEMINDEX_TEST_PG ?? LOCAL_SUPABASE_URL;
 const FIXTURES = join(import.meta.dir, "..", "..", "sources", "tests", "fixtures");
@@ -47,33 +44,9 @@ const skipReason = await probe();
 const storeNotReady = skipReason !== null;
 if (storeNotReady) console.warn(`[integration] skipped: ${skipReason}`);
 
-/**
- * The store only accepts lower snake_case facet names; some plugins still declare camelCase ones
- * (superwhisper: appName, durationMs). Drop those here, loudly, so the rest of the pipeline is
- * still exercised end to end until the plugins are renamed.
- */
-function storeCompatibleFacets(registry: Registry): Registry {
-  const dropped: string[] = [];
-  const facets = new Map<SourceId, Facets>();
-  for (const [source, f] of registry.facets()) {
-    const ok = Object.entries(f).filter(
-      ([k]) => /^[a-z_][a-z0-9_]*$/.test(k) || !dropped.push(`${source}.${k}`),
-    );
-    facets.set(source, Object.fromEntries(ok));
-  }
-  if (dropped.length > 0)
-    console.warn(`[integration] facets the store rejects, dropped: ${dropped.join(", ")}`);
-  return { all: registry.all, chunker: (id) => registry.chunker(id), facets: () => facets };
-}
-
-/**
- * The store's run() doesn't set search_path, so unqualified view-contract names only resolve when
- * the session puts `memindex` first. Passed as a startup parameter until the store sets it itself.
- */
 function withDb(url: string, db: string): string {
   const u = new URL(url);
   u.pathname = `/${db}`;
-  u.searchParams.set("search_path", "memindex,extensions,public");
   return u.toString();
 }
 
@@ -110,10 +83,9 @@ describe("integration: fixtures → Supabase store → recipes", () => {
       mode: "write",
       env,
       config: await loadConfig(env),
-      registry: storeCompatibleFacets(buildRegistry()),
       embedder: fakeEmbedder(16),
       lockDir: null,
-      log: () => {},
+      log: recordingLog(),
     });
   }, 120_000);
 
@@ -150,7 +122,9 @@ describe("integration: fixtures → Supabase store → recipes", () => {
     expect(r?.error).toBeNull();
     expect(r?.remaining).toBe(0);
     expect(r?.done).toBeGreaterThan(0);
-    const pending = Object.fromEntries((await live().jobs.status()).map((j) => [j.id, j.pending]));
+    const pending = Object.fromEntries(
+      (await live().jobs.status()).filter((j) => j.kind === "convergent").map((j) => [j.id, j.pending]),
+    );
     expect(pending).toEqual({ reparse: 0, rechunk: 0, embed: 0, "vec-gc": null });
   });
 
@@ -160,6 +134,16 @@ describe("integration: fixtures → Supabase store → recipes", () => {
       await rows({ sql: `SELECT ${v.columns} FROM ${v.name} LIMIT 1` });
     }
   });
+
+  test.skipIf(storeNotReady)(
+    "camelCase plugin facets reach the facet view as snake_case columns",
+    async () => {
+      const [row] = await rows({
+        sql: "SELECT mode, app_name, language, duration_ms FROM superwhisper_items WHERE app_name IS NOT NULL ORDER BY item_key LIMIT 1",
+      });
+      expect(row?.app_name).toEqual(expect.any(String));
+    },
+  );
 
   test.skipIf(storeNotReady)(
     "every recipe runs",

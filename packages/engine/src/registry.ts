@@ -1,9 +1,12 @@
-import type { Chunker, ChunkerId, Facets, LocationId, SourceId } from "@memindex/model";
+import type { Chunker, ChunkerId, Facets, ItemKind, LocationId, SourceId } from "@memindex/model";
 import type { SourceKit, SourcePlugin } from "@memindex/sources";
 
 /** The slice of `@memindex/sources`' registry the engine relies on. */
 export interface Registry {
   readonly all: readonly SourcePlugin[];
+  /** The plugin's chunker for this item kind (`chunkers[kind] ?? chunkers.default`). */
+  chunkerFor(source: SourceId, kind: ItemKind): Chunker;
+  /** By id, for imports that must reproduce a legacy chunking exactly. */
   chunker(id: ChunkerId): Chunker;
   facets(): ReadonlyMap<SourceId, Facets>;
 }
@@ -12,16 +15,6 @@ export type CursorGet = (location: LocationId, name: string) => Promise<string |
 
 /** Builds the per-source kit; the cursor reader is scoped to (producer, source). */
 export type KitFactory = (source: SourceId, cursorGet: CursorGet) => SourceKit;
-
-export type Log = (msg: string, data?: Record<string, unknown>) => void;
-
-export function stderrLog(env: Readonly<Record<string, string | undefined>> = process.env): Log {
-  const quiet = env.MEMINDEX_QUIET === "1";
-  return (msg, data) => {
-    if (quiet) return;
-    process.stderr.write(`[memindex] ${msg}${data ? ` ${JSON.stringify(data)}` : ""}\n`);
-  };
-}
 
 export function findPlugin(registry: Registry, id: string): SourcePlugin {
   const plugin = registry.all.find((p) => p.id === id);

@@ -22,7 +22,8 @@ export const sqlCommand = defineCommand({
 export const qCommand = defineCommand({
   meta: {
     name: "q",
-    description: "Run a named recipe: memindex q <recipe> [text] [--param k=v]; `memindex q recipes` lists them",
+    description:
+      "Run a named recipe: memindex q <recipe> [text] [--param k=v]; `memindex q recipes` lists them",
   },
   args: Q_ARGS,
   run: action(async ({ rawArgs }) => {

@@ -1,5 +1,5 @@
-import { createOllamaEmbedder, type Embedder, type EmbedHealth } from "@memindex/embed";
-import type { ProducerId, SourceId } from "@memindex/model";
+import { createOllamaEmbedder, type Embedder, type EmbedHealth, type PullProgress } from "@memindex/embed";
+import { type ProducerId, type SourceId, sourceId } from "@memindex/model";
 import {
   buildRegistry,
   createSourceKit,
@@ -18,7 +18,7 @@ import {
   type StoreStats,
   type WriteStore,
 } from "@memindex/store";
-import { type Env, ensureProducerId, loadConfig, type MemindexConfig } from "./config.ts";
+import { type Env, ensureProducerId, loadConfig, type MemindexConfig, type SearchScope } from "./config.ts";
 import {
   errorMessage,
   type IngestDeps,
@@ -40,9 +40,10 @@ import {
   runJobs,
   selectJobs,
 } from "./jobs/index.ts";
+import { createLog, type Log } from "./log.ts";
 import { type Query, type QueryOptions, runQuery } from "./query.ts";
 import { RECIPES } from "./recipes.ts";
-import { findPlugin, type KitFactory, type Log, type Registry, stderrLog } from "./registry.ts";
+import { findPlugin, type KitFactory, type Registry } from "./registry.ts";
 import { renderSkill } from "./skill.ts";
 import { watchSources } from "./watch.ts";
 
@@ -79,6 +80,8 @@ export interface ArchiveStatus {
   /** Empty in read mode (pending counts need the write side). */
   readonly jobs: readonly JobStatus[];
   readonly sources: readonly { readonly id: SourceId; readonly enabled: boolean }[];
+  /** Default search scope; `defaultSources: null` searches every source. */
+  readonly search: SearchScope;
 }
 
 export interface HookResult {
@@ -132,14 +135,20 @@ export async function openArchive(opts: OpenArchiveOptions): Promise<Archive> {
   const env = opts.env ?? process.env;
   const base = opts.config ?? (await loadConfig(env));
   const config: MemindexConfig = opts.store ? { ...base, store: opts.store } : base;
-  const log = opts.log ?? stderrLog(env);
+  const log = opts.log ?? createLog(env);
   const registry = opts.registry ?? buildRegistry();
+  const defaultSources = resolveDefaultSources(config.search, registry);
   const embedder = opts.embedder ?? createOllamaEmbedder(config.ollama);
   const binaryVersion = opts.binaryVersion ?? DEFAULT_BINARY_VERSION;
   const kitFactory: KitFactory =
     opts.kit ??
     ((source, cursorGet) =>
-      createSourceKit({ env, home: config.paths.home, cursorGet, log: (m, d) => log(`${source}: ${m}`, d) }));
+      createSourceKit({
+        env,
+        home: config.paths.home,
+        cursorGet,
+        log: (m, d) => log.warn(`${source}: ${m}`, d),
+      }));
   const storeOpts = { facets: registry.facets(), vectorSpace: embedder.space };
 
   let producer: ProducerId | null = null;
@@ -160,9 +169,22 @@ export async function openArchive(opts: OpenArchiveOptions): Promise<Archive> {
     producer,
     kitFactory,
     log,
+    defaultSources,
     jobs: [...JOBS, ...(opts.jobs ?? [])],
     lockDir: opts.lockDir === undefined ? config.paths.lockDir : opts.lockDir,
   });
+}
+
+/** `search.defaultSources` / MEMINDEX_SOURCES must name registered sources; a typo fails loudly at open. */
+function resolveDefaultSources(scope: SearchScope, registry: Registry): readonly SourceId[] | null {
+  if (!scope.defaultSources) return null;
+  const known = new Set<string>(registry.all.map((p) => p.id));
+  const unknown = scope.defaultSources.filter((s) => !known.has(s));
+  if (unknown.length > 0) {
+    const where = scope.from === "env" ? "MEMINDEX_SOURCES" : "config search.defaultSources";
+    throw new Error(`${where}: unknown source ${unknown.join(", ")}; known: ${[...known].join(", ")}`);
+  }
+  return scope.defaultSources.map(sourceId);
 }
 
 /** Ollama reachability and model presence, without opening the store (install, doctor). */
@@ -171,6 +193,15 @@ export async function checkEmbedder(
 ): Promise<EmbedHealth> {
   const config = opts.config ?? (await loadConfig(opts.env ?? process.env));
   return createOllamaEmbedder(config.ollama).health();
+}
+
+/** Streams `ollama pull` of the configured embed model (install, doctor). */
+export async function pullEmbedModel(
+  onProgress: (p: PullProgress) => void,
+  opts: { readonly config?: MemindexConfig; readonly env?: Env } = {},
+): Promise<void> {
+  const config = opts.config ?? (await loadConfig(opts.env ?? process.env));
+  await createOllamaEmbedder(config.ollama).pull(config.ollama.model, onProgress);
 }
 
 /** `memindex migrate` without opening the archive (the store refuses to open while behind). */
@@ -189,6 +220,7 @@ interface ArchiveParts {
   readonly producer: ProducerId | null;
   readonly kitFactory: KitFactory;
   readonly log: Log;
+  readonly defaultSources: readonly SourceId[] | null;
   readonly jobs: readonly JobDef[];
   readonly lockDir: string | null;
 }
@@ -296,7 +328,7 @@ class ArchiveImpl implements Archive {
       targets,
       async (source) => {
         const r = await this.ingest({ only: { source }, embed: { budgetMs: embedBudgetMs } });
-        this.p.log(`watch: ${source}`, {
+        this.p.log.info(`watch: ${source}`, {
           ...r.outcomes,
           gone: r.gone,
           embedded: r.embedded,
@@ -309,7 +341,16 @@ class ArchiveImpl implements Archive {
   }
 
   query(q: Query, opts?: QueryOptions): AsyncIterable<Row> {
-    return runQuery({ store: this.p.store, embedder: this.p.embedder, registry: this.p.registry }, q, opts);
+    return runQuery(
+      {
+        store: this.p.store,
+        embedder: this.p.embedder,
+        registry: this.p.registry,
+        defaultSources: this.p.defaultSources,
+      },
+      q,
+      opts,
+    );
   }
 
   private jobContext(args: Readonly<Record<string, string>> = {}): JobContext {
@@ -381,6 +422,7 @@ class ArchiveImpl implements Archive {
       stats,
       jobs,
       sources: this.p.registry.all.map((s) => ({ id: s.id, enabled: !disabled.has(s.id) })),
+      search: this.p.config.search,
     };
   }
 
@@ -395,14 +437,18 @@ class ArchiveImpl implements Archive {
           : `Facet view ${view}: no extra columns.`;
       notes.set(s.id, [facetLine, s.skillNotes?.trim()].filter(Boolean).join("\n\n"));
     }
-    return renderSkill(RECIPES, notes, this.p.store.schema.contract);
+    const scope = this.p.config.search;
+    return renderSkill(RECIPES, notes, this.p.store.schema.contract, {
+      sources: this.p.registry.all.map((s) => s.id),
+      configured: scope.from === "config" ? scope.defaultSources : null,
+    });
   }
 
   async close(): Promise<void> {
     try {
       await this.p.store.close();
     } catch (e) {
-      this.p.log(`close failed: ${errorMessage(e)}`);
+      this.p.log.warn(`close failed: ${errorMessage(e)}`);
     }
   }
 }

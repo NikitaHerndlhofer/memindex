@@ -1,7 +1,7 @@
 import { existsSync, readdirSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { itemKey, locationId, parseItemKey, type Sighting, sourceId } from "@memindex/model";
-import { transcriptChunker } from "../chunkers/transcript.ts";
+import { partsChunker } from "../agent-chat/chunker.ts";
 import type { Location, ScanResult, SourceDb, SourceKit, SourcePlugin } from "../contract.ts";
 import { type FileEntry, hashFile, listingFingerprint, listJsonl, mtimeNs } from "../util.ts";
 import { cursorHooks } from "./hooks.ts";
@@ -139,7 +139,7 @@ export const cursor: SourcePlugin<CursorMeta> = {
   kinds: ["conversation"],
   meta: CursorMeta,
   facets: { repository: "text" },
-  chunker: transcriptChunker.id,
+  chunkers: { default: partsChunker },
   parserVersion: 1,
   capture: "never",
 
@@ -195,6 +195,7 @@ export const cursor: SourcePlugin<CursorMeta> = {
   skillNotes: [
     "Cursor: one item per composer (`cursor:<composerId>`), turns keyed by bubble id. state.vscdb (fidelity 2)",
     "wins over the agent-transcripts JSONL mirror (fidelity 1) for the same composer; JSONL-only chats keep",
-    "their transcript. Subagent chats carry parent_key. Facet: repository (git origin name of the workspace).",
+    "their transcript. Subagent chats carry parent_key; the parent's spawning turn has a `subagent` part whose",
+    "ref is the child item. Facet: repository (git origin name of the workspace).",
   ].join("\n"),
 };

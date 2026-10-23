@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
-import { watch } from "node:fs/promises";
+import { watch } from "chokidar";
 import { errorMessage } from "./ingest.ts";
-import type { Log } from "./registry.ts";
+import type { Log } from "./log.ts";
 
 export interface WatchTarget {
   readonly source: string;
@@ -14,12 +14,14 @@ export interface WatchOptions {
   readonly signal?: AbortSignal;
   /** Called after every completed run (tests await cycles with it). */
   readonly onRun?: (source: string) => void;
+  /** Called once every watcher finished its initial scan; changes before that are not seen. */
+  readonly onReady?: () => void;
 }
 
 /**
- * FSEvents (fs.watch recursive) per source: any event resets that source's debounce timer; when it
- * fires, the source ingests. Single-flight per source: events during a run queue exactly one rerun.
- * Every source runs once at start to catch up on what happened while the watcher was down.
+ * One chokidar watcher per source (recursive): any event resets that source's debounce timer; when
+ * it fires, the source ingests. Single-flight per source: events during a run queue exactly one
+ * rerun. Every source runs once at start to catch up on what happened while the watcher was down.
  */
 export async function watchSources(
   targets: readonly WatchTarget[],
@@ -32,13 +34,17 @@ export async function watchSources(
   opts.signal?.addEventListener("abort", forward, { once: true });
   if (opts.signal?.aborted) controller.abort();
   const onSignal = (sig: string) => {
-    log(`watch: ${sig}, shutting down`);
+    log.info(`watch: ${sig}, shutting down`);
     controller.abort();
   };
   if (!opts.signal) {
     process.once("SIGTERM", onSignal);
     process.once("SIGINT", onSignal);
   }
+  const stopped = new Promise<void>((resolve) => {
+    if (controller.signal.aborted) resolve();
+    else controller.signal.addEventListener("abort", () => resolve(), { once: true });
+  });
 
   const timers = new Map<string, ReturnType<typeof setTimeout>>();
   const inFlight = new Map<string, Promise<void>>();
@@ -67,7 +73,7 @@ export async function watchSources(
       return;
     }
     const p = run(source)
-      .catch((e: unknown) => log(`watch: ingest ${source} failed: ${errorMessage(e)}`))
+      .catch((e: unknown) => log.error(`watch: ingest ${source} failed: ${errorMessage(e)}`))
       .finally(() => {
         inFlight.delete(source);
         opts.onRun?.(source);
@@ -76,24 +82,30 @@ export async function watchSources(
     inFlight.set(source, p);
   };
 
-  const loops: Promise<void>[] = [];
+  const watchers: ReturnType<typeof watch>[] = [];
+  const ready: Promise<void>[] = [];
+  let watchedPaths = 0;
   for (const t of targets) {
     kick(t.source);
-    for (const path of t.paths) {
-      if (!existsSync(path)) {
-        log(`watch: ${t.source}: ${path} does not exist; not watching it`);
-        continue;
-      }
-      loops.push(watchPath(path, controller.signal, () => schedule(t.source), log));
-    }
+    const paths = t.paths.filter((path) => {
+      if (existsSync(path)) return true;
+      log.warn(`watch: ${t.source}: ${path} does not exist; not watching it`);
+      return false;
+    });
+    if (paths.length === 0) continue;
+    watchedPaths += paths.length;
+    const w = watch([...paths], { ignoreInitial: true, persistent: true });
+    w.on("all", () => schedule(t.source));
+    w.on("error", (e) => log.error(`watch: ${t.source} watcher failed: ${errorMessage(e)}`));
+    ready.push(new Promise((resolve) => w.once("ready", () => resolve())));
+    watchers.push(w);
   }
-  log(`watch: ${targets.length} source(s), ${loops.length} path(s), debounce ${opts.debounceMs}ms`);
+  await Promise.race([Promise.all(ready), stopped]);
+  log.info(`watch: ${targets.length} source(s), ${watchedPaths} path(s), debounce ${opts.debounceMs}ms`);
+  opts.onReady?.();
 
-  await new Promise<void>((resolve) => {
-    if (controller.signal.aborted) resolve();
-    else controller.signal.addEventListener("abort", () => resolve(), { once: true });
-  });
-  await Promise.allSettled(loops);
+  await stopped;
+  await Promise.allSettled(watchers.map((w) => w.close()));
   for (const t of timers.values()) clearTimeout(t);
   await Promise.allSettled([...inFlight.values()]);
   if (!opts.signal) {
@@ -101,12 +113,4 @@ export async function watchSources(
     process.removeListener("SIGINT", onSignal);
   }
   opts.signal?.removeEventListener("abort", forward);
-}
-
-async function watchPath(path: string, signal: AbortSignal, onEvent: () => void, log: Log): Promise<void> {
-  try {
-    for await (const _ of watch(path, { recursive: true, signal })) onEvent();
-  } catch (e) {
-    if (!signal.aborted) log(`watch: ${path} watcher failed: ${errorMessage(e)}`);
-  }
 }

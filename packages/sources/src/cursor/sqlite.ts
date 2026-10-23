@@ -31,6 +31,7 @@ import {
   pickText,
   repoFromPath,
   repoFromRemote,
+  UUID,
 } from "../util.ts";
 import type { CursorMeta } from "./meta.ts";
 
@@ -180,8 +181,26 @@ function push(parts: Part[], kind: Part["kind"], text: string | null, extra?: Pa
   parts.push({ kind, text, ...extra });
 }
 
+/**
+ * The child composer a subagent tool call spawned: `task_v2` results are `{"agentId": "<composerId>"}`;
+ * while the child still runs, only the child's `subagentInfo.toolCallId` (via `children`) links them.
+ */
+function spawnedComposer(
+  tfd: Record<string, unknown>,
+  toolCallId: string | undefined,
+  children: ReadonlyMap<string, string>,
+): string | null {
+  const result = typeof tfd.result === "string" ? asRecord(parseJson(tfd.result)) : asRecord(tfd.result);
+  const agentId = asString(result?.agentId);
+  if (agentId && UUID.test(agentId)) return agentId;
+  return toolCallId ? (children.get(toolCallId) ?? null) : null;
+}
+
 /** acrag's segment extraction, plus `bubble.thinking.text` (where _v 18 bubbles keep reasoning). */
-export function bubbleParts(bubble: Record<string, unknown>): Part[] {
+export function bubbleParts(
+  bubble: Record<string, unknown>,
+  children: ReadonlyMap<string, string> = new Map(),
+): Part[] {
   const parts: Part[] = [];
   push(parts, "text", pickText(bubble.text, bubble.richText));
 
@@ -204,8 +223,18 @@ export function bubbleParts(bubble: Record<string, unknown>): Part[] {
     const toolName = pickText(tfd.name, tfd.toolName, tfd.tool_name) ?? undefined;
     const args = pickText(tfd.rawArgs, tfd.params, tfd.args);
     push(parts, "tool_call", args ?? toolName ?? toolCallId ?? null, { toolName, toolCallId });
-    const result = pickText(typeof tfd.result === "string" ? tfd.result : null, tfd.content);
-    if (toolResults.length === 0) push(parts, "tool_result", result, { toolName, toolCallId });
+    const child = spawnedComposer(tfd, toolCallId, children);
+    if (child) {
+      const description = args ? asString(asRecord(parseJson(args))?.description) : null;
+      push(parts, "subagent", description ?? toolName ?? "subagent", {
+        toolName,
+        toolCallId,
+        ref: itemKey("cursor", child),
+      });
+    } else {
+      const result = pickText(typeof tfd.result === "string" ? tfd.result : null, tfd.content);
+      if (toolResults.length === 0) push(parts, "tool_result", result, { toolName, toolCallId });
+    }
   }
 
   for (const tr of toolResults) {
@@ -272,6 +301,23 @@ function modelName(composerData: Record<string, unknown>, bubbles: Record<string
   return null;
 }
 
+/** toolCallId → child composerId, from `composerData.subagentComposerIds` and each child's header. */
+function subagentsByToolCall(db: SourceDb, composerData: Record<string, unknown>): Map<string, string> {
+  const out = new Map<string, string>();
+  const ids = Array.isArray(composerData.subagentComposerIds) ? composerData.subagentComposerIds : [];
+  for (const id of ids) {
+    const childId = asString(id);
+    if (!childId || !UUID.test(childId)) continue;
+    const row = db.get<{ value: unknown }>("SELECT value FROM composerHeaders WHERE composerId = ?", [
+      childId,
+    ]);
+    const info = asRecord(asRecord(parseJson(blobToString(row?.value)))?.subagentInfo);
+    const toolCallId = asString(info?.toolCallId);
+    if (toolCallId) out.set(toolCallId, childId);
+  }
+  return out;
+}
+
 export function readComposer(db: SourceDb, composerId: string): ItemDraft<CursorMeta> | null {
   const header = db.get<HeaderRow>(
     "SELECT composerId, createdAt, lastUpdatedAt, isSubagent, value FROM composerHeaders WHERE composerId = ?",
@@ -289,6 +335,7 @@ export function readComposer(db: SourceDb, composerId: string): ItemDraft<Cursor
     if (headers.length > 0) break;
   }
 
+  const children = subagentsByToolCall(db, cd);
   const turns: TurnDraft[] = [];
   const bubbles: Record<string, unknown>[] = [];
   const seen = new Set<string>();
@@ -298,7 +345,7 @@ export function readComposer(db: SourceDb, composerId: string): ItemDraft<Cursor
     const bubble = getKv(db, `bubbleId:${composerId}:${h.bubbleId}`);
     if (!bubble) continue;
     bubbles.push(bubble);
-    const parts = bubbleParts(bubble);
+    const parts = bubbleParts(bubble, children);
     if (parts.length === 0) continue;
     turns.push({
       key: turnKey(h.bubbleId),

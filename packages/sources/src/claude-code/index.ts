@@ -25,8 +25,8 @@ import {
   turnKey,
 } from "@memindex/model";
 import { z } from "zod";
-import { blockToPart } from "../blocks.ts";
-import { transcriptChunker } from "../chunkers/transcript.ts";
+import { blockToPart } from "../agent-chat/blocks.ts";
+import { partsChunker } from "../agent-chat/chunker.ts";
 import type { SourceKit, SourcePlugin } from "../contract.ts";
 import {
   asRecord,
@@ -173,7 +173,7 @@ export const claudeCode: SourcePlugin<ClaudeCodeMeta> = {
   kinds: ["conversation"],
   meta: ClaudeCodeMeta,
   facets: { repository: "text", gitBranch: "text" },
-  chunker: transcriptChunker.id,
+  chunkers: { default: partsChunker },
   parserVersion: 1,
   capture: "never",
 
