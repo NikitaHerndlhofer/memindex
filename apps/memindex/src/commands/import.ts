@@ -13,6 +13,10 @@ const ImportArgs = z.object({
   restart: z.boolean().optional(),
   budget: z.coerce.number().int().positive().default(DEFAULT_BUDGET_S),
   concurrency: z.coerce.number().int().min(1).max(16).optional(),
+  "maintenance-work-mem": z
+    .string()
+    .regex(/^\d+(kB|MB|GB)$/, "e.g. 64MB")
+    .optional(),
   json: z.boolean().optional(),
 });
 
@@ -32,6 +36,10 @@ export const importCommand = defineCommand({
       description: `Wall-clock budget in seconds (default ${DEFAULT_BUDGET_S}); rerun to resume`,
     },
     concurrency: { type: "string", description: "Items applied in parallel (default 4)" },
+    "maintenance-work-mem": {
+      type: "string",
+      description: "Postgres maintenance_work_mem for the vector index rebuild (default: the store's)",
+    },
     json: { type: "boolean", description: "JSON output" },
   },
   run: action(async ({ args }) => {
@@ -44,6 +52,7 @@ export const importCommand = defineCommand({
       ...(a["verify-only"] ? { verifyOnly: "1" } : {}),
       ...(a.restart ? { restart: "1" } : {}),
       ...(a.concurrency ? { concurrency: String(a.concurrency) } : {}),
+      ...(a["maintenance-work-mem"] ? { maintenanceWorkMem: a["maintenance-work-mem"] } : {}),
     };
     const [report] = await withArchive("write", (archive) =>
       archive.jobs.run({ only: [`import-${a.legacy}`], budgetMs: a.budget * 1000, args: jobArgs }),

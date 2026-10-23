@@ -38,6 +38,7 @@ import {
   pickTally,
   placeholders,
   resultLine,
+  rootMessage,
   type StepResult,
   storeItemKeys,
   storeObservations,
@@ -218,7 +219,7 @@ async function importBatch(
       bump(tally, "chunks", chunks.length);
       produced.set(r.folder_name, new Set(chunks.filter((c) => c.embed).map((c) => c.contentHash)));
     } catch (e) {
-      failures.push(`${draft.key}: ${errorMessage(e)}`);
+      failures.push(`${draft.key}: ${rootMessage(e)}`);
     }
   });
   lc.failBatchIfMostFailed(failures, rows.length, tally);
@@ -281,8 +282,9 @@ async function seedVectors(
     lc.space,
     [...seeds].map(([hash, vector]) => ({ hash, vector })),
   );
+  bump(tally, "vec_put", seeds.size);
   bump(tally, "vec_inserted", inserted);
-  bump(tally, "vec_already_present", seeds.size - inserted);
+  bump(tally, "vec_not_inserted", seeds.size - inserted);
   bump(tally, "vectors_ms", Date.now() - started);
 }
 
@@ -389,7 +391,7 @@ export async function verifySwrag(
     `  captures   ${withCapture}/${legacyKeys.size} items have a capture for their stored revision ${JSON.stringify(captures)}`,
     `  gone       legacy source_deleted_at ${legacyDeleted.size}, gone at legacy:swrag ${gone.size} (gone but not deleted ${goneNotDeleted.length}, deleted but not gone ${deletedNotGone.length})`,
     `  superseded legacy ${legacySuperseded}, store ${storeSuperseded}`,
-    `  vectors    legacy ${legacyVectors} (recording_vec ${legacyShort}, recording_chunk_vec ${legacyChunk}); seeded ${t("vec_matched")} (inserted ${t("vec_inserted")}, already present ${t("vec_already_present")}); not seeded ${JSON.stringify(mismatch)}; unaccounted ${legacyVectors - accounted}`,
+    `  vectors    legacy ${legacyVectors} (recording_vec ${legacyShort}, recording_chunk_vec ${legacyChunk}); seeded ${t("vec_matched")} (put ${t("vec_put")} after per-batch hash dedup; new rows ${t("vec_inserted")}, hash already stored ${t("vec_not_inserted")}); not seeded ${JSON.stringify(mismatch)}; unaccounted ${legacyVectors - accounted}`,
     `  outcomes   ${JSON.stringify(pickTally(tally, ["applied", "same", "stale", "invalid", "apply_error", "chunks", "marked_gone"]))}`,
     throughputLine(tally, ", incl. vector seeding"),
     `  result     ${resultLine(checks)}`,

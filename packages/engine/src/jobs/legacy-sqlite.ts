@@ -206,6 +206,8 @@ export interface ImportState {
   /** First few per-item problems (invalid rows, failed applies). */
   readonly notes: readonly string[];
   readonly report?: VerifyReport;
+  /** Set when a step threw; the cursor above is where the next run resumes. */
+  readonly failure?: string;
 }
 
 export interface StepResult {
@@ -223,9 +225,13 @@ export interface LegacyContext {
   /** False when the active vector space isn't the one the legacy vectors were made in. */
   readonly seedVectors: boolean;
   readonly concurrency: number;
+  /** For bulkPut's index rebuild; undefined = the store's default. */
+  readonly maintenanceWorkMem: string | undefined;
   note(msg: string): void;
   /** Persists `state` as the job cursor mid-step, for steps that run one long store call. */
   checkpoint(state: ImportState): Promise<void>;
+  /** The last checkpointed state of this step, if any. */
+  latest(): ImportState | null;
   /** Records per-item apply failures; throws (cursor stays put) when most of the batch failed. */
   failBatchIfMostFailed(failures: readonly string[], batchSize: number, tally: Tally): void;
 }
@@ -242,7 +248,16 @@ export interface LegacySpec {
 }
 
 const MAX_NOTES = 20;
+const MAX_NOTE_CHARS = 400;
 const DEFAULT_CONCURRENCY = 4;
+
+/** The innermost cause (a driver error under the ORM's "Failed query: <sql + params>" wrapper). */
+export function rootMessage(e: unknown): string {
+  let cur: unknown = e;
+  while (cur instanceof Error && cur.cause instanceof Error) cur = cur.cause;
+  const code = cur instanceof Error && "code" in cur && typeof cur.code === "string" ? `${cur.code} ` : "";
+  return `${code}${errorMessage(cur)}`.slice(0, MAX_NOTE_CHARS);
+}
 
 export function vectorSpaceMatches(space: VectorSpace, model: string, dim: number): boolean {
   return space.dim === dim && space.model.split(":")[0] === model;
@@ -263,8 +278,9 @@ function legacyContext(ctx: JobContext, spec: LegacySpec, notes: string[]): Lega
     throw new Error(`concurrency must be an integer 1..16, got ${ctx.args.concurrency}`);
   }
   const note = (msg: string) => {
-    if (notes.length < MAX_NOTES) notes.push(msg);
+    if (notes.length < MAX_NOTES) notes.push(msg.slice(0, MAX_NOTE_CHARS));
   };
+  let latest: ImportState | null = null;
   return {
     ctx,
     archivePath,
@@ -272,13 +288,16 @@ function legacyContext(ctx: JobContext, spec: LegacySpec, notes: string[]): Lega
     dim: ctx.embedder.space.dim,
     seedVectors: spec.vectorSpaceOk(ctx.embedder.space),
     concurrency,
+    maintenanceWorkMem: ctx.args.maintenanceWorkMem,
     note,
     async checkpoint(state) {
+      latest = state;
       const rec = await ctx.store.ledger.loadJob(spec.id);
       if (!rec) return;
       const cursor = JSON.stringify({ ...state, notes: [...state.notes, ...notes].slice(0, MAX_NOTES) });
       await ctx.store.ledger.saveJob({ ...rec, cursor, updatedAt: isoTime(Date.now()) });
     },
+    latest: () => latest,
     failBatchIfMostFailed(failures, batchSize, tally) {
       if (failures.length === 0) return;
       if (failures.length * 2 > batchSize) {
@@ -308,29 +327,42 @@ export function legacyImportJob(spec: LegacySpec): JobDef {
           `this import was started from ${saved.archivePath}; pass that archive again or restart with --restart`,
         );
       }
-      const state: ImportState = saved ?? {
+      const { failure: _previous, ...resumed } = saved ?? {
         archivePath: lc.archivePath,
         phase: spec.firstPhase,
         after: null,
         tally: {},
         notes: [],
       };
+      const state: ImportState = resumed;
       if (!lc.seedVectors && !state.tally.vectors_skipped_space) {
         state.tally.vectors_skipped_space = 1;
         ctx.log.warn(
           `${spec.id}: active vector space ${lc.space.id} differs from the legacy one; not seeding vectors`,
         );
       }
-      const res = await spec.step(lc, state);
-      const next: ImportState = { ...res.state, notes: [...res.state.notes, ...notes].slice(0, MAX_NOTES) };
+      const withNotes = (s: ImportState): ImportState => ({
+        ...s,
+        notes: [...s.notes, ...notes].slice(0, MAX_NOTES),
+      });
+      let res: StepResult;
+      try {
+        res = await spec.step(lc, state);
+      } catch (e) {
+        // Thrown, oneShotJob would re-save its pre-step cursor over the checkpoints; verify() reports this.
+        const failed: ImportState = { ...withNotes(lc.latest() ?? state), failure: rootMessage(e) };
+        return { cursor: JSON.stringify(failed), done: 0, total: null, finished: true };
+      }
+      const next = withNotes(res.state);
       if (res.finished && next.report) ctx.log.info(next.report.text);
       return { cursor: JSON.stringify(next), done: res.done, total: res.total, finished: res.finished };
     },
     async verify(ctx) {
       const rec = await ctx.store.ledger.loadJob(spec.id);
-      const report = parseState(rec?.cursor ?? null)?.report;
-      if (!report) return "verification did not run";
-      return report.ok ? null : report.summary;
+      const state = parseState(rec?.cursor ?? null);
+      if (state?.failure) return state.failure;
+      if (!state?.report) return "verification did not run";
+      return state.report.ok ? null : state.report.summary;
     },
   });
   return {

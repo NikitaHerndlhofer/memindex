@@ -48,6 +48,7 @@ import {
   pickTally,
   placeholders,
   resultLine,
+  rootMessage,
   type StepResult,
   storeItemKeys,
   type Tally,
@@ -65,6 +66,11 @@ const SOURCE = "cursor";
 const CONVERSATIONS_PER_STEP = 25;
 /** vec0 chunks (≤ 1024 vectors each) per bulkPut batch. */
 const VEC_CHUNKS_PER_BATCH = 2;
+/**
+ * acrag never split a single huge line, so a few chunks are ~1M chars; Postgres refuses a tsvector
+ * over 1 MB. Only the shown/keyword text is capped: embedText and the turn's part keep everything.
+ */
+const MAX_CHUNK_TEXT = 256 * 1024;
 const SUPPORTED_USER_VERSIONS = new Set([2]);
 
 export function defaultAcragPath(home: string): string {
@@ -231,6 +237,7 @@ export function buildAcragItem(rows: ConversationRows, tally: Tally): AcragBuild
           bump(tally, "chunks_blank_dropped");
           continue;
         }
+        if (ch.text.length > MAX_CHUNK_TEXT) bump(tally, "chunks_text_capped");
         chunks.push(
           chunkDraft(key, {
             turnKey: tk,
@@ -238,7 +245,7 @@ export function buildAcragItem(rows: ConversationRows, tally: Tally): AcragBuild
             sub: ch.sub,
             kind: pc.kind,
             toolName: pc.toolName,
-            text: ch.text,
+            text: ch.text.slice(0, MAX_CHUNK_TEXT),
             embedText: clipForEmbed(ch.text),
             embed: true,
           }),
@@ -399,7 +406,7 @@ async function itemsStep(
       bump(tally, "chunks", built.chunks.length);
       bump(tally, "turns", built.draft.turns.length);
     } catch (e) {
-      failures.push(`${built.draft.key}: ${errorMessage(e)}`);
+      failures.push(`${built.draft.key}: ${rootMessage(e)}`);
     }
   });
   lc.failBatchIfMostFailed(failures, rows.length, tally);
@@ -488,10 +495,14 @@ async function vectorsPhase(lc: LegacyContext, db: Database, state: ImportState)
       await lc.checkpoint(current);
     }
   }
-  const inserted = await lc.ctx.store.vectors.bulkPut(lc.space, batches());
-  bump(tally, "vec_unique_hashes", offered);
+  const inserted = await lc.ctx.store.vectors.bulkPut(
+    lc.space,
+    batches(),
+    lc.maintenanceWorkMem ? { maintenanceWorkMem: lc.maintenanceWorkMem } : undefined,
+  );
+  bump(tally, "vec_put", offered);
   bump(tally, "vec_inserted", inserted);
-  bump(tally, "vec_already_present", offered - inserted);
+  bump(tally, "vec_not_inserted", offered - inserted);
   bump(tally, "vectors_ms", Date.now() - started);
   return { ...current, phase: "verify", after: null };
 }
@@ -558,8 +569,8 @@ export async function verifyAcrag(
   const lines = [
     `import-acrag verification (${lc.archivePath})`,
     `  items      legacy importable ${legacyKeys.size} (of ${convs.length}; skipped ${JSON.stringify(skipped)}), in store ${legacyKeys.size - missing.length}, missing ${missing.length}${missing.length ? ` (${missing.slice(0, 5).join(", ")}${missing.length > 5 ? ", …" : ""})` : ""}`,
-    `  chunks     legacy ${legacyChunks}, emitted ${t("chunks")} (dropped: duplicate ${t("chunks_duplicate_dropped")}, blank ${t("chunks_blank_dropped")}, without part ${t("chunks_without_part")}); turns ${t("turns")} (messages without parts ${t("messages_without_parts")})`,
-    `  vectors    legacy ${legacyVectors}, read ${t("vec_legacy_read")}; seeded ${t("vec_matched")} as ${t("vec_unique_hashes")} unique hashes (inserted ${t("vec_inserted")}, already present ${t("vec_already_present")}); not seeded ${JSON.stringify(notSeeded)}; unaccounted ${legacyVectors - accounted}`,
+    `  chunks     legacy ${legacyChunks}, emitted ${t("chunks")} (dropped: duplicate ${t("chunks_duplicate_dropped")}, blank ${t("chunks_blank_dropped")}, without part ${t("chunks_without_part")}; text capped ${t("chunks_text_capped")}); turns ${t("turns")} (messages without parts ${t("messages_without_parts")})`,
+    `  vectors    legacy ${legacyVectors}, read ${t("vec_legacy_read")}; seeded ${t("vec_matched")} (put ${t("vec_put")} after per-batch hash dedup; new rows ${t("vec_inserted")}, hash already stored ${t("vec_not_inserted")}); not seeded ${JSON.stringify(notSeeded)}; unaccounted ${legacyVectors - accounted}`,
     `  backlog    ${JSON.stringify(stats.embedBacklog)} (store-wide, chunks awaiting embedding)`,
     `  outcomes   ${JSON.stringify(pickTally(tally, ["applied", "same", "stale", "invalid", "apply_error"]))}`,
     throughputLine(tally),

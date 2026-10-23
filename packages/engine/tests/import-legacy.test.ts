@@ -414,6 +414,7 @@ const C1 = "11111111-1111-4111-8111-111111111111";
 const C2 = "22222222-2222-4222-8222-222222222222";
 const PATH_ID = "/Users/me/.acrag/transcripts/a.jsonl:abc";
 const BIG = "x".repeat(30_000);
+const HUGE = "y ".repeat(200_000);
 
 function buildAcrag(path: string): void {
   const db = new Database(path, { create: true });
@@ -458,6 +459,7 @@ function buildAcrag(path: string): void {
   seg.run("s5", "m2", 3, "text", "   ", null, null);
   seg.run("s6", "m4", 0, "text", "Sub task", null, null);
   seg.run("s7", "m5", 0, "text", "skipped conversation", null, null);
+  seg.run("s8", "m4", 1, "tool_result", HUGE, "Shell", "call_2");
 
   const chunk = db.query(
     "INSERT INTO chunk (id, segment_id, sub, chunk_type, text, content_hash) VALUES (?, ?, ?, 'text', ?, '')",
@@ -470,11 +472,12 @@ function buildAcrag(path: string): void {
   chunk.run(6, "s5", 0, "   ");
   chunk.run(7, "s6", 0, "Sub task");
   chunk.run(8, "s7", 0, "skipped conversation");
+  chunk.run(9, "s8", 0, HUGE);
   writeVec0(
     db,
     "chunk_vec",
     "rowid",
-    [1, 2, 3, 5, 6, 7, 8, 999].map((id) => [id, vector(id)] as const),
+    [1, 2, 3, 5, 6, 7, 8, 9, 999].map((id) => [id, vector(id)] as const),
   );
   db.close();
 }
@@ -539,26 +542,33 @@ describe("import-acrag", () => {
     expect(big?.embedText).toHaveLength(28_000);
     expect(String(big?.contentHash)).toBe(sha256Hex("x".repeat(28_000)));
     expect(big?.partIdx).toBe(2);
+    const w2 = store.writes.find((w) => w.draft.key === itemKey("cursor", C2));
+    const huge = w2?.chunks.find((c) => c.kind === "tool_result");
+    expect(huge?.text).toHaveLength(256 * 1024);
+    expect(huge?.embedText).toBe(clipForEmbed(HUGE));
+    expect(w2?.draft.turns[0]?.parts[1]?.text).toBe(HUGE);
   });
 
   test("vectors land under sha256(clipForEmbed(text)) only for emitted chunks", () => {
     expect(store.vecs.get(sha256Hex("Looking."))).toEqual(vector(3));
     expect(store.vecs.get(sha256Hex("x".repeat(28_000)))).toEqual(vector(5));
     expect(store.vecs.get(sha256Hex("Sub task"))).toEqual(vector(7));
-    expect(store.vecs.size).toBe(4);
+    expect(store.vecs.get(sha256Hex(clipForEmbed(HUGE)))).toEqual(vector(9));
+    expect(store.vecs.size).toBe(5);
     const tally = JSON.parse(store.jobs.get("import-acrag")?.cursor ?? "{}").tally;
     expect(tally).toMatchObject({
       skipped_path_id: 1,
       skipped_agent: 1,
       chunks_duplicate_dropped: 1,
       chunks_blank_dropped: 1,
+      chunks_text_capped: 1,
       messages_without_parts: 1,
-      vec_matched: 4,
+      vec_matched: 5,
       vec_duplicate_chunk_dropped: 1,
       vec_blank_chunk: 1,
       vec_conversation_skipped: 1,
       vec_orphan_no_chunk_row: 1,
-      vec_inserted: 4,
+      vec_inserted: 5,
     });
   });
 
@@ -569,7 +579,36 @@ describe("import-acrag", () => {
     const r = await importAcragJob.run(context(store, { archive: path, restart: "1" }).ctx, budget(10_000));
     expect(r).toMatchObject({ error: null, remaining: 0 });
     const tally = JSON.parse(store.jobs.get("import-acrag")?.cursor ?? "{}").tally;
-    expect(tally).toMatchObject({ same: 2, vec_already_present: 4 });
+    expect(tally).toMatchObject({ same: 2, vec_not_inserted: 5 });
     expect(fileHash(path)).toBe(before);
+  });
+
+  test("a failed index rebuild keeps the vectors checkpoint and the next run resumes after it", async () => {
+    const flaky = new ImportStore();
+    let failOnce = true;
+    Object.assign(flaky.vectors, {
+      bulkPut: async (space: unknown, batches: AsyncIterable<{ hash: string; vector: Float32Array }[]>) => {
+        let n = 0;
+        for await (const b of batches) n += await flaky.vectors.put(space, b);
+        if (failOnce) {
+          failOnce = false;
+          const cause = Object.assign(new Error("No space left on device"), { code: "53100" });
+          throw new Error("index rebuild", { cause });
+        }
+        return n;
+      },
+    });
+    const first = await importAcragJob.run(context(flaky, { archive: path }).ctx, budget(10_000));
+    expect(first.error).toBe("53100 No space left on device");
+    expect(flaky.jobs.get("import-acrag")?.state).toBe("failed");
+    const saved = JSON.parse(flaky.jobs.get("import-acrag")?.cursor ?? "{}");
+    expect(saved).toMatchObject({ phase: "vectors", after: "3", failure: "53100 No space left on device" });
+
+    const second = await importAcragJob.run(context(flaky, { archive: path }).ctx, budget(10_000));
+    expect(second).toMatchObject({ error: null, remaining: 0 });
+    const done = JSON.parse(flaky.jobs.get("import-acrag")?.cursor ?? "{}");
+    expect(done.failure).toBeUndefined();
+    expect(done.tally.vec_legacy_read).toBe(9);
+    expect(flaky.vecs.size).toBe(5);
   });
 });
