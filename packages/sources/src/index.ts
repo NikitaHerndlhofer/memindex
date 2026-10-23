@@ -21,6 +21,12 @@ export type {
   SourcePlugin,
 } from "./contract.ts";
 export { createSourceKit, type DisposableSourceKit, type SourceKitOptions } from "./kit.ts";
+export {
+  revisionHash as superwhisperRevisionHash,
+  SWRAG_CAPTURE_FORMAT,
+  type SwragRow,
+  swragCaptureBody,
+} from "./superwhisper/record.ts";
 
 /** Display order only. */
 export const SOURCES: readonly SourcePlugin[] = [superwhisper, cursor, claudeCode] as readonly SourcePlugin[];

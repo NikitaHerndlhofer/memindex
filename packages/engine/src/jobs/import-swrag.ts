@@ -2,9 +2,9 @@
  * `import-swrag`: the legacy superwhisper-rag archive → superwhisper items. Read-only on the
  * legacy file; writes only through the WriteStore port.
  *
- *   items   keyset over recording.folder_name; each row → the plugin's own draft (via parseCapture
- *           on a capture-shaped body synthesized from the row) + a `swrag-legacy` capture holding
- *           the full legacy row; revision fidelity 0 so any live read wins; vectors seeded from
+ *   items   keyset over recording.folder_name; each row → a `swrag-legacy` capture holding the full
+ *           legacy row, and the draft the superwhisper plugin parses from it (so a reparse rebuilds
+ *           it); revision fidelity 0 so any live read wins; vectors seeded from
  *           recording_vec / recording_chunk_vec only where the legacy embed text hashes to a chunk
  *           the current chunker produced
  *   gone    reconcileGone at the synthetic `legacy:swrag` location: rows with source_deleted_at
@@ -23,7 +23,13 @@ import {
   type Revision,
   sha256Hex,
 } from "@memindex/model";
-import type { SourcePlugin } from "@memindex/sources";
+import {
+  type SwragRow as PluginSwragRow,
+  type SourcePlugin,
+  SWRAG_CAPTURE_FORMAT,
+  superwhisperRevisionHash,
+  swragCaptureBody,
+} from "@memindex/sources";
 import type { WriteStore } from "@memindex/store";
 import { errorMessage } from "../ingest.ts";
 import { findPlugin } from "../registry.ts";
@@ -52,7 +58,6 @@ import {
 
 export const SWRAG_JOB_ID = "import-swrag";
 export const SWRAG_LOCATION = locationId("legacy:swrag");
-export const SWRAG_CAPTURE_FORMAT = "swrag-legacy";
 const SOURCE = "superwhisper";
 const BATCH = 200;
 const SUPPORTED_USER_VERSIONS = new Set([9]);
@@ -61,89 +66,16 @@ export function defaultSwragPath(home: string): string {
   return join(home, "Library", "Application Support", "superwhisper-rag", "swrag.sqlite");
 }
 
-/** The legacy `recording` row, every column as stored. */
-export interface SwragRow {
-  readonly folder_name: string;
-  readonly recording_id_hex: string;
-  readonly datetime: string;
-  readonly duration_ms: number;
-  readonly mode_name: string;
-  readonly model_key: string | null;
-  readonly model_name: string | null;
-  readonly language_model_key: string | null;
-  readonly language_model_name: string | null;
-  readonly recording_device: string | null;
-  readonly language: string | null;
-  readonly app_name: string | null;
-  readonly app_category: string | null;
-  readonly raw_word_count: number | null;
-  readonly llm_word_count: number | null;
-  readonly result: string | null;
-  readonly llm_result: string | null;
-  readonly raw_result: string | null;
-  readonly audio_path: string | null;
-  readonly audio_hash: string | null;
+/** The legacy `recording` row, every column as stored; the plugin owns the columns its draft reads. */
+export type SwragRow = PluginSwragRow & {
   readonly source_deleted_at: string | null;
   readonly superseded_by: string | null;
   readonly embed_text_hash: string | null;
-  readonly [column: string]: unknown;
-}
-
-/** The superwhisper plugin's revision hash (record.ts `revisionHash`), from the legacy columns. */
-export function swragRevisionHash(r: SwragRow): string {
-  return sha256Hex(
-    [
-      r.duration_ms,
-      r.raw_word_count ?? "",
-      r.llm_word_count ?? "",
-      sha256Hex(r.result ?? ""),
-      sha256Hex(r.llm_result ?? ""),
-      sha256Hex(r.raw_result ?? ""),
-    ].join("|"),
-  );
-}
-
-/**
- * A `superwhisper-row` capture body built from the legacy row. meta.json is gone for most legacy
- * recordings, so the language/app facts come from the columns swrag copied out of it.
- */
-export function swragCaptureBody(r: SwragRow): unknown {
-  return {
-    row: {
-      recordingIdHex: r.recording_id_hex,
-      folderName: r.folder_name,
-      datetime: r.datetime,
-      duration: r.duration_ms,
-      modeName: r.mode_name,
-      modelKey: r.model_key,
-      modelName: r.model_name,
-      languageModelKey: r.language_model_key,
-      languageModelName: r.language_model_name,
-      recordingDevice: r.recording_device,
-      rawWordCount: r.raw_word_count,
-      llmWordCount: r.llm_word_count,
-      result: r.result,
-      llmResult: r.llm_result,
-      rawResult: r.raw_result,
-      title: null,
-      kind: null,
-    },
-    metaJson: {
-      promptContext: {
-        modeContext: r.language ? { language: r.language } : {},
-        applicationContext: {
-          ...(r.app_name ? { name: r.app_name } : {}),
-          ...(r.app_category ? { category: r.app_category } : {}),
-        },
-      },
-    },
-    audio: r.audio_hash ? { path: r.audio_path ?? "", sha1: r.audio_hash } : null,
-  };
-}
+};
 
 export function swragDraft(plugin: SourcePlugin, r: SwragRow): ItemDraft {
   if (!plugin.parseCapture) throw new Error(`${plugin.id} has no parseCapture`);
-  const draft = plugin.parseCapture({ format: "superwhisper-row", body: swragCaptureBody(r) });
+  const draft = plugin.parseCapture({ format: SWRAG_CAPTURE_FORMAT, body: r });
   const meta = plugin.meta.safeParse(draft.meta);
   if (!meta.success) throw new Error(`meta invalid: ${meta.error.message}`);
   return { ...draft, meta: meta.data };
@@ -201,7 +133,11 @@ async function importBatch(
     }
     const chunker = ctx.registry.chunkerFor(plugin.id, draft.kind);
     const chunks = chunker.chunk(draft);
-    const revision: Revision = { fidelity: 0, at: null, hash: swragRevisionHash(r) };
+    const revision: Revision = {
+      fidelity: 0,
+      at: null,
+      hash: superwhisperRevisionHash(swragCaptureBody(r).row),
+    };
     const capture: Capture = { format: SWRAG_CAPTURE_FORMAT, body: r };
     try {
       const outcome = await store.apply({

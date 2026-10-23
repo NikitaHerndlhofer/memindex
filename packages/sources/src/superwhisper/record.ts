@@ -16,6 +16,7 @@ import {
 import { z } from "zod";
 
 export const CAPTURE_FORMAT = "superwhisper-row";
+export const SWRAG_CAPTURE_FORMAT = "swrag-legacy";
 const MEETING_FALLBACK_MIN_MS = 10 * 60 * 1000;
 
 const NullableString = z
@@ -199,14 +200,84 @@ export function speakerTurns(metaJson: unknown, startedAt: IsoTime): TurnDraft[]
   }));
 }
 
+/**
+ * A `recording` row of the legacy superwhisper-rag archive, snake_case, as `memindex import swrag`
+ * stores it. Most of these recordings no longer exist in Super Whisper, so the row is all there is.
+ */
+export const SwragRowSchema = z.looseObject({
+  recording_id_hex: z.string().min(1),
+  folder_name: z.string(),
+  datetime: z.string(),
+  duration_ms: z.number(),
+  mode_name: z.string(),
+  model_key: NullableString,
+  model_name: NullableString,
+  language_model_key: NullableString,
+  language_model_name: NullableString,
+  recording_device: NullableString,
+  language: NullableString,
+  app_name: NullableString,
+  app_category: NullableString,
+  raw_word_count: NullableNumber,
+  llm_word_count: NullableNumber,
+  result: NullableString,
+  llm_result: NullableString,
+  raw_result: NullableString,
+  audio_path: NullableString,
+  audio_hash: NullableString,
+});
+export type SwragRow = z.input<typeof SwragRowSchema>;
+
+/** meta.json is gone for most legacy recordings, so language/app come from the columns swrag copied out of it. */
+export function swragCaptureBody(input: SwragRow): CaptureBody {
+  const r = SwragRowSchema.parse(input);
+  return {
+    row: {
+      recordingIdHex: r.recording_id_hex,
+      folderName: r.folder_name,
+      datetime: r.datetime,
+      duration: r.duration_ms,
+      modeName: r.mode_name,
+      modelKey: r.model_key,
+      modelName: r.model_name,
+      languageModelKey: r.language_model_key,
+      languageModelName: r.language_model_name,
+      recordingDevice: r.recording_device,
+      rawWordCount: r.raw_word_count,
+      llmWordCount: r.llm_word_count,
+      result: r.result,
+      llmResult: r.llm_result,
+      rawResult: r.raw_result,
+      title: null,
+      kind: null,
+    },
+    metaJson: {
+      promptContext: {
+        modeContext: r.language ? { language: r.language } : {},
+        applicationContext: {
+          ...(r.app_name ? { name: r.app_name } : {}),
+          ...(r.app_category ? { category: r.app_category } : {}),
+        },
+      },
+    },
+    audio: r.audio_hash ? { path: r.audio_path ?? "", sha1: r.audio_hash } : null,
+  };
+}
+
+/** Every capture format this plugin has written; stored captures are replayed through it forever. */
+const CAPTURE_BODIES: Readonly<Record<string, (body: unknown) => CaptureBody>> = {
+  [CAPTURE_FORMAT]: (body) => CaptureBodySchema.parse(body),
+  [SWRAG_CAPTURE_FORMAT]: (body) => swragCaptureBody(body as SwragRow),
+};
+
 export function buildCapture(body: CaptureBody): Capture {
   return { format: CAPTURE_FORMAT, body };
 }
 
 export function parseCapture(capture: Capture): ItemDraft<SuperWhisperMeta> {
-  if (capture.format !== CAPTURE_FORMAT)
-    throw new Error(`superwhisper: unknown capture format ${capture.format}`);
-  const { row, metaJson, audio } = CaptureBodySchema.parse(capture.body);
+  const toBody = CAPTURE_BODIES[capture.format];
+  if (!toBody) throw new Error(`superwhisper: unknown capture format ${capture.format}`);
+  const { row, metaJson, audio } = toBody(capture.body);
   const meta = MetaJsonSchema.safeParse(metaJson ?? {});
   const pc = meta.success ? meta.data.promptContext : undefined;
 

@@ -11,6 +11,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Embedder } from "@memindex/embed";
 import {
+  type ItemDraft,
   type ItemKey,
   itemKey,
   type LocationId,
@@ -18,38 +19,22 @@ import {
   sha256Hex,
   vectorSpace,
 } from "@memindex/model";
-import { buildRegistry } from "@memindex/sources";
+import { buildRegistry, SWRAG_CAPTURE_FORMAT, superwhisperRevisionHash } from "@memindex/sources";
 import type { ItemWrite, Row, RunOptions } from "@memindex/store";
 import { type Budget, budget, type JobContext } from "../src/index.ts";
+import { reparseJob } from "../src/jobs/derived.ts";
 import { ACRAG_CHUNKER, clipForEmbed, importAcragJob } from "../src/jobs/import-acrag.ts";
-import {
-  importSwragJob,
-  SWRAG_CAPTURE_FORMAT,
-  type SwragRow,
-  swragDraft,
-  swragRevisionHash,
-} from "../src/jobs/import-swrag.ts";
+import { importSwragJob, type SwragRow, swragDraft } from "../src/jobs/import-swrag.ts";
 import { FakeStore } from "./fakes.ts";
 
 const DIM = 1024;
 const dir = mkdtempSync(join(tmpdir(), "memindex-import-"));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
 
-/** FakeStore plus what the imports observe: observations/gone, the verification probes, bulkPut. */
+/** FakeStore plus what the imports observe: observations/gone and the verification probes. */
 class ImportStore extends FakeStore {
   readonly obs = new Map<string, { key: ItemKey; source: SourceId; location: LocationId; gone: boolean }>();
   readonly writes: ItemWrite[] = [];
-
-  constructor() {
-    super();
-    Object.assign(this.vectors, {
-      bulkPut: async (space: unknown, batches: AsyncIterable<{ hash: string; vector: Float32Array }[]>) => {
-        let n = 0;
-        for await (const b of batches) n += await this.vectors.put(space, b);
-        return n;
-      },
-    });
-  }
 
   override async apply(w: ItemWrite) {
     this.writes.push(w);
@@ -334,7 +319,15 @@ describe("import-swrag", () => {
     const w = store.writes.find(
       (x) => x.draft.key === itemKey("superwhisper", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAA01"),
     );
-    expect(w?.revision).toEqual({ fidelity: 0, at: null, hash: swragRevisionHash(ROWS[0] as SwragRow) });
+    const live = {
+      duration: 30_000,
+      rawWordCount: 10,
+      llmWordCount: 10,
+      result: SHORT,
+      llmResult: SHORT,
+      rawResult: `${SHORT} raw`,
+    };
+    expect(w?.revision).toEqual({ fidelity: 0, at: null, hash: superwhisperRevisionHash(live) });
     expect(w?.capture?.format).toBe(SWRAG_CAPTURE_FORMAT);
     expect((w?.capture?.body as SwragRow | undefined)?.raw_result).toBe(`${SHORT} raw`);
     expect(w?.draft).toMatchObject({
@@ -390,6 +383,26 @@ describe("import-swrag", () => {
     expect(r.error).toContain("keys FAIL");
     expect(store.jobs.get("import-swrag")?.error).toContain("1 legacy key(s) missing");
     expect(fileHash(path)).toBe(before);
+  });
+
+  test("a newer superwhisper parser reparses swrag-legacy captures into the imported drafts", async () => {
+    const fresh = new ImportStore();
+    await importSwragJob.run(context(fresh, { archive: path }).ctx, budget(60_000));
+    const imported = new Map([...fresh.items].map(([k, { item }]) => [k, item.draft]));
+    const current = buildRegistry().get("superwhisper");
+    const { ctx } = context(fresh, {});
+    const newer = {
+      ...ctx,
+      registry: buildRegistry([{ ...current, parserVersion: current.parserVersion + 1 }]),
+    };
+
+    const report = await reparseJob.run(newer, budget(60_000));
+
+    expect(report).toMatchObject({ error: null, done: ROWS.length, remaining: 0 });
+    for (const [k, { item }] of fresh.items) {
+      expect(item.parserVersion).toBe(current.parserVersion + 1);
+      expect(item.draft).toEqual(imported.get(k) as ItemDraft);
+    }
   });
 
   test("a different archive path refuses to resume a saved cursor", async () => {
