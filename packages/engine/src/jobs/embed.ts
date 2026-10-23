@@ -20,9 +20,10 @@ export async function embedBacklog(
   let done = 0;
   let previous = "";
   let error: string | null = null;
-  while (!budget.expired()) {
+  const limit = budget.limit ?? Number.POSITIVE_INFINITY;
+  while (!budget.expired() && done < limit) {
     const pending = await store.vectors.backlog(space, {
-      limit: EMBED_BATCH,
+      limit: Math.min(EMBED_BATCH, limit - done),
       ...(prefer.length > 0 ? { prefer } : {}),
     });
     if (pending.length === 0) break;

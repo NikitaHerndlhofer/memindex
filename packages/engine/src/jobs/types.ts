@@ -15,12 +15,14 @@ export interface JobContext {
 /** Wall-clock budget. Jobs check it between batches; a batch in flight is always finished. */
 export interface Budget {
   readonly deadline: number;
+  /** Most units one job may converge in this run; jobs that can't stop at an exact count ignore it. */
+  readonly limit?: number;
   expired(): boolean;
 }
 
-export function budget(ms: number): Budget {
+export function budget(ms: number, limit?: number): Budget {
   const deadline = Date.now() + ms;
-  return { deadline, expired: () => Date.now() >= deadline };
+  return { deadline, ...(limit === undefined ? {} : { limit }), expired: () => Date.now() >= deadline };
 }
 
 export interface JobReport {

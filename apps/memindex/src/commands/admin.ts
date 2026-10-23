@@ -98,18 +98,21 @@ const JobsArgs = z.object({
     )
     .optional(),
   budget: z.coerce.number().int().positive().optional(),
+  limit: z.coerce.number().int().positive().optional(),
   json: z.boolean().optional(),
 });
 
 export const jobsCommand = defineCommand({
   meta: {
     name: "jobs",
-    description: "Data jobs: `memindex jobs` (status) or `memindex jobs run [--only id,…] [--budget ms]`",
+    description:
+      "Data jobs: `memindex jobs` (status) or `memindex jobs run [--only id,…] [--budget ms] [--limit n]`",
   },
   args: {
     action: { type: "positional", required: false, description: "status (default) | run" },
     only: { type: "string", description: "Job ids, comma-separated" },
     budget: { type: "string", description: "Wall-clock budget in ms (default 600000)" },
+    limit: { type: "string", description: "Most units each job converges (embed: chunks)" },
     param: { type: "string", description: "Job argument k=v (repeatable), e.g. path=…" },
     json: { type: "boolean", description: "JSON output" },
   },
@@ -132,6 +135,7 @@ export const jobsCommand = defineCommand({
               await archive.jobs.run({
                 ...(a.only ? { only: a.only } : {}),
                 ...(a.budget ? { budgetMs: a.budget } : {}),
+                ...(a.limit ? { limit: a.limit } : {}),
                 args: parseParams(rawArgs),
               })
             ).map((r) => ({ job: r.id, done: r.done, remaining: r.remaining, error: r.error }));

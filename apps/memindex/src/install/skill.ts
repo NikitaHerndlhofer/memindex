@@ -43,7 +43,7 @@ async function backupPath(path: string): Promise<string> {
   throw new Error(`no free backup name for ${path}`);
 }
 
-type SkillAction = "wrote" | "unchanged" | "backed-up" | "refreshed" | "kept-user-edit" | "absent";
+type SkillAction = "wrote" | "unchanged" | "backed-up" | "refreshed" | "kept" | "absent";
 export interface SkillOutcome {
   readonly path: string;
   readonly action: SkillAction;
@@ -81,11 +81,11 @@ export async function installSkill(
 }
 
 /**
- * Silent refresh after a binary upgrade, for already-installed files only:
- *   on disk == current            → heal the tracked hash
- *   tracked == sha(current)       → the user edited what we wrote: keep it (install-skill overrides)
- *   tracked == sha(on disk)       → stock content from an older binary: replace in place
- *   otherwise (unknown or drifted) → back up, then replace
+ * Refresh after a binary upgrade (installed skills outlive binaries, so ingest and watch call this).
+ * Only files memindex owns are touched: never creates, never backs up.
+ *   on disk == current       → heal the tracked hash
+ *   tracked == sha(on disk)  → what we last wrote, unedited: replace in place
+ *   otherwise                → edited, or written by another config dir or by hand: kept (install-skill overrides)
  */
 export async function refreshSkills(
   content: string,
@@ -104,18 +104,12 @@ export async function refreshSkills(
     if (existing === content) {
       tracked[path] = want;
       out.push({ path, action: "unchanged" });
-    } else if (tracked[path] === want) {
-      out.push({ path, action: "kept-user-edit" });
     } else if (tracked[path] === sha256(existing)) {
       await writeFile(path, content, "utf8");
       tracked[path] = want;
       out.push({ path, action: "refreshed" });
     } else {
-      const backup = await backupPath(path);
-      await rename(path, backup);
-      await writeFile(path, content, "utf8");
-      tracked[path] = want;
-      out.push({ path, action: "backed-up", backup });
+      out.push({ path, action: "kept" });
     }
   }
   await saveTracked(trackFile, tracked);

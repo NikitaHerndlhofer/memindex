@@ -23,6 +23,7 @@
     "apps/*/src",
     "apps/*/tests",
     "apps/*/scripts",
-    "packages/*/scripts"
+    "packages/*/scripts",
+    "scripts"
   ]
 }

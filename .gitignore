@@ -5,3 +5,5 @@ dist/
 *.sqlite-shm
 .tmp-*
 .DS_Store
+.audit/*.json
+supabase/.temp/

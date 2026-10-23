@@ -113,6 +113,8 @@ export interface Archive {
     run(opts: {
       readonly only?: readonly string[];
       readonly budgetMs?: number;
+      /** Per-job cap on units converged (embed: chunks). */
+      readonly limit?: number;
       readonly args?: Readonly<Record<string, string>>;
     }): Promise<readonly JobReport[]>;
   };
@@ -368,12 +370,13 @@ class ArchiveImpl implements Archive {
     run: async (opts: {
       readonly only?: readonly string[];
       readonly budgetMs?: number;
+      readonly limit?: number;
       readonly args?: Readonly<Record<string, string>>;
     }): Promise<readonly JobReport[]> =>
       runJobs(
         selectJobs(this.p.jobs, opts.only),
         this.jobContext(opts.args),
-        budget(opts.budgetMs ?? DEFAULT_JOB_BUDGET_MS),
+        budget(opts.budgetMs ?? DEFAULT_JOB_BUDGET_MS, opts.limit),
       ),
   };
 

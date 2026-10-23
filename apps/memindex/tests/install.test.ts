@@ -39,7 +39,7 @@ describe("skill install (hash-tracked)", () => {
     expect(readFileSync(targets[0] as string, "utf8")).toBe("v1");
   });
 
-  test("refresh: upgrades stock content in place, keeps user edits, backs up unknown content", async () => {
+  test("refresh upgrades in place only what memindex wrote and nobody edited", async () => {
     const [a, b] = skillTargets(dir) as [string, string];
     await installSkill("v1", [a, b], track());
     expect((await refreshSkills("v2", [a, b], track())).map((o) => o.action)).toEqual([
@@ -47,18 +47,32 @@ describe("skill install (hash-tracked)", () => {
       "refreshed",
     ]);
     expect(backups(a)).toEqual([]);
+    expect(readFileSync(a, "utf8")).toBe("v2");
+  });
 
-    writeFileSync(a, "user edit of v2");
-    expect((await refreshSkills("v2", [a], track()))[0]?.action).toBe("kept-user-edit");
-    expect(readFileSync(a, "utf8")).toBe("user edit of v2");
+  test("refresh leaves a user-edited file alone across binary upgrades", async () => {
+    const [a, b] = skillTargets(dir) as [string, string];
+    await installSkill("v1", [a, b], track());
+    writeFileSync(a, "user edit of v1");
+    expect((await refreshSkills("v2", [a, b], track())).map((o) => o.action)).toEqual(["kept", "refreshed"]);
+    expect(readFileSync(a, "utf8")).toBe("user edit of v1");
+    expect(backups(a)).toEqual([]);
     expect(await skillStates("v2", [a, b], track())).toEqual([
       { path: a, state: "edited" },
       { path: b, state: "current" },
     ]);
+  });
 
-    expect((await refreshSkills("v3", [a], track()))[0]?.action).toBe("backed-up");
-    expect(readFileSync(a, "utf8")).toBe("v3");
-    expect(backups(a)).toHaveLength(1);
+  test("refresh with another config dir's (or no) record never replaces the files under HOME", async () => {
+    const home = join(dir, "home");
+    const targets = skillTargets(home);
+    await installSkill("v1", targets, join(dir, "real-cfg", "skills.json"));
+    const scratch = join(dir, "scratch-cfg", "skills.json");
+    expect((await refreshSkills("v2", targets, scratch)).map((o) => o.action)).toEqual(["kept", "kept"]);
+    for (const path of targets) {
+      expect(readFileSync(path, "utf8")).toBe("v1");
+      expect(backups(path)).toEqual([]);
+    }
   });
 
   test("refresh never creates missing files", async () => {

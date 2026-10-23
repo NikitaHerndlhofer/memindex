@@ -146,6 +146,21 @@ describe("ingest loop", () => {
     expect(store.vecs.size).toBe(2);
   });
 
+  test("the embed job with an item limit embeds exactly that many chunks, across batches", async () => {
+    const many = Array.from({ length: 150 }, (_, i) => ({
+      native: `n${i}`,
+      hash: `h${i}`,
+      text: `text ${i}`,
+    }));
+    const { archive, store } = await open(fakePlugin({ entries: many }));
+    await archive.ingest();
+    const before = await store.vectors.backlogSize();
+    expect(before).toBe(150);
+    const [r] = await archive.jobs.run({ only: ["embed"], limit: 70 });
+    expect(r).toMatchObject({ id: "embed", done: 70, remaining: 80, error: null });
+    expect(await store.vectors.backlogSize()).toBe(before - 70);
+  });
+
   test("embed failures are reported and leave the backlog intact", async () => {
     const { archive } = await open(fakePlugin({ entries: entries() }), new FakeStore(), {
       embedder: fakeEmbedder(8, true),

@@ -1,8 +1,7 @@
-import { existsSync } from "node:fs";
 import { readFile, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { IngestReport, IngestRequest } from "@memindex/engine";
+import type { Archive, IngestReport, IngestRequest } from "@memindex/engine";
 import { defineCommand } from "citty";
 import { z } from "zod";
 import { action, log, out, skillTrackFile, withArchive } from "../context.ts";
@@ -31,6 +30,19 @@ function summarize(r: IngestReport): string {
   if (r.embedded) parts.push(`${r.embedded} embedded`);
   if (r.backlog) parts.push(`${r.backlog} awaiting embedding`);
   return `ingest: ${parts.join(", ")}`;
+}
+
+async function refreshInstalledSkills(archive: Archive): Promise<void> {
+  const outcomes = await refreshSkills(
+    archive.skill(),
+    skillTargets(archive.config.paths.home),
+    skillTrackFile(archive.config.paths),
+  ).catch(() => []);
+  const kept = outcomes.filter((o) => o.action === "kept").map((o) => o.path);
+  if (kept.length > 0)
+    log.info(
+      `skill not refreshed (edited or not written by memindex): ${kept.join(", ")}; run \`memindex install-skill\` to replace`,
+    );
 }
 
 async function readHookPayload(file: string): Promise<unknown> {
@@ -78,11 +90,7 @@ export const ingestCommand = defineCommand({
     }
     const report = await withArchive("write", async (archive) => {
       const r = await archive.ingest({ ...(only ? { only } : {}), embed: { budgetMs: a["embed-budget"] } });
-      await refreshSkills(
-        archive.skill(),
-        skillTargets(archive.config.paths.home),
-        skillTrackFile(archive.config.paths),
-      ).catch(() => []);
+      await refreshInstalledSkills(archive);
       return r;
     });
     if (a.json) out(`${JSON.stringify(report, null, 2)}\n`);
@@ -145,10 +153,7 @@ export const watchCommand = defineCommand({
   run: action(async ({ args }) => {
     const debounceMs = z.coerce.number().int().min(0).default(2_000).parse(args.debounce);
     await withArchive("write", async (archive) => {
-      const track = skillTrackFile(archive.config.paths);
-      if (existsSync(archive.config.paths.configDir)) {
-        await refreshSkills(archive.skill(), skillTargets(archive.config.paths.home), track).catch(() => []);
-      }
+      await refreshInstalledSkills(archive);
       await archive.watch({ debounceMs });
     });
     return 0;
