@@ -1,0 +1,317 @@
+import { describe, expect, test } from "bun:test";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { type ItemKey, sourceId } from "@memex/model";
+import type { RankedChunk, StoreSearch } from "@memex/store";
+import {
+  bindRecipe,
+  findRecipe,
+  loadConfig,
+  openArchive,
+  parseSince,
+  RECIPES,
+  renderSkill,
+  resolveQuery,
+  rrf,
+  sqlParams,
+  VIEW_CONTRACT,
+} from "../src/index.ts";
+import { FakeStore, fakeEmbedder, fakePlugin, fakeRegistry, noopKit, PRODUCER } from "./fakes.ts";
+
+const hit = (chunkId: string, rank: number, snippet = chunkId): RankedChunk => ({
+  chunkId,
+  itemKey: `fake:${chunkId}` as ItemKey,
+  turnKey: "t",
+  rank,
+  score: 1 / rank,
+  snippet,
+});
+
+describe("rrf", () => {
+  test("sums 1/(k+rank) across lists and re-ranks from 1", () => {
+    const out = rrf(
+      [
+        [hit("a", 1), hit("b", 2)],
+        [hit("b", 1), hit("c", 2)],
+      ],
+      60,
+      10,
+    );
+    expect(out.map((h) => h.chunkId)).toEqual(["b", "a", "c"]);
+    expect(out.map((h) => h.rank)).toEqual([1, 2, 3]);
+    expect(out[0]?.score).toBeCloseTo(1 / 62 + 1 / 61, 12);
+    expect(out.every((h) => h.via === "hybrid")).toBe(true);
+  });
+
+  test("ties break by chunk_id, regardless of input order", () => {
+    const x = rrf([[hit("z", 1)], [hit("m", 1)], [hit("a", 1)]], 60, 10).map((h) => h.chunkId);
+    const y = rrf([[hit("a", 1)], [hit("z", 1)], [hit("m", 1)]], 60, 10).map((h) => h.chunkId);
+    expect(x).toEqual(["a", "m", "z"]);
+    expect(y).toEqual(x);
+  });
+
+  test("keeps the first list's snippet and honors limit", () => {
+    const out = rrf([[hit("a", 1, "kw «a»")], [hit("a", 3, "vec a"), hit("b", 1)]], 60, 1);
+    expect(out).toHaveLength(1);
+    expect(out[0]?.snippet).toBe("kw «a»");
+  });
+
+  test("empty input", () => {
+    expect(rrf([], 60, 10)).toEqual([]);
+  });
+});
+
+describe("parseSince", () => {
+  const now = Date.parse("2026-10-23T12:00:00Z");
+  test("relative and absolute", () => {
+    expect(parseSince("7d", now)).toBe("2026-10-16T12:00:00.000Z" as never);
+    expect(parseSince("12h", now)).toBe("2026-10-23T00:00:00.000Z" as never);
+    expect(parseSince("2w", now)).toBe("2026-10-09T12:00:00.000Z" as never);
+    expect(parseSince("2026-10-01", now)).toBe("2026-10-01T00:00:00.000Z" as never);
+    expect(() => parseSince("yesterday", now)).toThrow(/--since/);
+  });
+});
+
+describe("recipes", () => {
+  const FORBIDDEN: readonly [RegExp, string][] = [
+    [/\bMATCH\b/i, "FTS MATCH"],
+    [/\bvec_\w+/i, "sqlite-vec function"],
+    [/\bjulianday\b/i, "julianday"],
+    [/\b(date|datetime|strftime|now)\s*\(/i, "date function"],
+    [
+      /\b(bm25|snippet|highlight|similarity|ts_rank|to_tsvector|websearch_to_tsquery)\s*\(/i,
+      "dialect search function",
+    ],
+    [/<->|<=>|@@|::/, "postgres operator/cast"],
+    [/\b(recording|conversation|message|segment|chunk_vec|chunk_fts)\b/i, "legacy table"],
+    [/\bjson_extract\b|->>/i, "JSON function (use <source>_items facet views)"],
+  ];
+
+  test("names are unique and kebab-case", () => {
+    const names = RECIPES.map((r) => r.name);
+    expect(new Set(names).size).toBe(names.length);
+    for (const n of names) expect(n).toMatch(/^[a-z][a-z0-9-]*$/);
+  });
+
+  for (const r of RECIPES) {
+    test(`${r.name}: portable SQL`, () => {
+      for (const [re, what] of FORBIDDEN) {
+        if (re.test(r.sql)) throw new Error(`recipe ${r.name} uses ${what}: ${re}`);
+      }
+    });
+
+    test(`${r.name}: params declared ⇔ used`, () => {
+      const used = sqlParams(r.sql);
+      expect([...used].sort()).toEqual(Object.keys(r.params).sort());
+    });
+
+    test(`${r.name}: search recipes read hits, others don't`, () => {
+      expect(/\bhits\b/.test(r.sql)).toBe(r.search !== undefined);
+    });
+
+    test(`${r.name}: has a LIMIT or is an aggregate/single-item read`, () => {
+      const bounded =
+        /\bLIMIT\b/i.test(r.sql) || /\bGROUP BY\b/i.test(r.sql) || /WHERE[^;]*= :(item|chunk)\b/.test(r.sql);
+      expect(bounded).toBe(true);
+    });
+  }
+
+  test("sqlParams ignores string literals, comments and casts", () => {
+    expect(
+      [...sqlParams("SELECT ':nope', a::text FROM t WHERE x = :yes -- :comment\nAND y = :also")].sort(),
+    ).toEqual(["also", "yes"]);
+  });
+
+  test("bindRecipe: defaults, ints, NULL optionals, required and unknown params", () => {
+    expect(bindRecipe(findRecipe("recent"), {})).toEqual({ days: 3, source: null, limit: 50 });
+    expect(bindRecipe(findRecipe("recent"), { days: "7", source: "cursor" })).toEqual({
+      days: 7,
+      source: "cursor",
+      limit: 50,
+    });
+    expect(() => bindRecipe(findRecipe("recent"), { days: "x" })).toThrow(/integer/);
+    expect(() => bindRecipe(findRecipe("thread"), {})).toThrow(/missing required param/);
+    expect(() => bindRecipe(findRecipe("thread"), { item: "a:b", bogus: "1" })).toThrow(
+      /unknown param bogus/,
+    );
+  });
+
+  test("resolveQuery: search recipes need text and default their mode", () => {
+    expect(() => resolveQuery({ recipe: "semantic" })).toThrow(/needs search text/);
+    expect(() => resolveQuery({ recipe: "recent", search: { text: "x", filter: {} } })).toThrow(
+      /takes no search text/,
+    );
+    expect(resolveQuery({ recipe: "best-moment", search: { text: "x", filter: {} } }).search?.mode).toBe(
+      "semantic",
+    );
+    expect(
+      resolveQuery({ recipe: "search", search: { text: "x", filter: {}, mode: "keyword" } }).search?.mode,
+    ).toBe("keyword");
+    expect(() => resolveQuery({ recipe: "nope" })).toThrow(/unknown recipe/);
+  });
+
+  test("covers both legacy skills' recipe intents", () => {
+    const names = new Set(RECIPES.map((r) => r.name));
+    const swrag = [
+      "modes",
+      "today",
+      "mode-recent",
+      "meeting-notes",
+      "keyword",
+      "semantic",
+      "hybrid",
+      "best-moment",
+      "chunk-neighbors",
+      "rank-items",
+      "reprocess-history",
+      "fuzzy",
+      "recency-decay",
+    ];
+    const acrag = [
+      "sources",
+      "recent",
+      "today",
+      "turns",
+      "by-repo",
+      "by-tag",
+      "subagents",
+      "thread",
+      "context",
+      "by-chunk-type",
+    ];
+    for (const n of [...swrag, ...acrag]) expect(names.has(n)).toBe(true);
+    expect(RECIPES.some((r) => r.name.startsWith("stats-"))).toBe(true);
+  });
+});
+
+describe("Archive.query", () => {
+  async function archiveWith(store: FakeStore) {
+    const dir = mkdtempSync(join(tmpdir(), "memex-q-"));
+    return openArchive({
+      mode: "read",
+      config: await loadConfig({ HOME: dir, MEMEX_CONFIG_DIR: dir }),
+      storeInstance: store,
+      registry: fakeRegistry([fakePlugin({ entries: [] })]),
+      embedder: fakeEmbedder(),
+      kit: noopKit,
+      log: () => {},
+    });
+  }
+
+  test("hybrid: embeds in-process and hands the store one fused search request as `hits`", async () => {
+    const store = new FakeStore();
+    store.searchResults = { hybrid: [{ ...hit("b", 1), via: "hybrid" }] };
+    const archive = await archiveWith(store);
+    const rows = [];
+    for await (const r of archive.query({
+      recipe: "search",
+      args: { limit: "2" },
+      search: { text: "q", filter: { source: ["fake"], since: "7d" } },
+    }))
+      rows.push(r);
+    const req = store.runs[0]?.opts.hits;
+    if (!req || Array.isArray(req)) throw new Error("expected a StoreSearch");
+    const search = req as StoreSearch;
+    expect(search.via).toBe("hybrid");
+    expect(search.text).toBe("q");
+    expect(search.vector).toBeInstanceOf(Float32Array);
+    expect(search.space?.id).toBe("fake@8");
+    expect(search.rrfK).toBe(60);
+    expect(search.k).toBe(50);
+    expect(search.filter.source).toEqual([sourceId("fake")]);
+    expect(search.filter.since).toBeDefined();
+    expect(store.runs[0]?.opts.params).toEqual({ limit: 2 });
+    expect(rows).toEqual([{ chunk_id: "b", rank: 1, via: "hybrid" }]);
+  });
+
+  test("keyword/fuzzy never embed; semantic is a vector search; unknown sources fail before searching", async () => {
+    const store = new FakeStore();
+    const embedder = fakeEmbedder();
+    const archive = await openArchive({
+      mode: "read",
+      config: await loadConfig({ HOME: tmpdir(), MEMEX_CONFIG_DIR: mkdtempSync(join(tmpdir(), "memex-q-")) }),
+      storeInstance: store,
+      registry: fakeRegistry([fakePlugin({ entries: [] })]),
+      embedder,
+      kit: noopKit,
+      log: () => {},
+    });
+    const drain = async (q: Parameters<typeof archive.query>[0]) => {
+      for await (const _ of archive.query(q));
+    };
+    await drain({ sql: "SELECT * FROM hits", search: { text: "q", mode: "keyword", filter: {}, limit: 7 } });
+    await drain({ sql: "SELECT * FROM hits", search: { text: "q", mode: "fuzzy", filter: {} } });
+    expect(embedder.calls).toEqual([]);
+    await drain({ sql: "SELECT * FROM hits", search: { text: "q", mode: "semantic", filter: {} } });
+    expect(embedder.calls).toEqual([["q"]]);
+    const vias = store.runs.map((r) => (r.opts.hits as StoreSearch).via);
+    expect(vias).toEqual(["keyword", "fuzzy", "vector"]);
+    expect(store.runs.map((r) => (r.opts.hits as StoreSearch).k)[0]).toBe(7);
+    await expect(
+      drain({ sql: "SELECT 1", search: { text: "q", mode: "keyword", filter: { source: ["zzz"] } } }),
+    ).rejects.toThrow(/unknown source/);
+  });
+
+  test("custom SQL without search passes params through and no hits", async () => {
+    const store = new FakeStore();
+    const archive = await archiveWith(store);
+    for await (const _ of archive.query({ sql: "SELECT :x", params: { x: "1" } }, { maxRows: 5 }));
+    expect(store.runs[0]).toEqual({ sql: "SELECT :x", opts: { params: { x: "1" }, maxRows: 5 } });
+  });
+
+  test("read mode refuses writes", async () => {
+    const archive = await archiveWith(new FakeStore());
+    expect(archive.producer).toBeNull();
+    await expect(archive.ingest()).rejects.toThrow(/read-only/);
+  });
+});
+
+describe("renderSkill", () => {
+  const md = renderSkill(RECIPES, new Map([[sourceId("superwhisper"), "Dictations live here."]]), 2);
+
+  test("frontmatter is manual-invocation only", () => {
+    expect(md.startsWith("---\nname: memex\ndescription: ")).toBe(true);
+    expect(md).toContain("\ndisable-model-invocation: true\n---\n");
+  });
+
+  test("lists every recipe, every view, the hits columns and the contract version", () => {
+    for (const r of RECIPES) expect(md).toContain(`| \`${r.name}\` |`);
+    for (const v of VIEW_CONTRACT) expect(md).toContain(`\`${v.name}\``);
+    expect(md).toContain("rank, score, via, chunk_id, item_key, turn_key, snippet");
+    expect(md).toContain("View contract v2");
+  });
+
+  test("teaches the CLI surface, the subagent workflow and includes source notes", () => {
+    expect(md).toContain("memex q ");
+    expect(md).toContain("memex sql --search");
+    expect(md).toContain("<<'SQL'");
+    expect(md).toContain("## Retrieval workflow (subagent-driven)");
+    expect(md).toContain("### superwhisper\n\nDictations live here.");
+  });
+
+  test("teaches no dialect syntax", () => {
+    expect(md).not.toMatch(/vec_distance|julianday|embed\)\)|x'/);
+  });
+
+  test("is deterministic", () => {
+    expect(renderSkill(RECIPES, new Map([[sourceId("superwhisper"), "Dictations live here."]]), 2)).toBe(md);
+  });
+
+  test("Archive.skill adds facet views from the registry", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "memex-s-"));
+    const archive = await openArchive({
+      mode: "write",
+      config: await loadConfig({ HOME: dir, MEMEX_CONFIG_DIR: dir }),
+      storeInstance: new FakeStore(),
+      producer: PRODUCER,
+      registry: fakeRegistry([fakePlugin({ entries: [] })]),
+      embedder: fakeEmbedder(),
+      kit: noopKit,
+      log: () => {},
+    });
+    expect(archive.skill()).toContain(
+      "### fake\n\nFacet view `fake_items`: `n` (int).\n\nFake source notes.",
+    );
+  });
+});

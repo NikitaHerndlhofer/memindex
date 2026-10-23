@@ -3,8 +3,20 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "exports": { ".": "./src/index.ts" },
+  "exports": {
+    ".": "./src/index.ts"
+  },
   "dependencies": {
-    "@memex/model": "workspace:*"
+    "@memex/model": "workspace:*",
+    "drizzle-orm": "^0.45.4",
+    "postgres": "^3.4.9"
+  },
+  "devDependencies": {
+    "drizzle-kit": "^0.31.11"
+  },
+  "scripts": {
+    "db:generate": "drizzle-kit generate && bun scripts/gen-migrations.ts",
+    "db:custom": "drizzle-kit generate --custom",
+    "gen:migrations": "bun scripts/gen-migrations.ts"
   }
 }

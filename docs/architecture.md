@@ -1,9 +1,9 @@
-# memex architecture
+# memindex architecture
 
-One binary, one archive. Super Whisper dictations and meetings, and agent chats (Cursor,
-Claude Code, Codex, …), all map into one content model with one set of indexes, one storage
-port with SQLite (default) and Postgres (opt-in, multi-producer) adapters, one migration chain,
-one embed pipeline, and one agent skill.
+memindex is a universal search archive with plugins. Each plugin reads one kind of source
+(Super Whisper dictations and meetings, Cursor chats, Claude Code sessions, …) and maps it into
+one content model. Everything lands in one Supabase Postgres database with one search index,
+one migration chain, one embed pipeline and one agent skill.
 
 ## Problem
 
@@ -13,7 +13,6 @@ read-only SQL to agents through installed skill recipes. The shared core drifted
 release, and every API takes a `bun:sqlite` `Database`.
 
 Constraints the design honors:
-
 - **The archive is the only copy.** Super Whisper's retention already deleted 2,234 of 2,263
   archived recordings. Items are append-only, and the raw source record of every Super Whisper
   revision is kept so a parser fix can replay history.
@@ -22,159 +21,194 @@ Constraints the design honors:
 - **Identity is machine-local.** Rowids, one global bookmark row, "not in my snapshot means
   deleted", and Super Whisper's `folder_name` (a unix-seconds timestamp, not unique across
   machines; `recording_id_hex` is the UUID).
-- **Recipes are a public API** in SQLite dialect, and installed skills outlive binaries.
-- Local-first: Bun-compiled macOS binary via Homebrew, offline Ollama, zero-setup SQLite.
-  Postgres is opt-in and must support many producers and many consumers.
+- **Recipes are a public API**, and installed skills outlive binaries.
+- Many producers (machines, hooks, watchers) write, and many agents read, the same database.
 
-## Should this be a single app now?
+## Decisions
 
-Yes, and before the Postgres work. With two apps, Postgres means two schemas, two migration
-chains, two adapters, two recipe sets and two multi-producer redesigns. The only real
-differences are how sources are read, which is what the source plugin boundary isolates. One
-archive also makes "what did I dictate about X and which chat implemented it" a single query.
-`swrag` and `acrag` formulas are deprecated in favor of `memex`; their archives are imported.
+- **One app.** One binary, `memindex`. Sources are plugins compiled into it. The `swrag` and
+  `acrag` archives are imported, never modified.
+- **Supabase Postgres is the database.** Locally through the Supabase CLI (`supabase start`),
+  remotely through a Supabase project; the same migrations run on both. The storage port stays
+  backend-neutral, but only the Postgres adapter is implemented.
+- **One universal index, scoped by plugin.** All plugins share one `chunk` table with one
+  full-text index, one trigram index and one vector index per embedding space. Every search
+  takes a `sources` filter; plugin scoping is a parameter, not a separate index. Configured
+  default scopes (for a skill, an agent, or a shell) are the same parameter preset.
+- **Structured and unstructured inputs share one model; chunking is per plugin and per kind.**
 
 ## Usage (caller's view)
 
 ```sh
-brew install nikitaherndlhofer/tap/memex && memex install   # Ollama check, launchd watcher, hooks, skill
-memex import swrag && memex import acrag                     # resumable; legacy files untouched; verified
-memex ingest                                                 # all sources visible to this machine
-memex status                                                 # items per source, embed backlog, jobs, schema
-memex q search "auth token refresh bug" --source cursor --since 14d
-memex q thread cursor:3f1c…
-memex sql --search "rate limiter design" --mode hybrid --json <<'SQL'
+brew install nikitaherndlhofer/tap/memindex && memindex install   # Supabase local stack, Ollama check, watcher, hooks, skill
+memindex import swrag && memindex import acrag                     # resumable; legacy files untouched; verified
+memindex ingest                                                    # every plugin visible to this machine
+memindex status                                                    # items per source, embed backlog, jobs, schema
+memindex q search "auth token refresh bug" --source cursor --since 14d
+memindex q search "pricing call with Anna" --source superwhisper
+memindex q thread cursor:3f1c…
+memindex sql --search "rate limiter design" --mode hybrid --json <<'SQL'
   SELECT i.source, i.kind, i.started_day, h.snippet
   FROM hits h JOIN items i USING (item_key) ORDER BY h.rank LIMIT 15;
 SQL
-MEMEX_STORE=postgres://memex@nas/memex memex migrate         # opt-in shared archive
-memex copy --to postgres://memex@nas/memex                   # resumable SQLite → Postgres copy
+MEMINDEX_STORE=postgres://…pooler.supabase.com:5432/postgres memindex migrate   # shared Supabase project
 ```
 
-```ts
-const archive = await openArchive({ mode: "write" });
-await archive.ingest({ only: { source: "cursor", hook: { event: "stop", payload } }, embed: { budgetMs: 20_000 } });
-for await (const row of archive.query({ recipe: "search", args: {}, search: { text: "roadmap", mode: "hybrid", filter: { source: ["superwhisper"] } } })) print(row);
+Agents that have database credentials but not the binary can call the same search directly:
+
+```sql
+SELECT * FROM memindex.search('rate limiter', :query_embedding, 'bge-m3@1024', 'hybrid',
+                              '{"sources": ["cursor"]}', 20);
 ```
 
-## Shape
+## Content model
 
-### Packages and dependency direction
+**item → turn → part → chunk.** Vectors are keyed by content hash per embedding space.
+
+| Input                                   | Item             | Turns                                                    | Parts                                                        |
+| --------------------------------------- | ---------------- | -------------------------------------------------------- | ------------------------------------------------------------ |
+| Cursor / Claude Code chat (structured)  | one conversation | one per message, keyed by the source's bubble or line id | text, thinking, code, tool_call, tool_result, diff, subagent |
+| Super Whisper dictation (unstructured)  | one recording    | one turn `u`                                             | best transcript, raw transcript                              |
+| Super Whisper meeting (semi-structured) | one recording    | one per speaker segment when present, else `u`           | transcript                                                   |
+- `ItemKey = "<source>:<native>"`: `superwhisper:<recording_id_hex>`, `cursor:<composerId>`.
+- `TurnKey` is source-native, never a position, so inserting a message mid-chat changes nothing
+  else.
+- `ChunkId = h(item, turn, part, sub)`. `ContentHash = sha256(embedText)`, which equals swrag's
+  `embed_text_hash`, so legacy vectors import byte for byte.
+- Items carry promoted cross-source columns (`kind`, `title`, `origin`, `started_at`,
+  `parent_key`, `supersede_key`); everything else is per-plugin `meta` (jsonb, zod-typed),
+  exposed through generated `<source>_items` facet views. Adding a plugin needs no migration.
+- `capture`: insert-only raw source record per revision, for plugins with `capture: "always"`
+  (Super Whisper). The `reparse` job replays captures when a plugin's `parserVersion` is bumped.
+
+### Chunking
+
+A plugin picks a chunker per item kind. Chunkers are pure, versioned (`name@n`), and a version
+bump makes the `rechunk` job pending.
+- **`parts@1`, structured chats.** Each part is its own chunk, so a tool result never shares a
+  vector with the prose around it. A part over the size limit is split along its structure: lines
+  for code, tool output and diffs; paragraphs, then sentences, for prose. Pieces overlap slightly
+  and carry a `[kind: i/n]` header. Small parts stay whole.
+- **`words@1`, dictation.** Exactly swrag's windows (300 words, 50 overlap, single chunk under
+  500 words, embed text `[<mode>] <text>`), so imported vectors match. Raw transcripts are
+  keyword-only.
+- **`speaker@1`, meetings.** Splits on speaker turns first, then windows long turns.
+
+## Multi-producer correctness
+
+- Per-producer state lives in `observation (item_key, producer_id, location_id)` and
+  `cursor (producer_id, source, location_id, name)`. Nothing global.
+- Deletion is producer- and location-scoped: `reconcileGone` only marks this producer's
+  observations after a complete listing. `items.source_gone` is derived as "no live observation".
+- One total order decides whether a write replaces stored content: `compareRevision` is
+  fidelity, then source time (when both have one), then equal hash means same, then same producer
+  means incoming wins, then `(producer_id, hash)` lexical order. Cursor's "state.vscdb beats
+  JSONL" is fidelity 2 vs 1.
+- `apply` runs one transaction per item under `SELECT … FOR UPDATE`. Concurrent writers
+  serialize; stale writes are no-ops.
+- The vector row's existence is the embed marker; the backlog is a query. Producers embed locally
+  with Ollama bge-m3 (multilingual, 1024-d) and write vectors with insert-if-absent.
+
+## What Supabase provides, and how memindex uses it
+
+| Supabase capability                                    | Used for                                                                                                                                                                           |
+| ------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Postgres 17 + `vector` (halfvec, HNSW, iterative scan) | One vector index per embedding space; halfvec halves storage; iterative scan keeps narrow plugin filters returning k results                                                       |
+| `pg_trgm`, `unaccent`, `btree_gin`, tsvector           | Fuzzy and keyword search (`english` weighted plus `simple` for multilingual dictation)                                                                                             |
+| SQL functions callable as RPC                          | `memindex.search(...)`: keyword, fuzzy, vector and hybrid (RRF k=60) fused once, in SQL; the CLI, psql, PostgREST and Edge Functions all get the same ranking                      |
+| Custom schema, roles, RLS                              | Everything in schema `memindex` (not exposed via the Data API); RLS on with no policies; `memindex_writer` for producers, read-only `memindex_reader` for agents                   |
+| Supabase CLI migrations                                | `supabase/migrations/*.sql` and the CLI's `supabase_migrations.schema_migrations` ledger are the only ledger; `memindex migrate` writes the same rows for machines without the CLI |
+| `pg_cron`                                              | Server-side maintenance (vector GC, ANALYZE) that no single producer has to own                                                                                                    |
+| Supavisor                                              | Session mode for producers; transaction mode (6543) works with prepared statements off                                                                                             |
+| Local stack (`supabase start`)                         | The default local install and the test backend                                                                                                                                     |
+
+Follow-ups, not in the first cut: PGroonga as the multilingual keyword engine (evaluate on real
+dictation); Supabase Storage to preserve Super Whisper audio past its retention; pgmq if the
+embed backlog ever needs leasing across many producers; LIST partitioning `chunk` by source if
+per-plugin maintenance becomes useful.
+
+## Tooling
+
+Use a maintained library wherever it replaces code we would otherwise own.
+
+| Concern                  | Tool                                   | Why                                                                                                               |
+| ------------------------ | -------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| Postgres driver          | `postgres` (postgres.js)               | The driver Supabase and Drizzle document; handles the transaction pooler with `prepare: false`                    |
+| Schema, queries          | Drizzle ORM                            | TypeScript schema is the single source of truth; typed CRUD; raw `sql` for search and locking                     |
+| Migrations               | drizzle-kit + Supabase CLI             | drizzle-kit generates Supabase-prefixed files into `supabase/migrations`; the CLI is the only migrator and ledger |
+| Ollama                   | `ollama` (official client)             | `embed` with `truncate`/`keep_alive`, plus `list` and streamed `pull` for `install` and `doctor`                  |
+| Retries, concurrency     | `p-retry`, `p-limit`                   | Backoff on Ollama and network errors; bounded parallel embedding                                                  |
+| Prose and code splitting | `@langchain/textsplitters`             | Recursive and language-aware splitters inside `parts@1`; `words@1` stays custom to match swrag byte for byte      |
+| CLI                      | `citty` + `consola` + `@clack/prompts` | Commands, leveled logging, and the `install` wizard                                                               |
+| File watching            | `chokidar`                             | Debounced, recursive, pure JS, so `bun build --compile` keeps working                                             |
+| Validation               | `zod`                                  | Config, plugin meta, Ollama and hook payloads at the boundary                                                     |
+| Lint, dead code          | Biome, `knip`                          | Formatting and lint; unused exports and dependencies                                                              |
+
+Not adopted: a job queue (`pg-boss`, pgmq), because convergent jobs are predicates over the data
+and a queue would be a second source of truth; an MCP server is a strong follow-up once recipes
+settle, exposing `search` and recipes as tools.
+
+## Packages
 
 ```
 model  ←  embed
 model  ←  store
 model  ←  sources
-model, store, embed, sources  ←  engine  ←  apps/memex
+model, store, embed, sources  ←  engine  ←  apps/memindex
 ```
 
-Each package exports only `"."`; deep imports fail the build. `store` and `sources` never import
-each other. Plugins receive a `SourceKit`, never the store.
+Each package exports only `"."`. `store` and `sources` never import each other; plugins get a
+`SourceKit`, never the store. `SOURCES`, `CHUNKERS`, `RECIPES` and `JOBS` are each a single
+list that everything else derives from.
 
-### Data model
+## Query surface
 
-**item → turn → chunk**, vectors keyed by content hash per vector space.
+- View contract: `items`, `items_all`, `turns`, `chunks`, `observations`, `<source>_items`, with
+  precomputed `started_day`, `age_days`, `duration_s`, `source_gone`.
+- `hits` is `memindex.search(...)` called with bound parameters. Recipes are compiled into the
+  binary; the skill lists recipe names and the view contract. Old swrag/acrag table names fail
+  with a hint naming the replacement recipe.
 
-- `ItemKey = "<source>:<native>"`: `superwhisper:<recording_id_hex>`, `cursor:<composerId>`.
-- `TurnKey` is source-native (bubble id, JSONL uuid, `u` for a dictation), never a position.
-- `ChunkId = h(item, turn, part, sub)`, derived, never DB-assigned.
-- `ContentHash = sha256(embedText)`. swrag's `embed_text_hash` is the same function, so its
-  vectors import byte for byte.
-- Items carry promoted cross-source columns (`kind`, `title`, `origin`, `started_at`,
-  `parent_key`, `supersede_key`); everything else is per-source `meta` typed by the plugin's zod
-  schema and exposed through generated `<source>_items` facet views. Adding a source needs no
-  migration.
-- `capture` (graft from the capture-log candidate): insert-only raw source record per
-  `(item_key, rev_hash)`, for sources that declare `capture: "always"` (Super Whisper). The
-  `reparse` job replays captures when a plugin's `parserVersion` is bumped.
+## Migrations and data updates
 
-### Multi-producer correctness
-
-- Per-producer state lives in `observation (item_key, producer_id, location_id)` and
-  `cursor (producer_id, source, location_id, name)`. Nothing global.
-- Deletion is producer- and location-scoped: `reconcileGone` only marks this producer's
-  observations after a complete listing. `items.source_gone` is derived: no live observation.
-- One total order decides whether a write replaces stored content: `compareRevision` =
-  fidelity → source time (when both have one) → same hash is `same` → same producer means
-  incoming wins (a producer's own newer view of an in-place rewrite) → otherwise
-  `(producer_id, hash)` lexical order. Cursor's "state.vscdb beats JSONL" is fidelity 2 vs 1.
-- `apply` runs one transaction per item under the item lock (`BEGIN IMMEDIATE` + WAL on SQLite,
-  `SELECT … FOR UPDATE` on Postgres). Concurrent writers serialize; stale writes are no-ops.
-- No early done-marker: the vector row's existence is the embed marker, and the embed backlog
-  is a query. Two producers embedding the same text collide harmlessly (insert-if-absent).
-
-### Storage port
-
-`openStore` returns `ReadStore` or `WriteStore`. Write policy (`planItemWrite`,
-`compareRevision`) is pure shared code; adapters supply a `Dialect` (SQL text) and a connection.
-The port hides FTS5 vs tsvector, trigram vtable vs pg_trgm, vec0 vs pgvector, locking, the
-filtered-KNN strategy (exact scan for small filtered sets, KNN with overfetch otherwise), the
-migration gate, derived objects, and the read-only query path.
-
-### Query surface (both backends)
-
-- View contract v2: `items`, `items_all`, `turns`, `chunks`, `observations`, `<source>_items`.
-  Dialect-varying values are precomputed columns (`started_day`, `age_days`, `duration_s`,
-  `source_gone`).
-- Search runs in-process and reaches SQL as a `hits` CTE built from `VALUES` (graft), identical
-  text on both backends. Hybrid is RRF k=60, fused once in the engine.
-- Recipes are compiled into the binary and tested on both backends. The skill lists recipe names
-  and the view contract. Legacy table names (`recording`, `chunk_vec`, …) fail with a hint
-  naming the replacement recipe.
-
-### Migrations and data updates
-
-- **Schema:** one chain, one directory per version with `sqlite.sql` and `postgres.sql`. A
-  `schema_migration` ledger records version, name, sha256 and applier. Opening refuses gaps,
-  tampered checksums, and archives newer than the binary. SQLite migrates on write-open;
-  Postgres only via `memex migrate` under an advisory lock.
-- **Derived objects** (vector-space tables, facet views) are owned by the store and recorded in
-  `derived_object` with a checksum; recreated idempotently when the definition changes.
-- **Data updates are jobs.** Convergent jobs are predicates over data: `embed` (chunks without a
-  vector in the active space), `rechunk` (items whose chunker id differs), `reparse` (items with
-  a capture whose parser version is behind). A fresh archive has nothing pending by
-  construction; a crash just resumes. Stored versions are never lowered by an older binary.
-  One-shot jobs (`import-swrag`, `import-acrag`, `copy-store`) keep a resumable cursor in
-  `job_run` and end with a verification step (graft): every legacy key appended, vector counts
+- **Schema:** Supabase CLI migrations, one ledger. Opening refuses gaps, edited migrations
+  (stored statements compared to the embedded file) and databases newer than the binary.
+  Migrations apply under an advisory lock.
+- **Derived objects** (per-space vector indexes, facet views) are owned by the store and recorded
+  in `derived_object` with a checksum.
+- **Data updates are jobs.** Convergent jobs are predicates over data: `embed`, `rechunk`,
+  `reparse`, `vec-gc`. A fresh archive has nothing pending; a crash resumes. Stored versions are
+  never lowered by an older binary. One-shot jobs (`import-swrag`, `import-acrag`) keep a resumable
+  cursor in `job_run` and end with verification: every legacy key appended and vector counts
   reconciled against the legacy tables.
 
 ## Synthesis decision
 
-Three candidates: one app with a unified model (base), a shared kernel with separate products,
-and an immutable capture log with derived projections. The cross-judge preferred the capture
-log for keeping irreplaceable raw bytes; the base was chosen instead because it reaches the
-same correctness with a smaller port and a build one developer can finish, and the capture
-log's essential benefit was grafted as a scoped `capture` table.
-
-- From the capture-log candidate: Super Whisper identity is `recording_id_hex` (verified UUID);
-  raw captures for retention-limited sources plus a `reparse` job; version bumps as data
-  updates that old binaries can't lower; `hits` as a `VALUES` CTE so the reader stays
-  `query_only`.
-- From the shared-kernel candidate: per-machine producer UUID file; end-of-import verification;
-  the "plan outside, commit fenced" discipline, applied as "no Ollama call inside a
-  transaction".
-- Fixed from the base during synthesis: observation key includes `location_id`;
-  `compareRevision` is now a total order; `Facets` moved to `model` so `store` doesn't import
-  `sources`; derived DDL is ledgered; `copy-store` copies observations.
-- Rejected: per-product schemas (two migration chains forever), a full capture log for chat
-  sources (doubles 11 GB), a recipe compiler with a closed function set, a legacy stdin shim
-  (it would serve frozen data silently).
+Three candidates were sketched: one app with a unified model (the base), a shared kernel with
+separate products, and an immutable capture log with derived projections. The cross-judge
+preferred the capture log for keeping irreplaceable raw bytes. The base was chosen because it
+reaches the same correctness with a smaller port and a build one developer can finish; the
+capture log's essential benefit was grafted in as the scoped `capture` table.
+- From the capture log: Super Whisper identity is `recording_id_hex`; raw captures plus
+  `reparse`; version bumps as data updates that old binaries can't lower.
+- From the shared kernel: per-machine producer UUID; end-of-import verification; no Ollama call
+  inside a transaction.
+- After the user's direction: Supabase Postgres as the only backend, search fused in SQL, Supabase
+  CLI migrations, per-kind chunkers.
 
 ## Tradeoffs accepted
 
-- One archive file holds dictation next to 11 GB of chats, in exchange for cross-source search.
+- Zero-setup SQLite is gone: the local install runs the Supabase stack in Docker.
 - swrag's per-recording centroid vectors are dropped; recordings rank by their best chunks.
-- Old recipes don't run verbatim; `memex install` replaces both skills.
-- Legacy archives are imported, not migrated in place: minutes of copying, no re-embedding, and
-  the old files remain as backups.
-- The `sqlite3` CLI leaves the query path; output formats are rendered by `memex` itself.
-- Postgres mode needs the network to ingest (see open questions).
+- Old recipes don't run verbatim; `memindex install` replaces both skills.
+- Legacy archives are imported, not migrated in place.
+- Producers need the database reachable to ingest.
 
 ## Open questions and risks
 
-- Should Postgres-mode producers keep a local SQLite spool for offline ingest, given Super
-  Whisper's retention?
-- Does Cursor sync `composerId` across machines? The revision order converges either way.
-- Is vec0 filtered KNN with overfetch good enough at 630k+ vectors, or does SQLite need a
-  per-source vector partition? Needs measuring.
-- Should raw captures be kept for Cursor too (disk cost) once its retention behavior is known?
+- Local Supabase needs Docker. Is that acceptable for every machine that produces, or should a
+  laptop ingest into a remote Supabase project only?
+- Should Postgres-mode producers keep a local spool for offline ingest, given Super Whisper's
+  retention?
+- Disk: halfvec(1024) is ~2 KB per vector (~1.3 GB for 630k) plus HNSW and the chat text. A
+  Supabase Pro project includes 8 GB.

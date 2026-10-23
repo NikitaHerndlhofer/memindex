@@ -57,9 +57,7 @@ export interface HookSpec {
   route(event: string, payload: unknown): HookRoute | null;
 }
 
-export type HookRoute =
-  | { readonly kind: "item"; readonly native: string }
-  | { readonly kind: "sweep" };
+export type HookRoute = { readonly kind: "item"; readonly native: string } | { readonly kind: "sweep" };
 
 export interface SourcePlugin<Meta = unknown> {
   readonly id: SourceId;
@@ -80,7 +78,10 @@ export interface SourcePlugin<Meta = unknown> {
   parseCapture?(capture: Capture): ItemDraft<Meta>;
   /** Targeted listing for hooks. Default: scan + filter. */
   sight?(native: string, location: Location, kit: SourceKit): Promise<Sighting | null>;
-  readonly triggers: { readonly watch: (kit: SourceKit) => readonly string[]; readonly hooks: HookSpec | null };
+  readonly triggers: {
+    readonly watch: (kit: SourceKit) => readonly string[];
+    readonly hooks: HookSpec | null;
+  };
   /** Short section appended to the generated SKILL.md. */
   readonly skillNotes?: string;
 }

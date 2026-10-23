@@ -17,5 +17,12 @@
     "noUnusedParameters": true,
     "types": ["bun"]
   },
-  "include": ["packages/*/src", "packages/*/tests", "apps/*/src", "apps/*/tests", "apps/*/scripts", "packages/*/scripts"]
+  "include": [
+    "packages/*/src",
+    "packages/*/tests",
+    "apps/*/src",
+    "apps/*/tests",
+    "apps/*/scripts",
+    "packages/*/scripts"
+  ]
 }

@@ -13,7 +13,13 @@ import {
 
 const A = producerId("00000000-0000-4000-8000-00000000000a");
 const B = producerId("00000000-0000-4000-8000-00000000000b");
-const rev = (r: Partial<StampedRevision>): StampedRevision => ({ fidelity: 1, at: null, hash: "h", producer: A, ...r });
+const rev = (r: Partial<StampedRevision>): StampedRevision => ({
+  fidelity: 1,
+  at: null,
+  hash: "h",
+  producer: A,
+  ...r,
+});
 
 describe("keys", () => {
   test("item keys are source-prefixed and reject local paths", () => {

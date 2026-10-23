@@ -1,0 +1,6 @@
+{"role":"user","message":{"content":[{"type":"text","text":"<timestamp>Friday</timestamp>\n<user_query>\nUSER_PROMPT_PLACEHOLDER\n</user_query>"}]}}
+{"role":"assistant","message":{"content":[{"type":"text","text":"ASSISTANT_PROSE_PLACEHOLDER"},{"type":"tool_use","name":"ReadFile","input":{"path":"FILE_PLACEHOLDER.ts"}}]}}
+{"role":"assistant","message":{"content":[{"type":"text","text":"ok"}]}}
+{"role":"assistant","message":{"content":[{"type":"text","text":"ok"}]}}
+not json at all
+{"type":"turn_ended","status":"success"}

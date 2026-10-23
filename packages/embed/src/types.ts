@@ -28,4 +28,8 @@ export interface OllamaOptions {
   readonly batchSize?: number;
   readonly timeoutMs?: number;
   readonly keepAlive?: string;
+  /** Retries on network errors, 5xx and 429. Default 3. */
+  readonly retries?: number;
+  /** First backoff delay; doubles per retry. Default 200ms. */
+  readonly backoffMs?: number;
 }

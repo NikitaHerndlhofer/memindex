@@ -1,13 +1,12 @@
 /**
- * The storage port. One interface, two adapters (SQLite default, Postgres opt-in).
+ * The storage port. Backend-neutral; the implemented adapter is Supabase Postgres.
  *
- * Hidden behind it: SQL dialect (FTS5 vs tsvector, trigram vtable vs pg_trgm, vec0 vs pgvector),
- * locking (BEGIN IMMEDIATE + WAL vs SELECT … FOR UPDATE), the per-item diffing transaction,
- * supersedence, the append-only guard, the migration ledger and gate, derived objects (vector
- * tables, facet views), the filtered-KNN strategy, and the read-only query path.
+ * Hidden behind it: SQL dialect (tsvector, pg_trgm, pgvector), locking (SELECT … FOR UPDATE),
+ * the per-item diffing transaction, supersedence, the append-only guard, the migration gate,
+ * derived objects (vector indexes, facet views), the filtered-KNN strategy, ranking and hybrid
+ * fusion, and the read-only query path.
  *
- * Deliberately NOT here: embedding, chunking, talking to sources, fusing rankings. Those are
- * engine policy and must behave identically across backends.
+ * Deliberately NOT here: embedding, chunking, talking to sources. Those are engine policy.
  */
 
 import type {
@@ -45,7 +44,7 @@ export interface OpenStoreOptions {
 export interface WriteOpenOptions extends OpenStoreOptions {
   readonly mode: "write";
   readonly producer: ProducerId;
-  /** Recorded in the producer table and the migration ledger. */
+  /** Recorded in the producer table. */
   readonly binaryVersion: string;
 }
 
@@ -58,13 +57,13 @@ export interface ReadOpenOptions extends OpenStoreOptions {
 export interface ReadStore {
   readonly backend: Backend;
   readonly schema: SchemaStatus;
-  /** Single-modality ranked retrieval. Hybrid fusion happens in the engine. */
-  search(req: StoreSearch): Promise<readonly RankedChunk[]>;
+  /** Ranked retrieval; `hybrid` is fused (RRF) by the backend, identically for every caller. */
+  search(req: StoreSearch): Promise<readonly Hit[]>;
   /**
-   * Consumer SQL over the view contract, read-only (sqlite: separate `mode=ro` connection with
-   * `query_only`; postgres: READ ONLY transaction + statement_timeout). When `hits` is given it is
-   * prepended as `WITH hits(...) AS (VALUES …)` so the same SQL text runs on both backends.
-   * `:name` params are bound natively (sqlite) or rewritten to `$n` (postgres).
+   * Consumer SQL over the view contract in a READ ONLY transaction with a statement timeout.
+   * When `hits` is given it is prepended as a `hits` CTE: a search request becomes the backend's
+   * own search call with bound parameters (so the same SQL runs outside the binary); a Hit list
+   * is bound as one parameter. `:name` params are bound by a string/comment-aware scanner.
    */
   run(sql: string, opts: RunOptions): AsyncIterable<Row>;
   /** Stored items for copy/rechunk/reparse, ordered by item_key for resumable cursors. */
@@ -73,17 +72,19 @@ export interface ReadStore {
   close(): Promise<void>;
 }
 
-export type SearchVia = "keyword" | "fuzzy" | "vector";
+export type SearchVia = "keyword" | "fuzzy" | "vector" | "hybrid";
 
 export interface StoreSearch {
   readonly via: SearchVia;
-  /** keyword/fuzzy: user text; the adapter escapes it into its own query syntax. */
+  /** keyword/fuzzy/hybrid: user text; the adapter escapes it into its own query syntax. */
   readonly text?: string;
-  /** vector: query embedding in `space`. */
+  /** vector/hybrid: query embedding in `space`. */
   readonly vector?: Float32Array;
   readonly space?: VectorSpace;
   readonly filter: ChunkFilter;
   readonly k: number;
+  /** Hybrid only: the RRF constant. Default 60. */
+  readonly rrfK?: number;
 }
 
 export interface ChunkFilter {
@@ -99,16 +100,16 @@ export interface RankedChunk {
   readonly chunkId: string;
   readonly itemKey: ItemKey;
   readonly turnKey: string;
-  /** 1-based within this modality. */
+  /** 1-based within this result list. */
   readonly rank: number;
-  /** bm25 / ts_rank / trigram similarity / (1 - cosine distance). Higher is better. */
+  /** ts_rank_cd / trigram word similarity / (1 - cosine distance) / RRF sum. Higher is better. */
   readonly score: number;
   readonly snippet: string;
 }
 
 export type HitVia = "keyword" | "fuzzy" | "semantic" | "hybrid";
 
-/** The `hits` relation. Identical columns on both backends. */
+/** The `hits` relation. */
 export interface Hit extends RankedChunk {
   readonly via: HitVia;
 }
@@ -116,7 +117,7 @@ export interface Hit extends RankedChunk {
 export const HIT_COLUMNS = ["rank", "score", "via", "chunk_id", "item_key", "turn_key", "snippet"] as const;
 
 export interface RunOptions {
-  readonly hits?: readonly Hit[];
+  readonly hits?: StoreSearch | readonly Hit[];
   readonly params?: Readonly<Record<string, string | number | null>>;
   /** Default 15s. */
   readonly timeoutMs?: number;
@@ -155,7 +156,11 @@ export interface WriteStore extends ReadStore {
    * producer's observations at `location` whose key is not in `present`. Never touches other
    * producers or locations, never deletes rows.
    */
-  reconcileGone(source: SourceId, location: LocationId, present: ReadonlySet<ItemKey>): Promise<{ readonly markedGone: number }>;
+  reconcileGone(
+    source: SourceId,
+    location: LocationId,
+    present: ReadonlySet<ItemKey>,
+  ): Promise<{ readonly markedGone: number }>;
 
   /** Compare-and-swap rechunk: applies only if the item's revision hash still equals `expectedHash`. */
   replaceChunks(
@@ -184,16 +189,27 @@ export interface ItemWrite {
 }
 
 export type ApplyOutcome =
-  | { readonly kind: "applied"; readonly turnsChanged: number; readonly chunksAdded: number; readonly chunksRemoved: number }
+  | {
+      readonly kind: "applied";
+      readonly turnsChanged: number;
+      readonly chunksAdded: number;
+      readonly chunksRemoved: number;
+    }
   | { readonly kind: "same" }
   | { readonly kind: "stale"; readonly stored: Revision };
 
 export interface VectorRepo {
   /** Content hashes of live, embeddable chunks with no vector in `space`. `prefer` items first. */
-  backlog(space: VectorSpace, opts: { readonly limit: number; readonly prefer?: readonly ItemKey[] }): Promise<readonly PendingEmbed[]>;
+  backlog(
+    space: VectorSpace,
+    opts: { readonly limit: number; readonly prefer?: readonly ItemKey[] },
+  ): Promise<readonly PendingEmbed[]>;
   backlogSize(space: VectorSpace): Promise<number>;
   /** Insert-if-absent. Two producers embedding the same text race harmlessly. Returns rows inserted. */
-  put(space: VectorSpace, vectors: readonly { readonly hash: ContentHash; readonly vector: Float32Array }[]): Promise<number>;
+  put(
+    space: VectorSpace,
+    vectors: readonly { readonly hash: ContentHash; readonly vector: Float32Array }[],
+  ): Promise<number>;
   /** Delete vectors no live chunk references. */
   gc(space: VectorSpace): Promise<number>;
 }
@@ -251,7 +267,11 @@ export interface StoreStats {
   >;
   readonly chunks: number;
   readonly embedBacklog: Readonly<Record<string, number>>;
-  readonly producers: readonly { readonly id: ProducerId; readonly host: string; readonly lastSeen: IsoTime | null }[];
+  readonly producers: readonly {
+    readonly id: ProducerId;
+    readonly host: string;
+    readonly lastSeen: IsoTime | null;
+  }[];
 }
 
 // ─── Schema status ─────────────────────────────────────────────────────────────
@@ -274,7 +294,8 @@ export class StoreError extends Error {
       | "busy"
       | "readonly"
       | "missing"
-      | "legacy_sql",
+      | "legacy_sql"
+      | "unsupported",
     readonly fix: string,
     detail?: string,
   ) {

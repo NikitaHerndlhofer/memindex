@@ -1,0 +1,870 @@
+/**
+ * Backend-agnostic store contract. A backend supplies a config, a way to empty the archive, and a
+ * few admin hooks for things the port deliberately can't do (break the ledger, attempt forbidden
+ * writes, log in as a restricted role).
+ */
+
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test";
+import {
+  type Capture,
+  type ChunkDraft,
+  chunkDraft,
+  chunkerId,
+  contentHash,
+  type Facets,
+  type ItemDraft,
+  type ItemKey,
+  isoTime,
+  itemKey,
+  type LocationId,
+  type ProducerId,
+  producerId,
+  type Revision,
+  type Sighting,
+  type SourceId,
+  sourceId,
+  type TurnDraft,
+  turnKey,
+  type VectorSpace,
+  vectorSpace,
+} from "@memex/model";
+import {
+  type Hit,
+  type ItemWrite,
+  openStore,
+  type ReadStore,
+  type Row,
+  type StoreConfig,
+  StoreError,
+  type WriteStore,
+} from "../src/index.ts";
+
+export type LedgerBreak = "tampered" | "gap" | "behind" | "ahead";
+
+export interface ContractBackend {
+  readonly config: StoreConfig;
+  /** Empty archive (no items, producers, vector spaces or derived objects), schema current. */
+  reset(): Promise<void>;
+  /** Damage the migration ledger; the returned function restores it. */
+  breakLedger(kind: LedgerBreak): Promise<() => Promise<void>>;
+  /** A login that has only the reader or writer group role. `hnsw` = reader with the exact-scan fallback disabled. */
+  roleConfig(role: "reader" | "writer" | "hnsw"): Promise<StoreConfig>;
+  /** Raw SQL as the archive owner. */
+  admin(sql: string): Promise<readonly Record<string, unknown>[]>;
+  /** Raw SQL as a reader-only login. */
+  asReader(sql: string): Promise<readonly Record<string, unknown>[]>;
+  /** True when the vector index is used for a filtered KNN query in `space`. */
+  usesVectorIndex(space: VectorSpace): Promise<boolean>;
+}
+
+export const P1 = producerId("11111111-1111-4111-8111-111111111111");
+export const P2 = producerId("22222222-2222-4222-8222-222222222222");
+export const SW = sourceId("superwhisper");
+export const CUR = sourceId("cursor");
+export const L1 = "loc-one" as LocationId;
+export const L2 = "loc-two" as LocationId;
+export const SPACE = vectorSpace("test", 4);
+const CHUNKER = chunkerId("parts", 1);
+const NO_FACETS: ReadonlyMap<SourceId, Facets> = new Map();
+
+export function turnOf(key: string, ...texts: string[]): TurnDraft {
+  return {
+    key: turnKey(key),
+    role: "user",
+    at: null,
+    speaker: null,
+    parts: texts.map((text) => ({ kind: "text" as const, text })),
+  };
+}
+
+export function draftOf(
+  source: SourceId,
+  native: string,
+  turns: readonly TurnDraft[],
+  extra: Partial<Omit<ItemDraft, "key" | "turns">> = {},
+): ItemDraft {
+  return {
+    key: itemKey(source, native),
+    kind: source === SW ? "dictation" : "conversation",
+    title: native,
+    startedAt: isoTime("2026-01-01T00:00:00.000Z"),
+    endedAt: null,
+    origin: null,
+    parentKey: null,
+    tags: [],
+    supersedeKey: null,
+    meta: {},
+    turns,
+    ...extra,
+  };
+}
+
+export function chunksOf(d: ItemDraft): ChunkDraft[] {
+  return d.turns.flatMap((t) =>
+    t.parts.map((p, partIdx) =>
+      chunkDraft(d.key, {
+        turnKey: t.key,
+        partIdx,
+        sub: 0,
+        kind: p.kind,
+        toolName: p.toolName ?? null,
+        text: p.text,
+        embed: p.kind !== "transcript_raw",
+      }),
+    ),
+  );
+}
+
+export const rev = (hash: string, fidelity = 1, at: number | null = null): Revision => ({
+  fidelity,
+  at,
+  hash,
+});
+
+export function writeOf(
+  source: SourceId,
+  location: LocationId,
+  draft: ItemDraft,
+  revision: Revision,
+  opts: { parserVersion?: number; capture?: Capture } = {},
+): ItemWrite {
+  return {
+    source,
+    location,
+    draft,
+    revision,
+    sighting: sightingOf(draft.key, revision),
+    chunker: CHUNKER,
+    chunks: chunksOf(draft),
+    parserVersion: opts.parserVersion ?? 1,
+    ...(opts.capture ? { capture: opts.capture } : {}),
+  };
+}
+
+export const sightingOf = (key: ItemKey, revision: Revision): Sighting => ({
+  key,
+  revision,
+  locator: `/tmp/${key}`,
+});
+
+/**
+ * Deterministic unit vector near `axis` (0..3), distinct per `seed`: HNSW graphs built from many
+ * exact duplicates can leave other clusters unreachable, which real embeddings never produce.
+ */
+export function vecNear(axis: number, seed = 0): Float32Array {
+  const v = new Float32Array(4).map((_, k) => 0.05 + 0.04 * Math.sin(seed * 1.7 + k * 2.3));
+  v[axis] = 1;
+  const n = Math.hypot(...v);
+  return v.map((x) => x / n);
+}
+
+async function rows(it: AsyncIterable<Row>): Promise<Row[]> {
+  const out: Row[] = [];
+  for await (const r of it) out.push(r);
+  return out;
+}
+
+async function expectStoreError(p: Promise<unknown> | (() => Promise<unknown>), code: StoreError["code"]) {
+  try {
+    await (typeof p === "function" ? p() : p);
+  } catch (e) {
+    expect(e).toBeInstanceOf(StoreError);
+    expect(e instanceof StoreError ? e.code : null).toBe(code);
+    return;
+  }
+  throw new Error(`expected StoreError ${code}`);
+}
+
+export function runStoreContract(name: string, backend: () => ContractBackend): void {
+  describe(`store contract: ${name}`, () => {
+    let b: ContractBackend;
+    const open: (WriteStore | ReadStore)[] = [];
+
+    const writer = async (producer: ProducerId = P1, facets = NO_FACETS, cfg?: StoreConfig) => {
+      const s = await openStore(cfg ?? b.config, {
+        mode: "write",
+        producer,
+        binaryVersion: "test",
+        facets,
+        vectorSpace: SPACE,
+      });
+      open.push(s);
+      return s;
+    };
+    const reader = async (cfg?: StoreConfig) => {
+      const s = await openStore(cfg ?? b.config, { mode: "read", facets: NO_FACETS, vectorSpace: SPACE });
+      open.push(s);
+      return s;
+    };
+
+    beforeAll(() => {
+      b = backend();
+    });
+    beforeEach(async () => {
+      await b.reset();
+    });
+    afterEach(async () => {
+      await Promise.all(open.splice(0).map((s) => s.close()));
+    });
+    afterAll(async () => {
+      await b.reset();
+    });
+
+    describe("migration gate", () => {
+      test("current schema opens for read and write", async () => {
+        const w = await writer();
+        expect(w.schema.state).toBe("current");
+        expect(w.schema.applied).toBe(w.schema.shipped);
+        expect(w.schema.contract).toBe(2);
+        expect((await reader()).schema.state).toBe("current");
+      });
+
+      for (const kind of ["tampered", "gap", "behind"] as const) {
+        test(`${kind} ledger refuses read and write`, async () => {
+          const undo = await b.breakLedger(kind);
+          try {
+            const code =
+              kind === "tampered" ? "schema_tampered" : kind === "gap" ? "schema_gap" : "schema_behind";
+            await expectStoreError(() => writer(), code);
+            await expectStoreError(() => reader(), code);
+          } finally {
+            await undo();
+          }
+          expect((await writer()).schema.state).toBe("current");
+        });
+      }
+
+      test("ahead ledger refuses write, allows read with the same view contract", async () => {
+        const undo = await b.breakLedger("ahead");
+        try {
+          await expectStoreError(() => writer(), "schema_ahead");
+          expect((await reader()).schema.state).toBe("ahead");
+        } finally {
+          await undo();
+        }
+      });
+    });
+
+    describe("triage and apply", () => {
+      test("new → applied, same revision → same, newer → triaged again", async () => {
+        const w = await writer();
+        const d = draftOf(SW, "a", [turnOf("u", "hello world")]);
+        expect(await w.triage(SW, L1, [sightingOf(d.key, rev("h1"))])).toEqual([d.key]);
+        const first = await w.apply(writeOf(SW, L1, d, rev("h1")));
+        expect(first).toEqual({ kind: "applied", turnsChanged: 1, chunksAdded: 1, chunksRemoved: 0 });
+        expect(await w.triage(SW, L1, [sightingOf(d.key, rev("h1"))])).toEqual([]);
+        expect(await w.apply(writeOf(SW, L1, d, rev("h1")))).toEqual({ kind: "same" });
+        expect(await w.triage(SW, L1, [sightingOf(d.key, rev("h2", 1, null))])).toEqual([d.key]);
+      });
+
+      test("lower fidelity is stale; higher fidelity wins regardless of time", async () => {
+        const w1 = await writer(P1);
+        const w2 = await writer(P2);
+        const d = draftOf(CUR, "c1", [turnOf("b1", "jsonl copy")]);
+        await w1.apply(writeOf(CUR, L1, d, rev("j", 1, 500)));
+        const hi = draftOf(CUR, "c1", [turnOf("b1", "vscdb copy")]);
+        expect((await w2.apply(writeOf(CUR, L1, hi, rev("v", 2, 100)))).kind).toBe("applied");
+        const back = await w1.apply(writeOf(CUR, L1, d, rev("j", 1, 900)));
+        expect(back).toEqual({ kind: "stale", stored: rev("v", 2, 100) });
+        expect(await w1.triage(CUR, L1, [sightingOf(d.key, rev("j", 1, 900))])).toEqual([]);
+      });
+
+      test("later source time wins between producers", async () => {
+        const w1 = await writer(P1);
+        const w2 = await writer(P2);
+        const d = (t: string) => draftOf(CUR, "c2", [turnOf("b1", t)]);
+        await w2.apply(writeOf(CUR, L1, d("new"), rev("n", 1, 200)));
+        expect((await w1.apply(writeOf(CUR, L1, d("old"), rev("o", 1, 100)))).kind).toBe("stale");
+        expect((await w1.apply(writeOf(CUR, L1, d("newer"), rev("x", 1, 300)))).kind).toBe("applied");
+      });
+
+      test("timeless conflicting revisions converge in both apply orders", async () => {
+        const da = draftOf(SW, "t", [turnOf("u", "from producer one")]);
+        const db = draftOf(SW, "t", [turnOf("u", "from producer two")]);
+        const finals: string[] = [];
+        for (const order of [0, 1]) {
+          await b.reset();
+          const w1 = await writer(P1);
+          const w2 = await writer(P2);
+          const steps = [
+            () => w1.apply(writeOf(SW, L1, da, rev("ha"))),
+            () => w2.apply(writeOf(SW, L2, db, rev("hb"))),
+          ];
+          if (order) steps.reverse();
+          for (const s of steps) await s();
+          const [r] = await rows(
+            w1.run("SELECT rev_hash, producer_id FROM items WHERE item_key = :k", { params: { k: da.key } }),
+          );
+          finals.push(`${r?.rev_hash}|${r?.producer_id}`);
+          await Promise.all(open.splice(0).map((s) => s.close()));
+        }
+        expect(finals[0]).toBe(finals[1]);
+      });
+
+      test("a newer parser version reparses the same revision; versions are never lowered", async () => {
+        const w = await writer();
+        const d = draftOf(SW, "p", [turnOf("u", "v1 parse")]);
+        await w.apply(writeOf(SW, L1, d, rev("h"), { parserVersion: 2 }));
+        const re = draftOf(SW, "p", [turnOf("u", "v3 parse")]);
+        expect((await w.apply(writeOf(SW, L1, re, rev("h"), { parserVersion: 3 }))).kind).toBe("applied");
+        expect((await w.apply(writeOf(SW, L1, d, rev("h"), { parserVersion: 1 }))).kind).toBe("same");
+        await w.apply(writeOf(SW, L1, d, rev("h2"), { parserVersion: 1 }));
+        const [r] = await rows(
+          w.run("SELECT parser_version FROM items WHERE item_key = :k", { params: { k: d.key } }),
+        );
+        expect(r?.parser_version).toBe(3);
+      });
+
+      test("mid-conversation turn insert keeps other chunk ids and their vectors", async () => {
+        const w = await writer();
+        const before = draftOf(CUR, "mid", [
+          turnOf("a", "first"),
+          turnOf("b", "second"),
+          turnOf("c", "third"),
+        ]);
+        await w.apply(writeOf(CUR, L1, before, rev("1", 1, 1)));
+        const pending = await w.vectors.backlog(SPACE, { limit: 10 });
+        expect(pending.length).toBe(3);
+        expect(
+          await w.vectors.put(
+            SPACE,
+            pending.map((p, i) => ({ hash: p.hash, vector: vecNear(i % 4) })),
+          ),
+        ).toBe(3);
+        const idsBefore = chunksOf(before).map((c) => c.id);
+
+        const after = draftOf(CUR, "mid", [
+          turnOf("a", "first"),
+          turnOf("x", "inserted"),
+          turnOf("b", "second"),
+          turnOf("c", "third"),
+        ]);
+        const out = await w.apply(writeOf(CUR, L1, after, rev("2", 1, 2)));
+        expect(out).toEqual({ kind: "applied", turnsChanged: 1, chunksAdded: 1, chunksRemoved: 0 });
+        const chunkRows = await rows(
+          w.run("SELECT chunk_id, turn_key, ord FROM chunks WHERE item_key = :k ORDER BY ord", {
+            params: { k: after.key },
+          }),
+        );
+        expect(chunkRows.map((r) => r.turn_key)).toEqual(["a", "x", "b", "c"]);
+        expect(chunkRows.map((r) => r.ord)).toEqual([0, 1, 2, 3]);
+        for (const id of idsBefore) expect(chunkRows.some((r) => r.chunk_id === id)).toBe(true);
+        const backlog = await w.vectors.backlog(SPACE, { limit: 10 });
+        expect(backlog.map((p) => p.embedText)).toEqual(["inserted"]);
+        const turns = await rows(
+          w.run("SELECT turn_key, ord FROM turns WHERE item_key = :k ORDER BY ord", {
+            params: { k: after.key },
+          }),
+        );
+        expect(turns.map((t) => t.turn_key)).toEqual(["a", "x", "b", "c"]);
+      });
+
+      test("removed turns delete their chunks; items are never deleted", async () => {
+        const w = await writer();
+        const d = draftOf(CUR, "rm", [turnOf("a", "keep"), turnOf("b", "drop")]);
+        await w.apply(writeOf(CUR, L1, d, rev("1", 1, 1)));
+        const out = await w.apply(
+          writeOf(CUR, L1, draftOf(CUR, "rm", [turnOf("a", "keep")]), rev("2", 1, 2)),
+        );
+        expect(out).toEqual({ kind: "applied", turnsChanged: 1, chunksAdded: 0, chunksRemoved: 1 });
+        await expect(b.admin(`DELETE FROM memindex.item WHERE item_key = '${d.key}'`)).rejects.toThrow(
+          /append-only/,
+        );
+        await expect(b.admin("TRUNCATE memindex.item CASCADE")).rejects.toThrow(/append-only/);
+      });
+
+      test("captures are insert-only and written once per revision", async () => {
+        const w = await writer();
+        const d = draftOf(SW, "cap", [turnOf("u", "spoken")]);
+        const capture = { format: "superwhisper-row", body: { raw: "row", n: 1 } };
+        await w.apply(writeOf(SW, L1, d, rev("h"), { capture }));
+        await w.apply(writeOf(SW, L1, d, rev("h"), { capture, parserVersion: 2 }));
+        expect(await b.admin("SELECT count(*)::int AS n FROM memindex.capture")).toEqual([{ n: 1 }]);
+        await expect(b.admin("UPDATE memindex.capture SET format = 'x'")).rejects.toThrow(/insert-only/);
+        await expect(b.admin("DELETE FROM memindex.capture")).rejects.toThrow(/insert-only/);
+        const [stored] = await collect(w.streamItems({ limit: 10 }));
+        expect(stored?.capture).toEqual(capture);
+      });
+
+      test("concurrent applies of one item from two handles serialize and converge", async () => {
+        const w1 = await writer(P1);
+        const w2 = await writer(P2);
+        const keys = Array.from({ length: 8 }, (_, i) => `race${i}`);
+        await Promise.all(
+          keys.flatMap((k) => [
+            w1.apply(
+              writeOf(
+                CUR,
+                L1,
+                draftOf(CUR, k, [turnOf("a", `one ${k}`), turnOf("b", "shared")]),
+                rev(`a${k}`),
+              ),
+            ),
+            w2.apply(
+              writeOf(
+                CUR,
+                L2,
+                draftOf(CUR, k, [turnOf("a", `two ${k}`), turnOf("c", "other")]),
+                rev(`b${k}`),
+              ),
+            ),
+          ]),
+        );
+        const items = await rows(
+          w1.run("SELECT item_key, producer_id, turn_count FROM items ORDER BY item_key", {}),
+        );
+        expect(items.length).toBe(keys.length);
+        const winner = `${P2}|b` > `${P1}|a` ? P2 : P1;
+        for (const r of items) {
+          expect(r.producer_id).toBe(winner);
+          expect(r.turn_count).toBe(2);
+        }
+        const obs = await rows(w1.run("SELECT count(*) AS n FROM observations", {}));
+        expect(obs[0]?.n).toBe(keys.length * 2);
+      });
+    });
+
+    describe("observations", () => {
+      test("gone is producer- and location-scoped; source_gone is derived", async () => {
+        const w1 = await writer(P1);
+        const w2 = await writer(P2);
+        const a = draftOf(SW, "ga", [turnOf("u", "alpha")]);
+        const bb = draftOf(SW, "gb", [turnOf("u", "beta")]);
+        const c = draftOf(SW, "gc", [turnOf("u", "gamma")]);
+        await w1.apply(writeOf(SW, L1, a, rev("a")));
+        await w1.apply(writeOf(SW, L1, bb, rev("b")));
+        await w1.apply(writeOf(SW, L2, c, rev("c")));
+        await w2.triage(SW, L1, [sightingOf(a.key, rev("a")), sightingOf(bb.key, rev("b"))]);
+
+        expect(await w1.reconcileGone(SW, L1, new Set([a.key]))).toEqual({ markedGone: 1 });
+        expect(await w1.reconcileGone(SW, L1, new Set([a.key]))).toEqual({ markedGone: 0 });
+        const gone = async () =>
+          Object.fromEntries(
+            (await rows(w1.run("SELECT item_key, source_gone FROM items ORDER BY item_key", {}))).map((r) => [
+              r.item_key,
+              r.source_gone,
+            ]),
+          );
+        expect(await gone()).toEqual({ [a.key]: 0, [bb.key]: 0, [c.key]: 0 });
+        await w2.reconcileGone(SW, L1, new Set());
+        expect(await gone()).toEqual({ [a.key]: 0, [bb.key]: 1, [c.key]: 0 });
+
+        await w1.triage(SW, L1, [sightingOf(bb.key, rev("b"))]);
+        expect((await gone())[bb.key]).toBe(0);
+        const stats = await w1.stats();
+        expect(stats.itemsBySource.superwhisper).toEqual({ live: 3, superseded: 0, gone: 0 });
+      });
+    });
+
+    describe("supersedence", () => {
+      test("latest started_at is live in either order; search hides superseded by default", async () => {
+        for (const order of [0, 1]) {
+          await b.reset();
+          const w = await writer();
+          const old = draftOf(SW, "s-old", [turnOf("u", "duplicate pelican recording")], {
+            supersedeKey: "sha1",
+            startedAt: isoTime("2026-01-01T00:00:00Z"),
+          });
+          const neu = draftOf(SW, "s-new", [turnOf("u", "duplicate pelican recording again")], {
+            supersedeKey: "sha1",
+            startedAt: isoTime("2026-01-02T00:00:00Z"),
+          });
+          const ws = [writeOf(SW, L1, old, rev("o")), writeOf(SW, L1, neu, rev("n"))];
+          if (order) ws.reverse();
+          for (const x of ws) await w.apply(x);
+          const all = await rows(
+            w.run("SELECT item_key, superseded_by FROM items_all ORDER BY item_key", {}),
+          );
+          expect(all).toEqual([
+            { item_key: neu.key, superseded_by: null },
+            { item_key: old.key, superseded_by: neu.key },
+          ]);
+          expect((await rows(w.run("SELECT item_key FROM items", {}))).map((r) => r.item_key)).toEqual([
+            neu.key,
+          ]);
+          const hits = await w.search({ via: "keyword", text: "pelican", filter: {}, k: 10 });
+          expect(hits.map((h) => h.itemKey)).toEqual([neu.key]);
+          const allHits = await w.search({
+            via: "keyword",
+            text: "pelican",
+            filter: { includeSuperseded: true },
+            k: 10,
+          });
+          expect(allHits.length).toBe(2);
+          await Promise.all(open.splice(0).map((s) => s.close()));
+        }
+      });
+
+      test("leaving a group releases the old group's winner", async () => {
+        const w = await writer();
+        const mk = (n: string, day: string, key: string | null) =>
+          draftOf(SW, n, [turnOf("u", n)], {
+            supersedeKey: key,
+            startedAt: isoTime(`2026-01-0${day}T00:00:00Z`),
+          });
+        await w.apply(writeOf(SW, L1, mk("x", "1", "g"), rev("x1")));
+        await w.apply(writeOf(SW, L1, mk("y", "2", "g"), rev("y1")));
+        await w.apply(writeOf(SW, L1, mk("y", "2", null), rev("y2")));
+        const live = await rows(w.run("SELECT item_key FROM items ORDER BY item_key", {}));
+        expect(live.length).toBe(2);
+      });
+    });
+
+    describe("vectors", () => {
+      test("backlog prefers items, put is idempotent, gc removes unreferenced vectors", async () => {
+        const w = await writer();
+        const a = draftOf(CUR, "va", [turnOf("a", "alpha text")]);
+        const z = draftOf(CUR, "vz", [turnOf("a", "zulu text")]);
+        const raw = draftOf(SW, "raw", [
+          { ...turnOf("u"), parts: [{ kind: "transcript_raw", text: "raw words" }] },
+        ]);
+        for (const d of [a, z, raw]) await w.apply(writeOf(d === raw ? SW : CUR, L1, d, rev("1")));
+        expect(await w.vectors.backlogSize(SPACE)).toBe(2);
+        const first = await w.vectors.backlog(SPACE, { limit: 1, prefer: [z.key] });
+        expect(first.map((p) => p.embedText)).toEqual(["zulu text"]);
+        const all = await w.vectors.backlog(SPACE, { limit: 10, prefer: [z.key] });
+        expect(all.map((p) => p.embedText)).toEqual(["zulu text", "alpha text"]);
+        const put = all.map((p) => ({ hash: p.hash, vector: vecNear(0) }));
+        expect(await w.vectors.put(SPACE, put)).toBe(2);
+        expect(await w.vectors.put(SPACE, put)).toBe(0);
+        expect(await w.vectors.backlogSize(SPACE)).toBe(0);
+        expect((await w.stats()).embedBacklog[SPACE.id]).toBe(0);
+
+        await w.apply(writeOf(CUR, L1, draftOf(CUR, "va", [turnOf("a", "alpha rewritten")]), rev("2")));
+        expect(await w.vectors.gc(SPACE)).toBe(1);
+        expect(await w.vectors.gc(SPACE)).toBe(0);
+        expect(await w.vectors.backlogSize(SPACE)).toBe(1);
+      });
+
+      test("a wrong-dimension vector is refused", async () => {
+        const w = await writer();
+        await expect(
+          w.vectors.put(SPACE, [{ hash: contentHash("x"), vector: new Float32Array(3) }]),
+        ).rejects.toThrow(/dims/);
+      });
+    });
+
+    describe("search", () => {
+      async function seedCorpus(w: WriteStore) {
+        // 120 cursor chunks near axis 0, 6 superwhisper chunks near axis 1.
+        for (let i = 0; i < 120; i++) {
+          await w.apply(
+            writeOf(
+              CUR,
+              L1,
+              draftOf(CUR, `chat${i}`, [turnOf("m", `refactor the rate limiter module number ${i}`)]),
+              rev("1"),
+            ),
+          );
+        }
+        for (let i = 0; i < 6; i++) {
+          await w.apply(
+            writeOf(
+              SW,
+              L1,
+              draftOf(SW, `dict${i}`, [turnOf("u", `pricing call with Anna, note ${i}`)], {
+                startedAt: isoTime(`2026-03-0${i + 1}T00:00:00Z`),
+              }),
+              rev("1"),
+            ),
+          );
+        }
+        const pending = await w.vectors.backlog(SPACE, { limit: 1000 });
+        const texts = new Map<string, string>(pending.map((p) => [p.hash, p.embedText]));
+        await w.vectors.put(
+          SPACE,
+          pending.map((p, i) => ({
+            hash: p.hash,
+            vector: vecNear(texts.get(p.hash)?.startsWith("pricing") ? 1 : 0, i + 1),
+          })),
+        );
+      }
+
+      test("keyword, fuzzy, vector and hybrid with filters", async () => {
+        const w = await writer();
+        await seedCorpus(w);
+        const kw = await w.search({ via: "keyword", text: "rate limiter", filter: { source: [CUR] }, k: 5 });
+        expect(kw.length).toBe(5);
+        expect(kw.map((h) => h.rank)).toEqual([1, 2, 3, 4, 5]);
+        expect(kw[0]?.via).toBe("keyword");
+        expect(kw[0]?.snippet).toContain("«");
+        expect(
+          await w.search({ via: "keyword", text: "rate limiter", filter: { source: [SW] }, k: 5 }),
+        ).toEqual([]);
+
+        const fz = await w.search({ via: "fuzzy", text: "limitter", filter: {}, k: 3 });
+        expect(fz.length).toBe(3);
+        expect(fz.every((h) => h.itemKey.startsWith("cursor:"))).toBe(true);
+        expect(await w.search({ via: "fuzzy", text: "li", filter: {}, k: 3 })).toEqual([]);
+
+        const vec = await w.search({ via: "vector", vector: vecNear(1), space: SPACE, filter: {}, k: 6 });
+        expect(vec.map((h) => h.via)).toEqual(Array(6).fill("semantic"));
+        expect(vec.every((h) => h.itemKey.startsWith("superwhisper:"))).toBe(true);
+        expect(vec[0]?.score ?? 0).toBeGreaterThan(0.9);
+
+        const since = await w.search({
+          via: "vector",
+          vector: vecNear(1),
+          space: SPACE,
+          filter: { since: isoTime("2026-03-04T00:00:00Z") },
+          k: 10,
+        });
+        expect(since.length).toBe(3);
+
+        const kinds = await w.search({
+          via: "keyword",
+          text: "pricing",
+          filter: { kind: ["conversation"] },
+          k: 5,
+        });
+        expect(kinds).toEqual([]);
+        const items = await w.search({
+          via: "keyword",
+          text: "pricing",
+          filter: { items: [itemKey(SW, "dict2")] },
+          k: 5,
+        });
+        expect(items.map((h) => h.itemKey)).toEqual([itemKey(SW, "dict2")]);
+
+        const hy = await w.search({
+          via: "hybrid",
+          text: "pricing Anna",
+          vector: vecNear(1),
+          space: SPACE,
+          filter: {},
+          k: 4,
+        });
+        expect(hy.length).toBe(4);
+        expect(hy[0]?.via).toBe("hybrid");
+        expect(hy[0]?.score ?? 0).toBeGreaterThan(1 / 61);
+        expect(hy.every((h) => h.itemKey.startsWith("superwhisper:"))).toBe(true);
+      });
+
+      test("a narrow source filter still returns k through the vector index", async () => {
+        const w = await writer();
+        await seedCorpus(w);
+        expect(await b.usesVectorIndex(SPACE)).toBe(true);
+        const r = await reader(await b.roleConfig("hnsw"));
+        // The query points at the big source, so plain KNN + post-filter would starve the small one.
+        const hits = await r.search({
+          via: "vector",
+          vector: vecNear(0),
+          space: SPACE,
+          filter: { source: [SW] },
+          k: 5,
+        });
+        expect(hits.length).toBe(5);
+        expect(hits.every((h) => h.itemKey.startsWith("superwhisper:"))).toBe(true);
+      });
+    });
+
+    describe("run()", () => {
+      test("hits from a search request, params, leading WITH, Hit lists", async () => {
+        const w = await writer();
+        for (let i = 0; i < 3; i++) {
+          await w.apply(
+            writeOf(CUR, L1, draftOf(CUR, `r${i}`, [turnOf("m", `token refresh bug ${i}`)]), rev("1")),
+          );
+        }
+        const req = { via: "keyword" as const, text: "token refresh", filter: { source: [CUR] }, k: 10 };
+        const viaSearch = await rows(
+          w.run(
+            "SELECT h.rank, i.title, h.via FROM hits h JOIN items i USING (item_key) WHERE i.title <> :skip ORDER BY h.rank",
+            {
+              hits: req,
+              params: { skip: "r1" },
+            },
+          ),
+        );
+        expect(viaSearch.length).toBe(2);
+        expect(viaSearch.map((r) => r.title)).not.toContain("r1");
+        expect(viaSearch.every((r) => r.via === "keyword")).toBe(true);
+
+        const withCte = await rows(
+          w.run(
+            "-- best per item\nWITH best AS (SELECT item_key, MIN(rank) AS r FROM hits GROUP BY item_key) SELECT count(*) AS n FROM best",
+            { hits: req },
+          ),
+        );
+        expect(withCte).toEqual([{ n: 3 }]);
+
+        const list: Hit[] = (await w.search(req)).slice(0, 2);
+        const fromList = await rows(w.run("SELECT chunk_id, score FROM hits ORDER BY rank", { hits: list }));
+        expect(fromList.map((r) => r.chunk_id)).toEqual(list.map((h) => h.chunkId));
+
+        const typed = await rows(
+          w.run(
+            "SELECT meta, tags, true AS yes, 1::bigint AS big, started_day, age_days FROM items LIMIT 1",
+            {},
+          ),
+        );
+        expect(typed[0]).toMatchObject({ meta: "{}", tags: "[]", yes: 1, big: 1 });
+        expect(typeof typed[0]?.age_days).toBe("number");
+      });
+
+      test("read-only, timeout, maxRows marker, legacy names", async () => {
+        const w = await writer();
+        await w.apply(writeOf(SW, L1, draftOf(SW, "ro", [turnOf("u", "x")]), rev("1")));
+        await expectStoreError(
+          w
+            .run(
+              "INSERT INTO memindex.producer (producer_id, host, binary_version) VALUES ('x', 'y', 'z')",
+              {},
+            )
+            [Symbol.asyncIterator]()
+            .next(),
+          "readonly",
+        );
+        await expect(rows(w.run("SELECT * FROM memindex.item", {}))).rejects.toThrow(/permission denied/);
+        await expect(rows(w.run("SELECT memindex.vec_gc()", {}))).rejects.toThrow(
+          /permission denied|read-only/,
+        );
+        await expect(rows(w.run("SELECT pg_sleep(2)", { timeoutMs: 100 }))).rejects.toThrow(
+          /statement timeout/,
+        );
+        const many = await rows(w.run("SELECT g FROM generate_series(1, 50) g", { maxRows: 10 }));
+        expect(many.length).toBe(11);
+        expect(many.at(-1)).toEqual({ __truncated: 1, __max_rows: 10 });
+        await expectStoreError(rows(w.run("SELECT * FROM recording_chunks", {})), "legacy_sql");
+        await expectStoreError(rows(w.run("SELECT m.* FROM main.message m", {})), "legacy_sql");
+        expect(await rows(w.run("SELECT 'recording' AS message, 'from message' AS x", {}))).toEqual([
+          { message: "recording", x: "from message" },
+        ]);
+        await expect(rows(w.run("SELECT 1; SELECT 2", {}))).rejects.toThrow(/one statement/);
+      });
+    });
+
+    describe("facets and roles", () => {
+      test("facet views are generated, typed, and recreated when the declaration changes", async () => {
+        const facets = new Map<SourceId, Facets>([
+          [SW, { mode: "text", duration_ms: "int", starred: "bool" }],
+        ]);
+        const w = await writer(P1, facets);
+        await w.apply(
+          writeOf(
+            SW,
+            L1,
+            draftOf(SW, "f", [turnOf("u", "x")], {
+              meta: { mode: "email", duration_ms: 1500.7, starred: true },
+            }),
+            rev("1"),
+          ),
+        );
+        expect(await rows(w.run("SELECT mode, duration_ms, starred FROM superwhisper_items", {}))).toEqual([
+          { mode: "email", duration_ms: 1500, starred: 1 },
+        ]);
+        await w.close();
+        const w2 = await writer(P1, new Map<SourceId, Facets>([[SW, { mode: "text", language: "text" }]]));
+        expect(await rows(w2.run("SELECT mode, language FROM superwhisper_items", {}))).toEqual([
+          { mode: "email", language: null },
+        ]);
+        await expect(rows(w2.run("SELECT duration_ms FROM superwhisper_items", {}))).rejects.toThrow(
+          /duration_ms/,
+        );
+      });
+
+      test("the reader role reads views and searches but cannot write; the writer role can write", async () => {
+        const ww = await writer(P1, NO_FACETS, await b.roleConfig("writer"));
+        expect(
+          (await ww.apply(writeOf(SW, L1, draftOf(SW, "role", [turnOf("u", "role check words")]), rev("1"))))
+            .kind,
+        ).toBe("applied");
+        await ww.ledger.setCursor(SW, L1, "since", "42");
+
+        const r = await reader(await b.roleConfig("reader"));
+        expect((await r.search({ via: "keyword", text: "role check", filter: {}, k: 5 })).length).toBe(1);
+        expect((await rows(r.run("SELECT count(*) AS n FROM items", {})))[0]?.n).toBe(1);
+        await expect(b.asReader("SELECT * FROM memindex.item")).rejects.toThrow(/permission denied/);
+        await expect(b.asReader("INSERT INTO memindex.producer VALUES ('x','y','z')")).rejects.toThrow(
+          /read-only|permission denied/,
+        );
+        await expect(b.asReader("SELECT memindex.ensure_vector_space('x', 'm', 3)")).rejects.toThrow(
+          /read-only|permission denied/,
+        );
+      });
+    });
+
+    describe("stream, rechunk, ledger", () => {
+      test("streamItems round-trips drafts and filters; replaceChunks is CAS", async () => {
+        const w = await writer();
+        const t: TurnDraft = {
+          key: turnKey("t1"),
+          role: "assistant",
+          at: isoTime("2026-02-02T10:00:00.123Z"),
+          speaker: null,
+          parts: [
+            { kind: "text", text: "hi" },
+            { kind: "tool_call", text: '{"q":1}', toolName: "grep", toolCallId: "call-1" },
+          ],
+        };
+        const d = draftOf(CUR, "stream", [t], {
+          tags: ["b", "a"],
+          meta: { repo: "memex" },
+          origin: "memex",
+          title: "T",
+        });
+        await w.apply(writeOf(CUR, L1, d, rev("h", 2, 7)));
+        await w.apply(writeOf(CUR, L1, draftOf(CUR, "stream2", [turnOf("x", "y")]), rev("h")));
+        const [got] = await collect(w.streamItems({ limit: 1 }));
+        expect(got?.draft).toEqual({ ...d, tags: ["a", "b"] });
+        expect(got?.revision).toEqual(rev("h", 2, 7));
+        expect(got?.producer).toBe(P1);
+        expect(
+          (await collect(w.streamItems({ limit: 10, afterKey: d.key }))).map((s) => s.draft.key),
+        ).toEqual([itemKey(CUR, "stream2")]);
+        expect(await collect(w.streamItems({ limit: 10, staleChunker: chunkerId("parts", 1) }))).toEqual([]);
+
+        const rechunked = [
+          chunkDraft(d.key, {
+            turnKey: t.key,
+            partIdx: 0,
+            sub: 0,
+            kind: "text",
+            toolName: null,
+            text: "hi (v2)",
+            embed: true,
+          }),
+        ];
+        expect(await w.replaceChunks(d.key, "wrong", chunkerId("parts", 2), rechunked)).toBe("conflict");
+        expect(await w.replaceChunks(d.key, "h", chunkerId("parts", 2), rechunked)).toBe("replaced");
+        const stale = await collect(w.streamItems({ limit: 10, staleChunker: chunkerId("parts", 2) }));
+        expect(stale.map((s) => s.draft.key)).toEqual([itemKey(CUR, "stream2")]);
+        const texts = await rows(
+          w.run("SELECT text FROM chunks WHERE item_key = :k", { params: { k: d.key } }),
+        );
+        expect(texts).toEqual([{ text: "hi (v2)" }]);
+      });
+
+      test("cursors and jobs are producer-scoped", async () => {
+        const w1 = await writer(P1);
+        const w2 = await writer(P2);
+        await w1.ledger.setCursor(SW, L1, "rowid", "10");
+        await w1.ledger.setCursor(SW, L1, "rowid", "11");
+        expect(await w1.ledger.getCursor(SW, L1, "rowid")).toBe("11");
+        expect(await w2.ledger.getCursor(SW, L1, "rowid")).toBeNull();
+        const job = {
+          jobId: "import-swrag",
+          codeVersion: 1,
+          state: "running" as const,
+          cursor: "abc",
+          done: 5,
+          total: null,
+          error: null,
+          updatedAt: isoTime("2026-02-02T00:00:00Z"),
+        };
+        await w1.ledger.saveJob(job);
+        await w1.ledger.saveJob({ ...job, state: "done", done: 9, total: 9 });
+        expect(await w1.ledger.loadJob("import-swrag")).toEqual({ ...job, state: "done", done: 9, total: 9 });
+        expect(await w2.ledger.loadJob("import-swrag")).toBeNull();
+        const stats = await w1.stats();
+        expect(stats.producers.map((p) => p.id).sort()).toEqual([P1, P2]);
+      });
+    });
+  });
+}
+
+async function collect<T>(it: AsyncIterable<T>): Promise<T[]> {
+  const out: T[] = [];
+  for await (const x of it) out.push(x);
+  return out;
+}

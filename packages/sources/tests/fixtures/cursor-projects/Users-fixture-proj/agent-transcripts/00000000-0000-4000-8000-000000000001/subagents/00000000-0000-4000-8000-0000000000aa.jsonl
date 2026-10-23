@@ -1,0 +1,2 @@
+{"role":"user","message":{"content":[{"type":"text","text":"SUBAGENT_TASK_PLACEHOLDER"}]}}
+{"role":"assistant","message":{"content":[{"type":"text","text":"SUBAGENT_RESULT_PLACEHOLDER"}]}}

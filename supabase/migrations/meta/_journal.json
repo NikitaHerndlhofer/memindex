@@ -1,0 +1,27 @@
+{
+  "version": "7",
+  "dialect": "postgresql",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "7",
+      "when": 1792783483138,
+      "tag": "20261023192443_memindex_prereq",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1792783484480,
+      "tag": "20261023192444_memindex_tables",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1792783485821,
+      "tag": "20261023192445_memindex_api",
+      "breakpoints": true
+    }
+  ]
+}
