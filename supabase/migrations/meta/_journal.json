@@ -36,6 +36,20 @@
       "when": 1792788778566,
       "tag": "20261023205258_memindex_vector_bulk",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1792792755218,
+      "tag": "20261023215915_memindex_bounded_tsv",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1792792907393,
+      "tag": "20261023220147_memindex_serial_vector_index",
+      "breakpoints": true
     }
   ]
 }

@@ -528,7 +528,7 @@ export class PgWriteStore extends PgReadStore implements WriteStore {
             WHERE t.item_key = ${d.key}::text AND t.turn_key = r.key`);
         }
         await upsertChunks(tx, d.key, write.source, head.startedAt, plan.chunks.upsert);
-        await syncChunkHeads(tx, d.key, head.startedAt);
+        if (!plan.isNew) await syncChunkHeads(tx, d.key, head.startedAt);
         if (write.capture)
           await insertCapture(tx, d.key, write.revision, this.producer, write.parserVersion, write.capture);
         for (const g of plan.recompute) await recomputeGroup(tx, g.source, g.key);
@@ -571,7 +571,10 @@ export class PgWriteStore extends PgReadStore implements WriteStore {
           .where(eq(item.itemKey, key))
           .for("update");
         if (!h || h.revHash !== expectedHash) return "conflict";
-        const turnKeys = await tx.select({ k: turn.turnKey }).from(turn).where(eq(turn.itemKey, key));
+        const turns = await tx
+          .select({ k: turn.turnKey, ord: turn.ord })
+          .from(turn)
+          .where(eq(turn.itemKey, key));
         const current = await tx
           .select({ id: chunk.chunkId, h: chunk.chunkHash })
           .from(chunk)
@@ -579,11 +582,10 @@ export class PgWriteStore extends PgReadStore implements WriteStore {
         const diff = diffChunks(
           new Map(current.map((c) => [c.id, c.h])),
           chunks,
-          new Set(turnKeys.map((t) => t.k)),
+          new Map(turns.map((t) => [t.k, t.ord])),
         );
         for (const ids of chunked(diff.delete)) await tx.delete(chunk).where(inArray(chunk.chunkId, ids));
         await upsertChunks(tx, key, h.source as SourceId, h.startedAt, diff.upsert);
-        await syncChunkHeads(tx, key, h.startedAt);
         await tx.update(item).set({ chunker }).where(eq(item.itemKey, key));
         return "replaced";
       }),
@@ -827,13 +829,13 @@ async function upsertChunks(
     await tx
       .insert(chunk)
       .values(
-        batch.map(({ draft: c, chunkHash }) => ({
+        batch.map(({ draft: c, chunkHash, ord }) => ({
           chunkId: c.id,
           itemKey: key,
           turnKey: c.turnKey,
           source,
           startedAt,
-          ord: 0,
+          ord,
           partIdx: c.partIdx,
           sub: c.sub,
           kind: c.kind,
@@ -849,6 +851,8 @@ async function upsertChunks(
         target: chunk.chunkId,
         set: {
           turnKey: sql`excluded.turn_key`,
+          startedAt: sql`excluded.started_at`,
+          ord: sql`excluded.ord`,
           partIdx: sql`excluded.part_idx`,
           sub: sql`excluded.sub`,
           kind: sql`excluded.kind`,

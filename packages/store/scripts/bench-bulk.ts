@@ -20,7 +20,7 @@ import {
 import postgres from "postgres";
 import { type ItemWrite, migrateStore, openStore } from "../src/index.ts";
 
-const ADMIN = process.env.MEMINDEX_TEST_PG_URL ?? "postgres://postgres:postgres@127.0.0.1:54322/postgres";
+const ADMIN = process.env.MEMINDEX_TEST_PG_URL ?? "postgres://postgres:postgres@127.0.0.1:54422/postgres";
 const [nItems = 500, perItem = 100, nVectors = 20_000] = process.argv.slice(2).map(Number);
 const DB = `memindex_bench_${process.pid}`;
 const SRC = sourceId("acrag");

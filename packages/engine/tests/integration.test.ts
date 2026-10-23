@@ -11,18 +11,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { migrateStore } from "@memindex/store";
 import { SQL } from "bun";
-import {
-  type Archive,
-  LOCAL_SUPABASE_URL,
-  loadConfig,
-  openArchive,
-  RECIPES,
-  type Recipe,
-  VIEW_CONTRACT,
-} from "../src/index.ts";
+import { type Archive, loadConfig, openArchive, RECIPES, type Recipe, VIEW_CONTRACT } from "../src/index.ts";
 import { fakeEmbedder, recordingLog } from "./fakes.ts";
 
-const ADMIN_URL = process.env.MEMINDEX_TEST_PG ?? LOCAL_SUPABASE_URL;
+const ADMIN_URL = process.env.MEMINDEX_TEST_PG ?? "postgres://postgres:postgres@127.0.0.1:54422/postgres";
 const FIXTURES = join(import.meta.dir, "..", "..", "sources", "tests", "fixtures");
 const DB_NAME = `memindex_engine_it_${process.pid}`;
 

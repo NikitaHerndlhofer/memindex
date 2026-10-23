@@ -42,6 +42,8 @@ export interface PlannedTurn {
 export interface PlannedChunk {
   readonly draft: ChunkDraft;
   readonly chunkHash: string;
+  /** Its turn's ord. */
+  readonly ord: number;
 }
 
 export interface ChunkDiff {
@@ -114,16 +116,18 @@ export function chunkHash(c: ChunkDraft): string {
 export function diffChunks(
   current: ReadonlyMap<string, string>,
   chunks: readonly ChunkDraft[],
-  turnKeys: ReadonlySet<string>,
+  /** turn_key → ord */
+  turnOrd: ReadonlyMap<string, number>,
 ): ChunkDiff {
   const seen = new Set<string>();
   const upsert: PlannedChunk[] = [];
   for (const c of chunks) {
     if (seen.has(c.id)) throw new Error(`duplicate chunk id ${c.id}`);
     seen.add(c.id);
-    if (!turnKeys.has(c.turnKey)) throw new Error(`chunk ${c.id} references unknown turn ${c.turnKey}`);
+    const ord = turnOrd.get(c.turnKey);
+    if (ord === undefined) throw new Error(`chunk ${c.id} references unknown turn ${c.turnKey}`);
     const h = chunkHash(c);
-    if (current.get(c.id) !== h) upsert.push({ draft: c, chunkHash: h });
+    if (current.get(c.id) !== h) upsert.push({ draft: c, chunkHash: h, ord });
   }
   const del = [...current.keys()].filter((id) => !seen.has(id));
   return { upsert, delete: del };
@@ -145,12 +149,12 @@ export function planItemWrite(
     if (order === "same" && write.parserVersion <= current.parserVersion) return { kind: "same" };
   }
 
-  const turnKeys = new Set<string>();
+  const turnOrd = new Map<string, number>();
   const upsertTurns: PlannedTurn[] = [];
   const reorderTurns: { key: string; ord: number }[] = [];
   draft.turns.forEach((t, ord) => {
-    if (turnKeys.has(t.key)) throw new Error(`duplicate turn key ${t.key} in ${draft.key}`);
-    turnKeys.add(t.key);
+    if (turnOrd.has(t.key)) throw new Error(`duplicate turn key ${t.key} in ${draft.key}`);
+    turnOrd.set(t.key, ord);
     const h = turnHash(t);
     const head = current?.turns.get(t.key);
     if (!head || head.partsHash !== h) {
@@ -163,7 +167,7 @@ export function planItemWrite(
       });
     } else if (head.ord !== ord) reorderTurns.push({ key: t.key, ord });
   });
-  const deleteTurns = current ? [...current.turns.keys()].filter((k) => !turnKeys.has(k)) : [];
+  const deleteTurns = current ? [...current.turns.keys()].filter((k) => !turnOrd.has(k)) : [];
 
   const recompute: SupersedeGroup[] = [];
   if (draft.supersedeKey !== null) recompute.push({ source: write.source, key: draft.supersedeKey });
@@ -178,7 +182,7 @@ export function planItemWrite(
     upsertTurns,
     reorderTurns,
     deleteTurns,
-    chunks: diffChunks(current?.chunks ?? new Map(), write.chunks, turnKeys),
+    chunks: diffChunks(current?.chunks ?? new Map(), write.chunks, turnOrd),
     recompute,
   };
 }

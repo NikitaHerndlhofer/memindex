@@ -672,6 +672,32 @@ export function runStoreContract(name: string, backend: () => ContractBackend): 
         expect(hy.every((h) => h.itemKey.startsWith("superwhisper:"))).toBe(true);
       });
 
+      test("a multi-megabyte chunk applies whole and its opening words are keyword- and fuzzy-searchable", async () => {
+        const w = await writer();
+        const letters = "abcdefghijklmnopqrstuvwxyz";
+        const word = (i: number) => {
+          let s = "";
+          for (let n = i + 26 * 26; n > 0; n = Math.floor(n / 26)) s += letters[n % 26];
+          return s;
+        };
+        const words = ["quetzalcoatl", "zeppelin"];
+        for (let i = 0, n = 0; n < 2_000_000; i++) {
+          words.push(word(i));
+          n += word(i).length + 1;
+        }
+        const text = words.join(" ");
+        const d = draftOf(CUR, "huge", [turnOf("m", text)]);
+        expect((await w.apply(writeOf(CUR, L1, d, rev("1")))).kind).toBe("applied");
+        const [stored] = await b.admin(
+          `SELECT length(text) AS n FROM memindex.chunk WHERE item_key = '${d.key}'`,
+        );
+        expect(Number(stored?.n)).toBe(text.length);
+        const kw = await w.search({ via: "keyword", text: "quetzalcoatl", filter: {}, k: 5 });
+        expect(kw.map((h) => h.itemKey)).toEqual([d.key]);
+        const fz = await w.search({ via: "fuzzy", text: "zepelin", filter: {}, k: 5 });
+        expect(fz.map((h) => h.itemKey)).toEqual([d.key]);
+      }, 60_000);
+
       test("a narrow source filter still returns k through the vector index", async () => {
         const w = await writer();
         await seedCorpus(w);

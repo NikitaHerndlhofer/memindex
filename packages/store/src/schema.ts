@@ -172,10 +172,14 @@ export const chunk = memindex
       /** Fingerprint of every stored chunk field: the chunk diff key (text can change while embedText doesn't). */
       chunkHash: text("chunk_hash").notNull(),
       embed: boolean("embed").notNull(),
+      /**
+       * Built from the first 100k characters: a tsvector is capped at 1 MB, and adversarial text
+       * (distinct hyphenated tokens) costs up to ~4 bytes per character across both configs.
+       */
       tsv: tsvector("tsv")
         .notNull()
         .generatedAlwaysAs(
-          sql`setweight(to_tsvector('english'::regconfig, memindex.immutable_unaccent(text)), 'A') || to_tsvector('simple'::regconfig, memindex.immutable_unaccent(text))`,
+          sql`setweight(to_tsvector('english'::regconfig, memindex.immutable_unaccent(left(text, 100000))), 'A') || to_tsvector('simple'::regconfig, memindex.immutable_unaccent(left(text, 100000)))`,
         ),
     },
     (t) => [

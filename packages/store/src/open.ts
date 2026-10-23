@@ -64,7 +64,7 @@ export async function migrateStore(cfg: StoreConfig, opts: MigrateOptions = {}):
   let out: string;
   let err: string;
   try {
-    materializeSupabaseProject(workdir);
+    materializeSupabaseProject(workdir, { dbPort: Number(new URL(url).port || 5432) });
     const proc = Bun.spawn([bin, "migration", "up", "--db-url", url, "--workdir", workdir], {
       stdout: "pipe",
       stderr: "pipe",

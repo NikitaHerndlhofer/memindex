@@ -8,6 +8,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { contentHash } from "@memindex/model";
 import postgres from "postgres";
 import {
   materializeSupabaseProject,
@@ -16,9 +17,9 @@ import {
   type StoreConfig,
   StoreError,
 } from "../src/index.ts";
-import { type ContractBackend, type LedgerBreak, P1, runStoreContract, SPACE } from "./contract.ts";
+import { type ContractBackend, type LedgerBreak, P1, runStoreContract, SPACE, vecNear } from "./contract.ts";
 
-const URL_ = process.env.MEMINDEX_TEST_PG_URL ?? "postgres://postgres:postgres@127.0.0.1:54322/postgres";
+const URL_ = process.env.MEMINDEX_TEST_PG_URL ?? "postgres://postgres:postgres@127.0.0.1:54422/postgres";
 const cfg: StoreConfig = { backend: "postgres", url: URL_ };
 const admin = postgres(URL_, { max: 2, onnotice: () => {} });
 
@@ -156,6 +157,38 @@ afterAll(async () => {
 
 runStoreContract("local supabase", () => backend);
 
+describe("local supabase container limits", () => {
+  test("vector index builds (bulkPut, repair on open) fit the container's 64 MB /dev/shm", async () => {
+    await backend.reset();
+    // A legacy-sized table makes the planner give the HNSW build parallel workers; this does it for 2,000 rows.
+    const u = new URL(URL_);
+    u.searchParams.set("min_parallel_table_scan_size", "0");
+    const cfgParallel: StoreConfig = { backend: "postgres", url: u.toString() };
+    const opts = {
+      mode: "write",
+      producer: P1,
+      binaryVersion: "test",
+      facets: new Map(),
+      vectorSpace: SPACE,
+    } as const;
+    const w = await openStore(cfgParallel, opts);
+    try {
+      const vecs = Array.from({ length: 2000 }, (_, i) => ({
+        hash: contentHash(`bulk-${i}`),
+        vector: vecNear(i % 4, i),
+      }));
+      expect(await w.vectors.bulkPut(SPACE, [vecs])).toBe(2000);
+      expect(await backend.usesVectorIndex(SPACE)).toBe(true);
+      await admin.unsafe(`SELECT memindex.drop_vector_index('${SPACE.id}')`);
+      await (await openStore(cfgParallel, opts)).close();
+      expect(await backend.usesVectorIndex(SPACE)).toBe(true);
+    } finally {
+      await w.close();
+      await backend.reset();
+    }
+  }, 120_000);
+});
+
 describe("supabase CLI is the migrator", () => {
   const scratch = `memindex_scratch_${process.pid}`;
   const scratchUrl = (() => {
@@ -204,7 +237,7 @@ describe("supabase CLI is the migrator", () => {
     await w.close();
   }, 120_000);
 
-  test("materializeSupabaseProject writes the shipped project exactly", () => {
+  test("materializeSupabaseProject writes the shipped migrations exactly, as the installed `memindex` stack", () => {
     const dir = mkdtempSync(join(tmpdir(), "memindex-project-"));
     try {
       mkdirSync(join(dir, "supabase", "migrations"), { recursive: true });
@@ -212,9 +245,24 @@ describe("supabase CLI is the migrator", () => {
       expect(materializeSupabaseProject(dir)).toEqual({ projectDir: dir });
       materializeSupabaseProject(dir);
       const repo = join(import.meta.dir, "../../../supabase");
-      expect(readFileSync(join(dir, "supabase", "config.toml"), "utf8")).toBe(
-        readFileSync(join(repo, "config.toml"), "utf8"),
-      );
+      type Toml = { project_id: string; api: { port: number }; db: { port: number; shadow_port: number } };
+      const installed = Bun.TOML.parse(readFileSync(join(dir, "supabase", "config.toml"), "utf8")) as Toml;
+      const dev = Bun.TOML.parse(readFileSync(join(repo, "config.toml"), "utf8")) as Toml;
+      expect(installed).toMatchObject({
+        project_id: "memindex",
+        api: { port: 54321 },
+        db: { port: 54322, shadow_port: 54320 },
+      });
+      expect(dev).toMatchObject({
+        project_id: "memindex-dev",
+        api: { port: 54421 },
+        db: { port: 54422, shadow_port: 54420 },
+      });
+      materializeSupabaseProject(dir, { dbPort: 6000 });
+      expect(Bun.TOML.parse(readFileSync(join(dir, "supabase", "config.toml"), "utf8"))).toMatchObject({
+        project_id: "memindex",
+        db: { port: 6000 },
+      });
       const sqlFiles = (d: string) =>
         readdirSync(d)
           .filter((f) => f.endsWith(".sql"))

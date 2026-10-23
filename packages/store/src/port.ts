@@ -212,7 +212,7 @@ export interface VectorRepo {
   ): Promise<number>;
   /**
    * put() for imports: drops the space's vector index, puts every batch, then rebuilds the index
-   * once (with `maintenanceWorkMem`, default 1GB). Searches stay correct but scan exactly while it
+   * once, serially (`maintenanceWorkMem` of backend memory, default 1GB). Searches stay correct but scan exactly while it
    * runs; if the process dies, the next write-mode open rebuilds the index. Returns rows inserted.
    */
   bulkPut(
