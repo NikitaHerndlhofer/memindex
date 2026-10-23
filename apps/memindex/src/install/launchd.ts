@@ -3,8 +3,8 @@ import { mkdir, unlink, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { run } from "../spawn.ts";
 
-export const PLIST_LABEL = "com.memex.watch";
-/** Labels of the apps memex replaces; their watchers are booted out on install. */
+export const PLIST_LABEL = "com.memindex.watch";
+/** Labels of the apps memindex replaces; their watchers are booted out on install. */
 export const LEGACY_LABELS = ["com.superwhisper-rag.watch", "com.acrag.watch"] as const;
 
 export function plistPath(home: string, label = PLIST_LABEL): string {
@@ -19,7 +19,7 @@ export interface PlistTemplate {
   readonly throttleSeconds?: number;
 }
 
-/** Keepalive agent: launchd restarts `memex watch`, which reacts to FSEvents itself (no StartInterval). */
+/** Keepalive agent: launchd restarts `memindex watch`, which reacts to FSEvents itself (no StartInterval). */
 export function renderPlist(t: PlistTemplate): string {
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">

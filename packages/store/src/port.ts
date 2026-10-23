@@ -25,11 +25,11 @@ import type {
   Sighting,
   SourceId,
   VectorSpace,
-} from "@memex/model";
+} from "@memindex/model";
 
 export type Backend = "sqlite" | "postgres";
 
-/** Parsed once from config / MEMEX_STORE. Never a raw string past this point. */
+/** Parsed once from config / MEMINDEX_STORE. Never a raw string past this point. */
 export type StoreConfig =
   | { readonly backend: "sqlite"; readonly path: string }
   | { readonly backend: "postgres"; readonly url: string };

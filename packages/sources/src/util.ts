@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { basename, join } from "node:path";
-import { sha256Hex } from "@memex/model";
+import { sha256Hex } from "@memindex/model";
 
 export function asString(v: unknown): string | null {
   return typeof v === "string" && v.length > 0 ? v : null;

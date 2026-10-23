@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { contentHash, type ItemDraft, isoTime, itemKey, sha256Hex, turnKey } from "@memex/model";
+import { contentHash, type ItemDraft, isoTime, itemKey, sha256Hex, turnKey } from "@memindex/model";
 import { chunkText, wordsChunker } from "../src/chunkers/words.ts";
 import { FIXTURES } from "./helpers.ts";
 import { WORD_INPUTS } from "./words-inputs.ts";

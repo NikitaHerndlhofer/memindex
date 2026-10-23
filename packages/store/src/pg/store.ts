@@ -16,7 +16,7 @@ import {
   type SourceId,
   type TurnKey,
   type VectorSpace,
-} from "@memex/model";
+} from "@memindex/model";
 import { and, asc, eq, gt, inArray, ne, type SQL, sql } from "drizzle-orm";
 import {
   diffChunks,

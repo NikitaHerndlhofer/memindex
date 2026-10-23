@@ -1,10 +1,10 @@
 /**
- * @memex/engine — the Archive. The only thing the CLI talks to.
+ * @memindex/engine — the Archive. The only thing the CLI talks to.
  *   ingest = scan → triage → read → validate meta → chunk → apply → reconcileGone → embed (bounded)
  *   query  = resolve recipe/SQL → embed query → per-modality store.search → RRF → store.run(sql, hits)
  *   jobs   = convergent derived-state jobs + one-shot data jobs
  */
-export type { EmbedHealth } from "@memex/embed";
+export type { EmbedHealth } from "@memindex/embed";
 export {
   type Archive,
   type ArchiveStatus,
@@ -19,8 +19,8 @@ export {
   ensureProducerId,
   LOCAL_SUPABASE_URL,
   loadConfig,
-  type MemexConfig,
-  type MemexPaths,
+  type MemindexConfig,
+  type MemindexPaths,
   OLLAMA_DEFAULTS,
   type OllamaConfig,
   parseStoreSpec,

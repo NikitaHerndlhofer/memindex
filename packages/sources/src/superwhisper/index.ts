@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { itemKey, locationId, parseItemKey, type Sighting, sourceId } from "@memex/model";
+import { itemKey, locationId, parseItemKey, type Sighting, sourceId } from "@memindex/model";
 import { wordsChunker } from "../chunkers/words.ts";
 import type { Location, SourceDb, SourceKit, SourcePlugin } from "../contract.ts";
 import { blobToString, hashFile, mtimeNs, parseJson } from "../util.ts";
@@ -20,13 +20,13 @@ const AUDIO_NAMES = ["output.wav", "output.ogg", "output.m4a", "output.mp3", "ou
 
 function dbPath(kit: SourceKit): string {
   return (
-    kit.env.MEMEX_SUPERWHISPER_DB ??
+    kit.env.MEMINDEX_SUPERWHISPER_DB ??
     join(kit.home, "Library", "Application Support", "superwhisper", "database", "superwhisper.sqlite")
   );
 }
 
 function recordingsDir(kit: SourceKit): string {
-  return kit.env.MEMEX_SUPERWHISPER_DIR ?? join(kit.home, "Documents", "superwhisper", "recordings");
+  return kit.env.MEMINDEX_SUPERWHISPER_DIR ?? join(kit.home, "Documents", "superwhisper", "recordings");
 }
 
 function audioFile(folder: string): string | null {

@@ -24,7 +24,7 @@ export const COMMANDS = {
 
 export const main = defineCommand({
   meta: {
-    name: "memex",
+    name: "memindex",
     version: VERSION,
     description: "One archive of your dictations, meetings and agent chats, searchable by agents",
   },

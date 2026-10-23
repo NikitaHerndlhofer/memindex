@@ -1,5 +1,5 @@
-import { isoTime } from "@memex/model";
-import type { JobRecord } from "@memex/store";
+import { isoTime } from "@memindex/model";
+import type { JobRecord } from "@memindex/store";
 import { errorMessage } from "../ingest.ts";
 import type { Budget, JobContext, JobDef, JobReport } from "./types.ts";
 

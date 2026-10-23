@@ -1,5 +1,5 @@
-import type { SourceId } from "@memex/model";
-import { HIT_COLUMNS } from "@memex/store";
+import type { SourceId } from "@memindex/model";
+import { HIT_COLUMNS } from "@memindex/store";
 import type { Recipe } from "./recipes.ts";
 
 /** View contract as documented to agents. The store owns the DDL; the integration test checks they agree. */
@@ -89,31 +89,31 @@ export function renderSkill(
     .join("\n");
 
   return `---
-name: memex
-description: Query the user's local memex archive — Super Whisper dictations and meetings plus agent chats (Cursor, Claude Code, …) — via named recipes and read-only SQL.
+name: memindex
+description: Query the user's local memindex archive — Super Whisper dictations and meetings plus agent chats (Cursor, Claude Code, …) — via named recipes and read-only SQL.
 disable-model-invocation: true
 ---
 
-# memex
+# memindex
 
 One archive of everything the user dictated, recorded and discussed with coding agents.
-Read-only from here: \`memex q\` and \`memex sql\` never write. View contract v${contract}.
+Read-only from here: \`memindex q\` and \`memindex sql\` never write. View contract v${contract}.
 
 ## How to call
 
 \`\`\`sh
-memex q recipes                                   # list recipes and params
-memex q recent --param days=7 --param source=cursor
-memex q search "auth token refresh bug" --source cursor --since 14d --limit 20
-memex q thread cursor:3f1c…                       # positional fills the first required param
-memex q context --param chunk=<chunk_id> --param around=3
+memindex q recipes                                   # list recipes and params
+memindex q recent --param days=7 --param source=cursor
+memindex q search "auth token refresh bug" --source cursor --since 14d --limit 20
+memindex q thread cursor:3f1c…                       # positional fills the first required param
+memindex q context --param chunk=<chunk_id> --param around=3
 \`\`\`
 
 Custom SQL reads from **stdin** (quoted heredoc, so nothing is shell-expanded). Search runs inside
-\`memex\` and reaches SQL as a relation named \`hits\`:
+\`memindex\` and reaches SQL as a relation named \`hits\`:
 
 \`\`\`sh
-memex sql --search "rate limiter design" --mode hybrid --json <<'SQL'
+memindex sql --search "rate limiter design" --mode hybrid --json <<'SQL'
 SELECT i.source, i.kind, i.started_day, h.snippet
 FROM hits h JOIN items i ON i.item_key = h.item_key
 ORDER BY h.rank LIMIT 15;
@@ -143,7 +143,7 @@ words. Pulling raw chunks into the main context fills the window and loses the s
 
 1. The main agent dispatches a **subagent** (Task tool) with the question; it does not pull raw
    chunks into the main chat.
-2. The subagent runs \`memex q semantic "<question>"\` (the primary mode for "where did we discuss X"),
+2. The subagent runs \`memindex q semantic "<question>"\` (the primary mode for "where did we discuss X"),
    or \`best-moment\` / \`rank-items\` to rank whole items. It reads the top hits, expands each with
    \`context\` (turns around the hit) or \`thread\` (the whole item) — **multiple turns around the hit,
    not an isolated chunk** — and **summarizes** a focused answer with citations (\`item_key\`,

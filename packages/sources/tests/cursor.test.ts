@@ -2,7 +2,7 @@ import { Database } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { compareRevision, producerId, type Sighting } from "@memex/model";
+import { compareRevision, producerId, type Sighting } from "@memindex/model";
 import { transcriptChunker } from "../src/chunkers/transcript.ts";
 import { cursor } from "../src/cursor/index.ts";
 import type { Location } from "../src/index.ts";
@@ -25,8 +25,8 @@ let jsonlLoc: Location;
 beforeEach(async () => {
   dir = tmpCopy("cursor");
   kit = makeKit({
-    MEMEX_CURSOR_DB: join(dir, "cursor", "v1-sample.vscdb"),
-    MEMEX_CURSOR_TRANSCRIPTS_DIR: join(FIXTURES, "cursor-projects"),
+    MEMINDEX_CURSOR_DB: join(dir, "cursor", "v1-sample.vscdb"),
+    MEMINDEX_CURSOR_TRANSCRIPTS_DIR: join(FIXTURES, "cursor-projects"),
   });
   const locs = await cursor.locations(kit);
   dbLoc = locs.find((l) => l.label === "state.vscdb") as Location;
@@ -288,17 +288,17 @@ describe("cursor hooks", () => {
     };
     writeFileSync(path, JSON.stringify(theirs));
     const hkit = makeKit({}, home);
-    await hooks.install(hkit, "/opt/homebrew/bin/memex");
-    await hooks.install(hkit, "/usr/local/bin/memex");
+    await hooks.install(hkit, "/opt/homebrew/bin/memindex");
+    await hooks.install(hkit, "/usr/local/bin/memindex");
     const installed = JSON.parse(readFileSync(path, "utf8"));
     expect(installed).toEqual({
       version: 1,
       extra: true,
       hooks: {
-        stop: [{ command: "other-tool notify" }, { command: "/usr/local/bin/memex hook cursor stop" }],
+        stop: [{ command: "other-tool notify" }, { command: "/usr/local/bin/memindex hook cursor stop" }],
         beforeShellExecution: [{ command: "guard.sh" }],
-        subagentStop: [{ command: "/usr/local/bin/memex hook cursor subagentStop" }],
-        workspaceOpen: [{ command: "/usr/local/bin/memex hook cursor workspaceOpen" }],
+        subagentStop: [{ command: "/usr/local/bin/memindex hook cursor subagentStop" }],
+        workspaceOpen: [{ command: "/usr/local/bin/memindex hook cursor workspaceOpen" }],
       },
     });
     await hooks.uninstall(hkit);

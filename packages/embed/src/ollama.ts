@@ -1,4 +1,4 @@
-import { vectorSpace } from "@memex/model";
+import { vectorSpace } from "@memindex/model";
 import { z } from "zod";
 import { type Embedder, EmbedError, type EmbedHealth, type OllamaOptions } from "./types.ts";
 

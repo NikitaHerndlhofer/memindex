@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { chunkerId } from "@memex/model";
+import { chunkerId } from "@memindex/model";
 import { buildRegistry, CHUNKERS, SOURCES, type SourcePlugin } from "../src/index.ts";
 import { makeKit } from "./helpers.ts";
 

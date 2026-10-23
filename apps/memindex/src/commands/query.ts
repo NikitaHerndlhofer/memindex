@@ -1,4 +1,4 @@
-import { RECIPES } from "@memex/engine";
+import { RECIPES } from "@memindex/engine";
 import { defineCommand } from "citty";
 import { parseQCommand, parseSqlCommand, Q_ARGS, SQL_ARGS } from "../args.ts";
 import { action, out, withArchive } from "../context.ts";
@@ -9,7 +9,7 @@ export const sqlCommand = defineCommand({
   meta: {
     name: "sql",
     description:
-      "Read-only SQL over the view contract, from stdin (memex sql <<'SQL' … SQL). --search adds the `hits` relation.",
+      "Read-only SQL over the view contract, from stdin (memindex sql <<'SQL' … SQL). --search adds the `hits` relation.",
   },
   args: SQL_ARGS,
   run: action(async ({ rawArgs }) => {
@@ -22,7 +22,7 @@ export const sqlCommand = defineCommand({
 export const qCommand = defineCommand({
   meta: {
     name: "q",
-    description: "Run a named recipe: memex q <recipe> [text] [--param k=v]; `memex q recipes` lists them",
+    description: "Run a named recipe: memindex q <recipe> [text] [--param k=v]; `memindex q recipes` lists them",
   },
   args: Q_ARGS,
   run: action(async ({ rawArgs }) => {

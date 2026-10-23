@@ -13,7 +13,7 @@ import {
   type StampedRevision,
   sha256Hex,
   type TurnDraft,
-} from "@memex/model";
+} from "@memindex/model";
 import type { ItemWrite } from "../port.ts";
 
 export interface TurnHead {

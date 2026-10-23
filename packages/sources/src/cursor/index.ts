@@ -1,6 +1,6 @@
 import { existsSync, readdirSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { itemKey, locationId, parseItemKey, type Sighting, sourceId } from "@memex/model";
+import { itemKey, locationId, parseItemKey, type Sighting, sourceId } from "@memindex/model";
 import { transcriptChunker } from "../chunkers/transcript.ts";
 import type { Location, ScanResult, SourceDb, SourceKit, SourcePlugin } from "../contract.ts";
 import { type FileEntry, hashFile, listingFingerprint, listJsonl, mtimeNs } from "../util.ts";
@@ -21,13 +21,13 @@ const CURSOR_FP = "listing_fp";
 
 function dbPath(kit: SourceKit): string {
   return (
-    kit.env.MEMEX_CURSOR_DB ??
+    kit.env.MEMINDEX_CURSOR_DB ??
     join(kit.home, "Library", "Application Support", "Cursor", "User", "globalStorage", "state.vscdb")
   );
 }
 
 function transcriptsRoot(kit: SourceKit): string {
-  return kit.env.MEMEX_CURSOR_TRANSCRIPTS_DIR ?? join(kit.home, ".cursor", "projects");
+  return kit.env.MEMINDEX_CURSOR_TRANSCRIPTS_DIR ?? join(kit.home, ".cursor", "projects");
 }
 
 function dbSighting(path: string, s: ComposerSighting): Sighting {

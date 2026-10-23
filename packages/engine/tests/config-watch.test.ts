@@ -12,13 +12,13 @@ import {
 
 let dir: string;
 beforeEach(() => {
-  dir = mkdtempSync(join(tmpdir(), "memex-cfg-"));
+  dir = mkdtempSync(join(tmpdir(), "memindex-cfg-"));
 });
 afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
 describe("config", () => {
   test("defaults: local Supabase, bge-m3@1024, no producer yet", async () => {
-    const cfg = await loadConfig({ HOME: dir, MEMEX_CONFIG_DIR: join(dir, "cfg") });
+    const cfg = await loadConfig({ HOME: dir, MEMINDEX_CONFIG_DIR: join(dir, "cfg") });
     expect(cfg.store).toEqual({ backend: "postgres", url: LOCAL_SUPABASE_URL });
     expect(cfg.ollama).toEqual({ host: "http://127.0.0.1:11434", model: "bge-m3", dim: 1024 });
     expect(cfg.producerId).toBeNull();
@@ -26,7 +26,7 @@ describe("config", () => {
   });
 
   test("producer id is minted once and persisted alongside existing fields", async () => {
-    const env = { HOME: dir, MEMEX_CONFIG_DIR: dir };
+    const env = { HOME: dir, MEMINDEX_CONFIG_DIR: dir };
     writeFileSync(join(dir, "config.json"), JSON.stringify({ disabledSources: ["cursor"] }));
     const id = await ensureProducerId(await loadConfig(env));
     expect(id).toMatch(/^[0-9a-f-]{36}$/);
@@ -40,14 +40,14 @@ describe("config", () => {
     });
   });
 
-  test("env overrides: MEMEX_STORE path or postgres URL, OLLAMA_HOST without scheme", async () => {
+  test("env overrides: MEMINDEX_STORE path or postgres URL, OLLAMA_HOST without scheme", async () => {
     const cfg = await loadConfig({
       HOME: dir,
-      MEMEX_CONFIG_DIR: dir,
-      MEMEX_STORE: "postgres://u@nas/memex",
+      MEMINDEX_CONFIG_DIR: dir,
+      MEMINDEX_STORE: "postgres://u@nas/memindex",
       OLLAMA_HOST: "10.0.0.2:11434",
     });
-    expect(cfg.store).toEqual({ backend: "postgres", url: "postgres://u@nas/memex" });
+    expect(cfg.store).toEqual({ backend: "postgres", url: "postgres://u@nas/memindex" });
     expect(cfg.ollama.host).toBe("http://10.0.0.2:11434");
     expect(parseStoreSpec("~/x.sqlite", "/home/me")).toEqual({
       backend: "sqlite",
@@ -57,9 +57,9 @@ describe("config", () => {
 
   test("invalid config files fail loudly with the path", async () => {
     writeFileSync(join(dir, "config.json"), JSON.stringify({ ollama: { dim: -1 } }));
-    await expect(loadConfig({ HOME: dir, MEMEX_CONFIG_DIR: dir })).rejects.toThrow(/config\.json is invalid/);
+    await expect(loadConfig({ HOME: dir, MEMINDEX_CONFIG_DIR: dir })).rejects.toThrow(/config\.json is invalid/);
     writeFileSync(join(dir, "config.json"), "{nope");
-    await expect(loadConfig({ HOME: dir, MEMEX_CONFIG_DIR: dir })).rejects.toThrow(/not valid JSON/);
+    await expect(loadConfig({ HOME: dir, MEMINDEX_CONFIG_DIR: dir })).rejects.toThrow(/not valid JSON/);
   });
 });
 

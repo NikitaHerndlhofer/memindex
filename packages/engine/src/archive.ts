@@ -1,12 +1,12 @@
-import { createOllamaEmbedder, type Embedder, type EmbedHealth } from "@memex/embed";
-import type { ProducerId, SourceId } from "@memex/model";
+import { createOllamaEmbedder, type Embedder, type EmbedHealth } from "@memindex/embed";
+import type { ProducerId, SourceId } from "@memindex/model";
 import {
   buildRegistry,
   createSourceKit,
   type HookSpec,
   type SourceKit,
   type SourcePlugin,
-} from "@memex/sources";
+} from "@memindex/sources";
 import {
   type Backend,
   migrateStore,
@@ -17,8 +17,8 @@ import {
   type StoreConfig,
   type StoreStats,
   type WriteStore,
-} from "@memex/store";
-import { type Env, ensureProducerId, loadConfig, type MemexConfig } from "./config.ts";
+} from "@memindex/store";
+import { type Env, ensureProducerId, loadConfig, type MemindexConfig } from "./config.ts";
 import {
   errorMessage,
   type IngestDeps,
@@ -49,7 +49,7 @@ import { watchSources } from "./watch.ts";
 export interface OpenArchiveOptions {
   readonly mode: "read" | "write";
   /** Default: `loadConfig(env)`. */
-  readonly config?: MemexConfig;
+  readonly config?: MemindexConfig;
   readonly env?: Env;
   /** Overrides `config.store`. */
   readonly store?: StoreConfig;
@@ -90,7 +90,7 @@ export interface Archive {
   readonly backend: Backend;
   /** null in read mode. */
   readonly producer: ProducerId | null;
-  readonly config: MemexConfig;
+  readonly config: MemindexConfig;
   readonly registry: Registry;
   /**
    * Bring the archive up to date with sources visible to THIS producer. Idempotent and safe to
@@ -131,7 +131,7 @@ const DEFAULT_JOB_BUDGET_MS = 10 * 60_000;
 export async function openArchive(opts: OpenArchiveOptions): Promise<Archive> {
   const env = opts.env ?? process.env;
   const base = opts.config ?? (await loadConfig(env));
-  const config: MemexConfig = opts.store ? { ...base, store: opts.store } : base;
+  const config: MemindexConfig = opts.store ? { ...base, store: opts.store } : base;
   const log = opts.log ?? stderrLog(env);
   const registry = opts.registry ?? buildRegistry();
   const embedder = opts.embedder ?? createOllamaEmbedder(config.ollama);
@@ -167,22 +167,22 @@ export async function openArchive(opts: OpenArchiveOptions): Promise<Archive> {
 
 /** Ollama reachability and model presence, without opening the store (install, doctor). */
 export async function checkEmbedder(
-  opts: { readonly config?: MemexConfig; readonly env?: Env } = {},
+  opts: { readonly config?: MemindexConfig; readonly env?: Env } = {},
 ): Promise<EmbedHealth> {
   const config = opts.config ?? (await loadConfig(opts.env ?? process.env));
   return createOllamaEmbedder(config.ollama).health();
 }
 
-/** `memex migrate` without opening the archive (the store refuses to open while behind). */
+/** `memindex migrate` without opening the archive (the store refuses to open while behind). */
 export async function migrateArchive(
-  opts: { readonly config?: MemexConfig; readonly env?: Env } = {},
+  opts: { readonly config?: MemindexConfig; readonly env?: Env } = {},
 ): Promise<SchemaStatus> {
   const config = opts.config ?? (await loadConfig(opts.env ?? process.env));
   return migrateStore(config.store);
 }
 
 interface ArchiveParts {
-  readonly config: MemexConfig;
+  readonly config: MemindexConfig;
   readonly registry: Registry;
   readonly embedder: Embedder;
   readonly store: ReadStore | WriteStore;
@@ -198,7 +198,7 @@ type DisposableKit = SourceKit & { dispose?: () => void };
 class ArchiveImpl implements Archive {
   readonly backend: Backend;
   readonly producer: ProducerId | null;
-  readonly config: MemexConfig;
+  readonly config: MemindexConfig;
   readonly registry: Registry;
 
   constructor(private readonly p: ArchiveParts) {

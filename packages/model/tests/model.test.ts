@@ -9,7 +9,7 @@ import {
   producerId,
   type StampedRevision,
   turnKey,
-} from "@memex/model";
+} from "@memindex/model";
 
 const A = producerId("00000000-0000-4000-8000-00000000000a");
 const B = producerId("00000000-0000-4000-8000-00000000000b");

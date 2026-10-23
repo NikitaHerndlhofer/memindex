@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import type { EmbedHealth } from "@memex/engine";
+import type { EmbedHealth } from "@memindex/engine";
 import { PLIST_LABEL, renderPlist } from "../src/install/launchd.ts";
 import { ensureOllama } from "../src/install/ollama.ts";
 import { installSkill, refreshSkills, skillStates, skillTargets } from "../src/install/skill.ts";
@@ -10,7 +10,7 @@ import { fromArray, render } from "../src/render.ts";
 
 let dir: string;
 beforeEach(() => {
-  dir = mkdtempSync(join(tmpdir(), "memex-cli-"));
+  dir = mkdtempSync(join(tmpdir(), "memindex-cli-"));
 });
 afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
@@ -20,8 +20,8 @@ describe("skill install (hash-tracked)", () => {
 
   test("targets Cursor and Claude Code", () => {
     expect(skillTargets("/h")).toEqual([
-      "/h/.cursor/skills/memex/SKILL.md",
-      "/h/.claude/skills/memex/SKILL.md",
+      "/h/.cursor/skills/memindex/SKILL.md",
+      "/h/.claude/skills/memindex/SKILL.md",
     ]);
   });
 
@@ -69,10 +69,10 @@ describe("skill install (hash-tracked)", () => {
 });
 
 describe("launchd plist", () => {
-  test("keepalive agent running `memex watch`, XML-escaped", () => {
-    const xml = renderPlist({ binPath: "/opt/homebrew/bin/memex", logPath: "/l/a&b.log", home: "/Users/me" });
+  test("keepalive agent running `memindex watch`, XML-escaped", () => {
+    const xml = renderPlist({ binPath: "/opt/homebrew/bin/memindex", logPath: "/l/a&b.log", home: "/Users/me" });
     expect(xml).toContain(`<string>${PLIST_LABEL}</string>`);
-    expect(xml).toContain("<string>/opt/homebrew/bin/memex</string>\n    <string>watch</string>");
+    expect(xml).toContain("<string>/opt/homebrew/bin/memindex</string>\n    <string>watch</string>");
     expect(xml).toContain("<key>KeepAlive</key>\n  <true/>");
     expect(xml).toContain("<integer>30</integer>");
     expect(xml).toContain("/l/a&amp;b.log");

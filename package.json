@@ -1,5 +1,5 @@
 {
-  "name": "memex-monorepo",
+  "name": "memindex-monorepo",
   "private": true,
   "type": "module",
   "workspaces": [

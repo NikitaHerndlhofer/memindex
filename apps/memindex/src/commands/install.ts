@@ -1,5 +1,5 @@
 import { join } from "node:path";
-import { checkEmbedder, loadConfig } from "@memex/engine";
+import { checkEmbedder, loadConfig } from "@memindex/engine";
 import { defineCommand } from "citty";
 import { action, info, out, skillTrackFile, withArchive } from "../context.ts";
 import { installLaunchAgent, LEGACY_LABELS, uninstallLaunchAgent } from "../install/launchd.ts";
@@ -11,7 +11,7 @@ import { doctorText, runDoctor } from "./admin.ts";
 export const installSkillCommand = defineCommand({
   meta: {
     name: "install-skill",
-    description: "Write the memex SKILL.md to ~/.cursor and ~/.claude (user edits are backed up)",
+    description: "Write the memindex SKILL.md to ~/.cursor and ~/.claude (user edits are backed up)",
   },
   run: action(async () => {
     await withArchive("write", async (archive) => {
@@ -67,7 +67,7 @@ export const installCommand = defineCommand({
       }
       if (!bin) {
         info(
-          "no stable memex binary path (development run?); skipping watcher and hooks. Pass --bin to force.",
+          "no stable memindex binary path (development run?); skipping watcher and hooks. Pass --bin to force.",
         );
       } else {
         if (!args["skip-watch"]) {
@@ -95,7 +95,7 @@ export const installCommand = defineCommand({
         if (moved) info(`retired legacy skill ${p} → ${moved}`);
       }
     });
-    info("the watcher catches up on start; run `memex ingest` to ingest now");
+    info("the watcher catches up on start; run `memindex ingest` to ingest now");
     const { ok, checks } = await runDoctor();
     out(doctorText(checks));
     return ok ? 0 : 1;

@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { contentHash } from "@memex/model";
+import { contentHash } from "@memindex/model";
 import { wordsChunker } from "../src/chunkers/words.ts";
 import type { Location } from "../src/index.ts";
 import { superwhisper } from "../src/superwhisper/index.ts";
@@ -19,8 +19,8 @@ let location: Location;
 beforeEach(async () => {
   dir = tmpCopy("superwhisper");
   kit = makeKit({
-    MEMEX_SUPERWHISPER_DB: join(dir, "superwhisper", "superwhisper.sqlite"),
-    MEMEX_SUPERWHISPER_DIR: join(dir, "superwhisper", "recordings"),
+    MEMINDEX_SUPERWHISPER_DB: join(dir, "superwhisper", "superwhisper.sqlite"),
+    MEMINDEX_SUPERWHISPER_DIR: join(dir, "superwhisper", "recordings"),
   });
   const locs = await superwhisper.locations(kit);
   expect(locs).toHaveLength(1);
@@ -87,7 +87,7 @@ describe("superwhisper scan", () => {
 
   test("snapshots live in tmp and are deleted on dispose", async () => {
     await superwhisper.scan(location, kit);
-    const snaps = () => readdirSync(tmpdir()).filter((n) => n.startsWith(`memex-snap-${process.pid}-`));
+    const snaps = () => readdirSync(tmpdir()).filter((n) => n.startsWith(`memindex-snap-${process.pid}-`));
     expect(snaps().length).toBeGreaterThan(0);
     kit.dispose();
     expect(snaps()).toEqual([]);

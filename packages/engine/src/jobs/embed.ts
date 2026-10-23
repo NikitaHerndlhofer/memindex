@@ -1,6 +1,6 @@
-import type { Embedder } from "@memex/embed";
-import type { ItemKey } from "@memex/model";
-import type { WriteStore } from "@memex/store";
+import type { Embedder } from "@memindex/embed";
+import type { ItemKey } from "@memindex/model";
+import type { WriteStore } from "@memindex/store";
 import { errorMessage } from "../ingest.ts";
 import type { Budget, JobDef, JobReport } from "./types.ts";
 

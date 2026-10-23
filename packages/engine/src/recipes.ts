@@ -12,7 +12,7 @@ export interface RecipeParam {
 
 export interface Recipe {
   readonly name: string;
-  /** One line, rendered into SKILL.md and `memex q recipes`. */
+  /** One line, rendered into SKILL.md and `memindex q recipes`. */
   readonly summary: string;
   readonly group: "discover" | "browse" | "search" | "read" | "stats";
   readonly params: Readonly<Record<string, RecipeParam>>;
@@ -42,7 +42,7 @@ const searchRecipe = (name: string, mode: SearchMode, summary: string): Recipe =
   sql: SEARCH_SQL,
 });
 
-/** THE recipe list. SKILL.md's recipe table, `memex q recipes` and the lint/integration tests derive from it. */
+/** THE recipe list. SKILL.md's recipe table, `memindex q recipes` and the lint/integration tests derive from it. */
 export const RECIPES: readonly Recipe[] = [
   {
     name: "sources",
@@ -318,6 +318,6 @@ LIMIT :limit`,
 
 export function findRecipe(name: string): Recipe {
   const r = RECIPES.find((x) => x.name === name);
-  if (!r) throw new Error(`unknown recipe "${name}"; run \`memex q recipes\``);
+  if (!r) throw new Error(`unknown recipe "${name}"; run \`memindex q recipes\``);
   return r;
 }

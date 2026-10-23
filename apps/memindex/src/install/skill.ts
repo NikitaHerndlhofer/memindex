@@ -6,12 +6,12 @@ import { z } from "zod";
 
 export function skillTargets(home: string): string[] {
   return [
-    join(home, ".cursor", "skills", "memex", "SKILL.md"),
-    join(home, ".claude", "skills", "memex", "SKILL.md"),
+    join(home, ".cursor", "skills", "memindex", "SKILL.md"),
+    join(home, ".claude", "skills", "memindex", "SKILL.md"),
   ];
 }
 
-/** Legacy skills replaced by memex; backed up and removed on install. */
+/** Legacy skills replaced by memindex; backed up and removed on install. */
 export function legacySkillPaths(home: string): string[] {
   return ["superwhisper-rag", "acrag"].flatMap((name) => [
     join(home, ".cursor", "skills", name, "SKILL.md"),
@@ -21,7 +21,7 @@ export function legacySkillPaths(home: string): string[] {
 
 const sha256 = (s: string) => createHash("sha256").update(s).digest("hex");
 
-/** path → sha256 of the SKILL.md body memex last wrote there. Lives in the config dir. */
+/** path → sha256 of the SKILL.md body memindex last wrote there. Lives in the config dir. */
 const Tracked = z.record(z.string(), z.string());
 
 async function loadTracked(file: string): Promise<Record<string, string>> {

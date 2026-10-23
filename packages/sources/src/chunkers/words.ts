@@ -13,7 +13,7 @@
  * the same turn.
  */
 
-import { type ChunkDraft, type Chunker, chunkDraft, chunkerId, type ItemDraft } from "@memex/model";
+import { type ChunkDraft, type Chunker, chunkDraft, chunkerId, type ItemDraft } from "@memindex/model";
 
 export interface ChunkStrategy {
   readonly size: number;

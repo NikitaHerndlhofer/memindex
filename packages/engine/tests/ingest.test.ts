@@ -2,8 +2,8 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { chunkerId, itemKey, locationId } from "@memex/model";
-import type { HookSpec } from "@memex/sources";
+import { chunkerId, itemKey, locationId } from "@memindex/model";
+import type { HookSpec } from "@memindex/sources";
 import { type Archive, loadConfig, openArchive } from "../src/index.ts";
 import {
   FakeStore,
@@ -18,7 +18,7 @@ import {
 
 let dir: string;
 beforeEach(() => {
-  dir = mkdtempSync(join(tmpdir(), "memex-engine-"));
+  dir = mkdtempSync(join(tmpdir(), "memindex-engine-"));
 });
 afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
@@ -30,7 +30,7 @@ async function open(
   store = new FakeStore(),
   extra: { lockDir?: string | null; logs?: string[]; embedder?: ReturnType<typeof fakeEmbedder> } = {},
 ): Promise<{ archive: Archive; store: FakeStore }> {
-  const config = await loadConfig({ HOME: dir, MEMEX_CONFIG_DIR: dir });
+  const config = await loadConfig({ HOME: dir, MEMINDEX_CONFIG_DIR: dir });
   const archive = await openArchive({
     mode: "write",
     config,

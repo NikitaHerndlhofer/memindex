@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 /**
- * Builds both Mach-O binaries into apps/memex/dist/:
- *   memex-darwin-arm64, memex-darwin-x64, their .tar.gz tarballs, and sha256sums.txt
+ * Builds both Mach-O binaries into apps/memindex/dist/:
+ *   memindex-darwin-arm64, memindex-darwin-x64, their .tar.gz tarballs, and sha256sums.txt
  * for the Homebrew formula. The version is inlined from package.json at compile time.
  */
 import { existsSync, mkdirSync, rmSync } from "node:fs";
@@ -12,8 +12,8 @@ const DIST = join(ROOT, "dist");
 const ENTRY = join(ROOT, "src", "cli.ts");
 
 const TARGETS = [
-  { name: "memex-darwin-arm64", bunTarget: "bun-darwin-arm64" },
-  { name: "memex-darwin-x64", bunTarget: "bun-darwin-x64" },
+  { name: "memindex-darwin-arm64", bunTarget: "bun-darwin-arm64" },
+  { name: "memindex-darwin-x64", bunTarget: "bun-darwin-x64" },
 ] as const;
 
 function sh(cmd: string[], cwd: string): void {

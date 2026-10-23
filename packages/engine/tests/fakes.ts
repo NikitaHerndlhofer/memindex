@@ -1,4 +1,4 @@
-import type { Embedder } from "@memex/embed";
+import type { Embedder } from "@memindex/embed";
 import {
   type Capture,
   type ChunkDraft,
@@ -19,8 +19,8 @@ import {
   sourceId,
   turnKey,
   vectorSpace,
-} from "@memex/model";
-import type { HookSpec, Location, ReadResult, ScanResult, SourceKit, SourcePlugin } from "@memex/sources";
+} from "@memindex/model";
+import type { HookSpec, Location, ReadResult, ScanResult, SourceKit, SourcePlugin } from "@memindex/sources";
 import type {
   ApplyOutcome,
   Hit,
@@ -34,7 +34,7 @@ import type {
   StoreStats,
   StreamFilter,
   WriteStore,
-} from "@memex/store";
+} from "@memindex/store";
 import { z } from "zod";
 import type { Registry } from "../src/registry.ts";
 

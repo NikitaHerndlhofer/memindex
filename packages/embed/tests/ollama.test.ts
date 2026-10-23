@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { createOllamaEmbedder, EmbedError } from "@memex/embed";
+import { createOllamaEmbedder, EmbedError } from "@memindex/embed";
 
 type Handler = (req: Request, body: { input: string[] } | null) => Response | Promise<Response>;
 

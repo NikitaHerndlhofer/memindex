@@ -10,54 +10,54 @@
         "typescript": "^5.9.0",
       },
     },
-    "apps/memex": {
-      "name": "memex",
+    "apps/memindex": {
+      "name": "memindex",
       "version": "0.1.0",
       "bin": {
-        "memex": "./src/cli.ts",
+        "memindex": "./src/cli.ts",
       },
       "dependencies": {
-        "@memex/engine": "workspace:*",
+        "@memindex/engine": "workspace:*",
         "citty": "^0.1.6",
         "zod": "^4.4.3",
       },
     },
     "packages/embed": {
-      "name": "@memex/embed",
+      "name": "@memindex/embed",
       "version": "0.1.0",
       "dependencies": {
-        "@memex/model": "workspace:*",
+        "@memindex/model": "workspace:*",
         "zod": "^4.4.3",
       },
     },
     "packages/engine": {
-      "name": "@memex/engine",
+      "name": "@memindex/engine",
       "version": "0.1.0",
       "dependencies": {
-        "@memex/embed": "workspace:*",
-        "@memex/model": "workspace:*",
-        "@memex/sources": "workspace:*",
-        "@memex/store": "workspace:*",
+        "@memindex/embed": "workspace:*",
+        "@memindex/model": "workspace:*",
+        "@memindex/sources": "workspace:*",
+        "@memindex/store": "workspace:*",
         "zod": "^4.4.3",
       },
     },
     "packages/model": {
-      "name": "@memex/model",
+      "name": "@memindex/model",
       "version": "0.1.0",
     },
     "packages/sources": {
-      "name": "@memex/sources",
+      "name": "@memindex/sources",
       "version": "0.1.0",
       "dependencies": {
-        "@memex/model": "workspace:*",
+        "@memindex/model": "workspace:*",
         "zod": "^4.4.3",
       },
     },
     "packages/store": {
-      "name": "@memex/store",
+      "name": "@memindex/store",
       "version": "0.1.0",
       "dependencies": {
-        "@memex/model": "workspace:*",
+        "@memindex/model": "workspace:*",
         "drizzle-orm": "^0.45.4",
         "postgres": "^3.4.9",
       },
@@ -147,15 +147,15 @@
 
     "@esbuild/win32-x64": ["@esbuild/win32-x64@0.25.12", "", { "os": "win32", "cpu": "x64" }, "sha512-alJC0uCZpTFrSL0CCDjcgleBXPnCrEAhTBILpeAp7M/OFgoqtAetfBzX0xM00MUsVVPpVjlPuMbREqnZCXaTnA=="],
 
-    "@memex/embed": ["@memex/embed@workspace:packages/embed"],
+    "@memindex/embed": ["@memindex/embed@workspace:packages/embed"],
 
-    "@memex/engine": ["@memex/engine@workspace:packages/engine"],
+    "@memindex/engine": ["@memindex/engine@workspace:packages/engine"],
 
-    "@memex/model": ["@memex/model@workspace:packages/model"],
+    "@memindex/model": ["@memindex/model@workspace:packages/model"],
 
-    "@memex/sources": ["@memex/sources@workspace:packages/sources"],
+    "@memindex/sources": ["@memindex/sources@workspace:packages/sources"],
 
-    "@memex/store": ["@memex/store@workspace:packages/store"],
+    "@memindex/store": ["@memindex/store@workspace:packages/store"],
 
     "@types/bun": ["@types/bun@1.4.4", "", { "dependencies": { "bun-types": "1.4.4" } }, "sha512-9wkRDXUXK124pEnAutE6n/l18j+i9GC5IAHK8TmX/2nlySETmky0OU6yL5U8pW1AoKh++AN9auDCr647BfurjQ=="],
 
@@ -179,7 +179,7 @@
 
     "get-tsconfig": ["get-tsconfig@4.14.3", "", { "dependencies": { "resolve-pkg-maps": "^1.0.0" } }, "sha512-++QEw4DIY7WGoukz+/+A/8dGYPT9l9yIadnmSgZ8Rjr3YVSVDipQSO9CdnJo9ePqFqUUqh+wk9uIaoiAwsiPkA=="],
 
-    "memex": ["memex@workspace:apps/memex"],
+    "memindex": ["memindex@workspace:apps/memindex"],
 
     "postgres": ["postgres@3.4.9", "", {}, "sha512-GD3qdB0x1z9xgFI6cdRD6xu2Sp2WCOEoe3mtnyB5Ee0XrrL5Pe+e4CCnJrRMnL1zYtRDZmQQVbvOttLnKDLnaw=="],
 

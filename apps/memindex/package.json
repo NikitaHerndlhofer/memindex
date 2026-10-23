@@ -1,16 +1,16 @@
 {
-  "name": "memex",
+  "name": "memindex",
   "version": "0.1.0",
   "private": true,
   "type": "module",
   "bin": {
-    "memex": "./src/cli.ts"
+    "memindex": "./src/cli.ts"
   },
   "scripts": {
     "build": "bun run scripts/build.ts"
   },
   "dependencies": {
-    "@memex/engine": "workspace:*",
+    "@memindex/engine": "workspace:*",
     "citty": "^0.1.6",
     "zod": "^4.4.3"
   }

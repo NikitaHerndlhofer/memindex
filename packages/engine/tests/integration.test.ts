@@ -9,9 +9,9 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { cpSync, existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { Facets, SourceId } from "@memex/model";
-import { buildRegistry } from "@memex/sources";
-import { migrateStore } from "@memex/store";
+import type { Facets, SourceId } from "@memindex/model";
+import { buildRegistry } from "@memindex/sources";
+import { migrateStore } from "@memindex/store";
 import { SQL } from "bun";
 import {
   type Archive,
@@ -25,9 +25,9 @@ import {
 } from "../src/index.ts";
 import { fakeEmbedder } from "./fakes.ts";
 
-const ADMIN_URL = process.env.MEMEX_TEST_PG ?? LOCAL_SUPABASE_URL;
+const ADMIN_URL = process.env.MEMINDEX_TEST_PG ?? LOCAL_SUPABASE_URL;
 const FIXTURES = join(import.meta.dir, "..", "..", "sources", "tests", "fixtures");
-const DB_NAME = `memex_engine_it_${process.pid}`;
+const DB_NAME = `memindex_engine_it_${process.pid}`;
 
 async function probe(): Promise<string | null> {
   if (!Bun.which(process.env.MEMINDEX_SUPABASE_BIN ?? "supabase")) return "supabase CLI not on PATH";
@@ -89,7 +89,7 @@ describe("integration: fixtures → Supabase store → recipes", () => {
     } catch {
       // already set by another test file, or not installed: VACUUM INTO falls back
     }
-    dir = mkdtempSync(join(tmpdir(), "memex-it-"));
+    dir = mkdtempSync(join(tmpdir(), "memindex-it-"));
     cpSync(FIXTURES, join(dir, "fixtures"), { recursive: true });
     await admin.unsafe(`DROP DATABASE IF EXISTS ${DB_NAME} WITH (FORCE)`);
     await admin.unsafe(`CREATE DATABASE ${DB_NAME}`);
@@ -98,13 +98,13 @@ describe("integration: fixtures → Supabase store → recipes", () => {
     const f = join(dir, "fixtures");
     const env = {
       HOME: dir,
-      MEMEX_CONFIG_DIR: join(dir, "cfg"),
-      MEMEX_STORE: url,
-      MEMEX_SUPERWHISPER_DB: join(f, "superwhisper", "superwhisper.sqlite"),
-      MEMEX_SUPERWHISPER_DIR: join(f, "superwhisper", "recordings"),
-      MEMEX_CURSOR_DB: join(f, "cursor", "v1-sample.vscdb"),
-      MEMEX_CURSOR_TRANSCRIPTS_DIR: join(f, "cursor-projects"),
-      MEMEX_CLAUDE_CODE_DIR: join(f, "claude-projects"),
+      MEMINDEX_CONFIG_DIR: join(dir, "cfg"),
+      MEMINDEX_STORE: url,
+      MEMINDEX_SUPERWHISPER_DB: join(f, "superwhisper", "superwhisper.sqlite"),
+      MEMINDEX_SUPERWHISPER_DIR: join(f, "superwhisper", "recordings"),
+      MEMINDEX_CURSOR_DB: join(f, "cursor", "v1-sample.vscdb"),
+      MEMINDEX_CURSOR_TRANSCRIPTS_DIR: join(f, "cursor-projects"),
+      MEMINDEX_CLAUDE_CODE_DIR: join(f, "claude-projects"),
     };
     archive = await openArchive({
       mode: "write",

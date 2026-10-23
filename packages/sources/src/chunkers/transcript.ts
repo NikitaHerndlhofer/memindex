@@ -11,7 +11,7 @@ import {
   chunkerId,
   type ItemDraft,
   type PartKind,
-} from "@memex/model";
+} from "@memindex/model";
 
 const MAX_UNITS = 512;
 const OVERLAP = 2;

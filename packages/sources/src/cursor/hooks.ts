@@ -1,7 +1,7 @@
 /**
  * Cursor user hooks (`~/.cursor/hooks.json`, schema version 1):
  *   { "version": 1, "hooks": { "<event>": [ { "command": "…" } ] } }
- * memex owns only entries whose command ends in ` hook cursor <event>`; everything else is preserved.
+ * memindex owns only entries whose command ends in ` hook cursor <event>`; everything else is preserved.
  */
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -12,7 +12,7 @@ import { asRecord, asString } from "../util.ts";
 export const CURSOR_HOOK_EVENTS = ["stop", "subagentStop", "workspaceOpen"] as const;
 
 function hooksPath(kit: SourceKit): string {
-  return kit.env.MEMEX_CURSOR_HOOKS_FILE ?? join(kit.home, ".cursor", "hooks.json");
+  return kit.env.MEMINDEX_CURSOR_HOOKS_FILE ?? join(kit.home, ".cursor", "hooks.json");
 }
 
 function isOurs(entry: unknown, event: string): boolean {

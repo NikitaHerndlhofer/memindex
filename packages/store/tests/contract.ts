@@ -27,7 +27,7 @@ import {
   turnKey,
   type VectorSpace,
   vectorSpace,
-} from "@memex/model";
+} from "@memindex/model";
 import {
   type Hit,
   type ItemWrite,
@@ -799,8 +799,8 @@ export function runStoreContract(name: string, backend: () => ContractBackend): 
         };
         const d = draftOf(CUR, "stream", [t], {
           tags: ["b", "a"],
-          meta: { repo: "memex" },
-          origin: "memex",
+          meta: { repo: "memindex" },
+          origin: "memindex",
           title: "T",
         });
         await w.apply(writeOf(CUR, L1, d, rev("h", 2, 7)));

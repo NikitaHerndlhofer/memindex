@@ -6,7 +6,7 @@
 
 import { readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { sha256Hex } from "@memex/model";
+import { sha256Hex } from "@memindex/model";
 
 export const MIGRATIONS_DIR = join(import.meta.dir, "../../../supabase/migrations");
 export const GEN_FILE = join(import.meta.dir, "../src/migrations.gen.ts");

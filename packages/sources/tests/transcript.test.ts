@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { contentHash, type ItemDraft, isoTime, itemKey, type Part, turnKey } from "@memex/model";
+import { contentHash, type ItemDraft, isoTime, itemKey, type Part, turnKey } from "@memindex/model";
 import { splitPart, transcriptChunker } from "../src/chunkers/transcript.ts";
 
 function item(parts: Part[]): ItemDraft {

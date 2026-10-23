@@ -2,8 +2,8 @@ import { describe, expect, test } from "bun:test";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { type ItemKey, sourceId } from "@memex/model";
-import type { RankedChunk, StoreSearch } from "@memex/store";
+import { type ItemKey, sourceId } from "@memindex/model";
+import type { RankedChunk, StoreSearch } from "@memindex/store";
 import {
   bindRecipe,
   findRecipe,
@@ -187,10 +187,10 @@ describe("recipes", () => {
 
 describe("Archive.query", () => {
   async function archiveWith(store: FakeStore) {
-    const dir = mkdtempSync(join(tmpdir(), "memex-q-"));
+    const dir = mkdtempSync(join(tmpdir(), "memindex-q-"));
     return openArchive({
       mode: "read",
-      config: await loadConfig({ HOME: dir, MEMEX_CONFIG_DIR: dir }),
+      config: await loadConfig({ HOME: dir, MEMINDEX_CONFIG_DIR: dir }),
       storeInstance: store,
       registry: fakeRegistry([fakePlugin({ entries: [] })]),
       embedder: fakeEmbedder(),
@@ -230,7 +230,7 @@ describe("Archive.query", () => {
     const embedder = fakeEmbedder();
     const archive = await openArchive({
       mode: "read",
-      config: await loadConfig({ HOME: tmpdir(), MEMEX_CONFIG_DIR: mkdtempSync(join(tmpdir(), "memex-q-")) }),
+      config: await loadConfig({ HOME: tmpdir(), MEMINDEX_CONFIG_DIR: mkdtempSync(join(tmpdir(), "memindex-q-")) }),
       storeInstance: store,
       registry: fakeRegistry([fakePlugin({ entries: [] })]),
       embedder,
@@ -271,7 +271,7 @@ describe("renderSkill", () => {
   const md = renderSkill(RECIPES, new Map([[sourceId("superwhisper"), "Dictations live here."]]), 2);
 
   test("frontmatter is manual-invocation only", () => {
-    expect(md.startsWith("---\nname: memex\ndescription: ")).toBe(true);
+    expect(md.startsWith("---\nname: memindex\ndescription: ")).toBe(true);
     expect(md).toContain("\ndisable-model-invocation: true\n---\n");
   });
 
@@ -283,8 +283,8 @@ describe("renderSkill", () => {
   });
 
   test("teaches the CLI surface, the subagent workflow and includes source notes", () => {
-    expect(md).toContain("memex q ");
-    expect(md).toContain("memex sql --search");
+    expect(md).toContain("memindex q ");
+    expect(md).toContain("memindex sql --search");
     expect(md).toContain("<<'SQL'");
     expect(md).toContain("## Retrieval workflow (subagent-driven)");
     expect(md).toContain("### superwhisper\n\nDictations live here.");
@@ -299,10 +299,10 @@ describe("renderSkill", () => {
   });
 
   test("Archive.skill adds facet views from the registry", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "memex-s-"));
+    const dir = mkdtempSync(join(tmpdir(), "memindex-s-"));
     const archive = await openArchive({
       mode: "write",
-      config: await loadConfig({ HOME: dir, MEMEX_CONFIG_DIR: dir }),
+      config: await loadConfig({ HOME: dir, MEMINDEX_CONFIG_DIR: dir }),
       storeInstance: new FakeStore(),
       producer: PRODUCER,
       registry: fakeRegistry([fakePlugin({ entries: [] })]),

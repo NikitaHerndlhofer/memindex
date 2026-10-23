@@ -1,5 +1,5 @@
 {
-  "name": "@memex/sources",
+  "name": "@memindex/sources",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -7,7 +7,7 @@
     ".": "./src/index.ts"
   },
   "dependencies": {
-    "@memex/model": "workspace:*",
+    "@memindex/model": "workspace:*",
     "zod": "^4.4.3"
   }
 }

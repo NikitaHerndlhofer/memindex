@@ -21,7 +21,7 @@ import type {
   LocationId,
   Sighting,
   SourceId,
-} from "@memex/model";
+} from "@memindex/model";
 import type { z } from "zod";
 
 export interface Location {
@@ -50,7 +50,7 @@ export interface ReadResult<Meta> {
 }
 
 export interface HookSpec {
-  /** Writes the agent's hook config (e.g. ~/.cursor/hooks.json → `memex hook cursor <event>`). Idempotent. */
+  /** Writes the agent's hook config (e.g. ~/.cursor/hooks.json → `memindex hook cursor <event>`). Idempotent. */
   install(kit: SourceKit, binPath: string): Promise<void>;
   uninstall(kit: SourceKit): Promise<void>;
   /** Pure: hook event + payload → what to ingest. null = nothing to do. */
@@ -88,7 +88,7 @@ export interface SourcePlugin<Meta = unknown> {
 
 /** Capabilities handed to plugins. No store, no producer id. */
 export interface SourceKit {
-  /** MEMEX_<SOURCE>_* overrides and HOME. */
+  /** MEMINDEX_<SOURCE>_* overrides and HOME. */
   readonly env: Readonly<Record<string, string | undefined>>;
   readonly home: string;
   /** Producer+location-scoped cursor (e.g. last source mtime). */

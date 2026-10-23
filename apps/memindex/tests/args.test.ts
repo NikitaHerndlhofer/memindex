@@ -6,7 +6,7 @@ import type { StdinSource } from "../src/stdin.ts";
 const piped = (text: string): StdinSource => ({ piped: true, read: async () => text });
 const tty: StdinSource = { piped: false, read: async () => "" };
 
-describe("memex sql", () => {
+describe("memindex sql", () => {
   test("reads SQL from stdin", async () => {
     const r = await parseSqlCommand([], piped("  SELECT 1;\n"));
     expect(r).toEqual({ query: { sql: "SELECT 1;", params: {} }, format: "table" });
@@ -84,7 +84,7 @@ describe("memex sql", () => {
   });
 });
 
-describe("memex q", () => {
+describe("memindex q", () => {
   test("no recipe or `recipes` lists them", () => {
     expect(parseQCommand([])).toEqual({ kind: "list", format: "table" });
     expect(parseQCommand(["recipes", "--json"])).toEqual({ kind: "list", format: "json" });

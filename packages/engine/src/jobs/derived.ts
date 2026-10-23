@@ -1,6 +1,6 @@
-import { type ItemKey, locationId } from "@memex/model";
-import type { SourcePlugin } from "@memex/sources";
-import type { StoredItem, StreamFilter, WriteStore } from "@memex/store";
+import { type ItemKey, locationId } from "@memindex/model";
+import type { SourcePlugin } from "@memindex/sources";
+import type { StoredItem, StreamFilter, WriteStore } from "@memindex/store";
 import { errorMessage } from "../ingest.ts";
 import type { Budget, JobContext, JobDef, JobReport } from "./types.ts";
 
@@ -11,7 +11,7 @@ const COUNT_CAP = 100_000;
  * Reparse writes go through `apply`, which records an observation. They use this synthetic
  * location and immediately mark it gone, so a replay never makes a source-deleted item look live.
  */
-export const REPARSE_LOCATION = locationId("memex:reparse");
+export const REPARSE_LOCATION = locationId("memindex:reparse");
 
 type Filter = Omit<StreamFilter, "limit" | "afterKey">;
 
@@ -133,7 +133,7 @@ async function reparseSource(
         location: REPARSE_LOCATION,
         draft,
         revision: item.revision,
-        sighting: { key: item.draft.key, revision: item.revision, locator: "memex:reparse" },
+        sighting: { key: item.draft.key, revision: item.revision, locator: "memindex:reparse" },
         chunker: chunker.id,
         chunks: chunker.chunk(draft),
         parserVersion: plugin.parserVersion,

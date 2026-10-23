@@ -1,4 +1,4 @@
-import type { Part } from "@memex/model";
+import type { Part } from "@memindex/model";
 import { asRecord, asString } from "./util.ts";
 
 function flatten(content: unknown): string | null {

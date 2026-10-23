@@ -1,6 +1,6 @@
 /** Boundary validation for rows read back from the database. */
 
-import type { ItemKind, Part, PartKind, Role } from "@memex/model";
+import type { ItemKind, Part, PartKind, Role } from "@memindex/model";
 import type { Hit, HitVia } from "../port.ts";
 
 export class RowError extends Error {

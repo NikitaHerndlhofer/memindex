@@ -1,5 +1,5 @@
 import { join } from "node:path";
-import { type Archive, type MemexPaths, openArchive } from "@memex/engine";
+import { type Archive, type MemindexPaths, openArchive } from "@memindex/engine";
 import { describeError, exitCodeFor } from "./errors.ts";
 import { VERSION } from "./version.ts";
 
@@ -7,7 +7,7 @@ export const out = (s: string): void => {
   process.stdout.write(s);
 };
 export const info = (s: string): void => {
-  if (process.env.MEMEX_QUIET !== "1") process.stderr.write(`${s}\n`);
+  if (process.env.MEMINDEX_QUIET !== "1") process.stderr.write(`${s}\n`);
 };
 
 export async function withArchive<T>(
@@ -28,12 +28,12 @@ export function action<C>(fn: (ctx: C) => Promise<number | undefined>): (ctx: C)
     try {
       process.exitCode = (await fn(ctx)) ?? 0;
     } catch (e) {
-      process.stderr.write(`memex: ${describeError(e)}\n`);
-      if (process.env.MEMEX_VERBOSE === "1" && e instanceof Error && e.stack)
+      process.stderr.write(`memindex: ${describeError(e)}\n`);
+      if (process.env.MEMINDEX_VERBOSE === "1" && e instanceof Error && e.stack)
         process.stderr.write(`${e.stack}\n`);
       process.exitCode = exitCodeFor(e);
     }
   };
 }
 
-export const skillTrackFile = (paths: MemexPaths): string => join(paths.configDir, "skills.json");
+export const skillTrackFile = (paths: MemindexPaths): string => join(paths.configDir, "skills.json");

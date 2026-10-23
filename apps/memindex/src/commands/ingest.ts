@@ -2,7 +2,7 @@ import { existsSync } from "node:fs";
 import { readFile, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { IngestReport, IngestRequest } from "@memex/engine";
+import type { IngestReport, IngestRequest } from "@memindex/engine";
 import { defineCommand } from "citty";
 import { z } from "zod";
 import { action, info, out, skillTrackFile, withArchive } from "../context.ts";
@@ -11,7 +11,7 @@ import { refreshSkills, skillTargets } from "../install/skill.ts";
 import { selfInvocation, spawnDetached } from "../spawn.ts";
 import { processStdin } from "../stdin.ts";
 
-const HOOK_PAYLOAD_PREFIX = "memex-hook-";
+const HOOK_PAYLOAD_PREFIX = "memindex-hook-";
 
 const IngestArgs = z.object({
   source: z.string().min(1).optional(),
@@ -94,14 +94,14 @@ export const ingestCommand = defineCommand({
 });
 
 /**
- * Agent hook entrypoint (`memex hook cursor stop`, payload on stdin). Must return fast: it stashes
- * the payload and spawns a detached `memex ingest --hook-event …`, so the agent never waits on
+ * Agent hook entrypoint (`memindex hook cursor stop`, payload on stdin). Must return fast: it stashes
+ * the payload and spawns a detached `memindex ingest --hook-event …`, so the agent never waits on
  * locks or Ollama. Always exits 0; a broken payload must not break the agent.
  */
 export const hookCommand = defineCommand({
   meta: {
     name: "hook",
-    description: "Agent hook entrypoint: memex hook <source> <event> (payload JSON on stdin)",
+    description: "Agent hook entrypoint: memindex hook <source> <event> (payload JSON on stdin)",
   },
   args: {
     source: { type: "positional", required: true, description: "Source id, e.g. cursor" },
@@ -110,7 +110,7 @@ export const hookCommand = defineCommand({
   run: action(async ({ args }) => {
     const { source, event } = args;
     if (!/^[a-z][a-z0-9-]*$/.test(source) || !/^[A-Za-z][A-Za-z0-9_-]*$/.test(event)) {
-      info(`memex hook: ignoring malformed source/event ${JSON.stringify([source, event])}`);
+      info(`memindex hook: ignoring malformed source/event ${JSON.stringify([source, event])}`);
       return 0;
     }
     const raw = processStdin.piped ? await processStdin.read() : "";
@@ -119,7 +119,7 @@ export const hookCommand = defineCommand({
       try {
         JSON.parse(raw);
       } catch {
-        info(`memex hook ${source} ${event}: payload is not JSON; ignoring`);
+        info(`memindex hook ${source} ${event}: payload is not JSON; ignoring`);
         return 0;
       }
       const file = join(
@@ -135,7 +135,7 @@ export const hookCommand = defineCommand({
 });
 
 export const watchCommand = defineCommand({
-  meta: { name: "watch", description: "Event-driven ingest daemon (launchd runs this; see `memex install`)" },
+  meta: { name: "watch", description: "Event-driven ingest daemon (launchd runs this; see `memindex install`)" },
   args: {
     debounce: { type: "string", description: "Debounce window in ms (default 2000)" },
   },

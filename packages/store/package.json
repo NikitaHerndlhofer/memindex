@@ -1,5 +1,5 @@
 {
-  "name": "@memex/store",
+  "name": "@memindex/store",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -7,7 +7,7 @@
     ".": "./src/index.ts"
   },
   "dependencies": {
-    "@memex/model": "workspace:*",
+    "@memindex/model": "workspace:*",
     "drizzle-orm": "^0.45.4",
     "postgres": "^3.4.9"
   },

@@ -7,7 +7,7 @@ import {
   SEARCH_MODES,
   type SearchMode,
   type SearchSpec,
-} from "@memex/engine";
+} from "@memindex/engine";
 import { type ArgsDef, parseArgs } from "citty";
 import { z } from "zod";
 import { UsageError } from "./errors.ts";
@@ -132,7 +132,7 @@ function outputFormat(args: Record<string, unknown>): OutputFormat {
 
 const SEARCH_ONLY = ["mode", "source", "kind", "since", "all", "limit"] as const;
 
-/** `memex sql`: SQL comes from stdin only (quoting-safe); a positional is a usage error, as in swrag/acrag. */
+/** `memindex sql`: SQL comes from stdin only (quoting-safe); a positional is a usage error, as in swrag/acrag. */
 export async function parseSqlCommand(rawArgs: readonly string[], stdin: StdinSource): Promise<ParsedQuery> {
   const args = parseArgs(
     rawArgs.filter((a) => a !== "--"),
@@ -140,13 +140,13 @@ export async function parseSqlCommand(rawArgs: readonly string[], stdin: StdinSo
   );
   if (args._.length > 0) {
     throw new UsageError(
-      "memex sql reads SQL from stdin only; a positional isn't accepted. " +
-        "Use a quoted heredoc (memex sql <<'SQL' … SQL), a pipe (echo \"…\" | memex sql) or a file (memex sql < q.sql).",
+      "memindex sql reads SQL from stdin only; a positional isn't accepted. " +
+        "Use a quoted heredoc (memindex sql <<'SQL' … SQL), a pipe (echo \"…\" | memindex sql) or a file (memindex sql < q.sql).",
     );
   }
   if (!stdin.piped) {
     throw new UsageError(
-      "no SQL provided: use a quoted heredoc (memex sql <<'SQL' … SQL), a pipe, or redirect a file.",
+      "no SQL provided: use a quoted heredoc (memindex sql <<'SQL' … SQL), a pipe, or redirect a file.",
     );
   }
   const sql = (await stdin.read()).trim();
@@ -175,7 +175,7 @@ export type ParsedQ =
   | ({ readonly kind: "run" } & ParsedQuery);
 
 /**
- * `memex q <recipe> [text…]`. For search recipes the positional is the search text; otherwise it
+ * `memindex q <recipe> [text…]`. For search recipes the positional is the search text; otherwise it
  * fills the first required param not given via --param. --source/--limit bind same-named params.
  */
 export function parseQCommand(rawArgs: readonly string[]): ParsedQ {
@@ -195,7 +195,7 @@ export function parseQCommand(rawArgs: readonly string[]): ParsedQ {
 
   if (recipe.search) {
     if (!text)
-      throw new UsageError(`recipe ${recipe.name} needs search text: memex q ${recipe.name} "<text>"`);
+      throw new UsageError(`recipe ${recipe.name} needs search text: memindex q ${recipe.name} "<text>"`);
     if (filters.limit !== undefined && "limit" in recipe.params) params.limit = String(filters.limit);
     return {
       kind: "run",

@@ -1,6 +1,6 @@
-import type { Embedder } from "@memex/embed";
-import { type IsoTime, type ItemKind, isoTime, type SourceId } from "@memex/model";
-import type { ChunkFilter, Hit, RankedChunk, ReadStore, Row, StoreSearch } from "@memex/store";
+import type { Embedder } from "@memindex/embed";
+import { type IsoTime, type ItemKind, isoTime, type SourceId } from "@memindex/model";
+import type { ChunkFilter, Hit, RankedChunk, ReadStore, Row, StoreSearch } from "@memindex/store";
 import { z } from "zod";
 import { findRecipe, type Recipe } from "./recipes.ts";
 import { findPlugin, type Registry } from "./registry.ts";
@@ -164,7 +164,7 @@ export function resolveQuery(q: Query): ResolvedQuery {
     return { sql: recipe.sql, params, search: null };
   }
   if (!q.search?.text)
-    throw new Error(`recipe ${recipe.name} needs search text: memex q ${recipe.name} "<text>"`);
+    throw new Error(`recipe ${recipe.name} needs search text: memindex q ${recipe.name} "<text>"`);
   return {
     sql: recipe.sql,
     params,

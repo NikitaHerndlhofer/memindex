@@ -21,7 +21,7 @@ import {
   sha256Hex,
   type TurnDraft,
   turnKey,
-} from "@memex/model";
+} from "@memindex/model";
 import type { SourceDb } from "../contract.ts";
 import {
   asRecord,

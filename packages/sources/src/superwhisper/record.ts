@@ -11,7 +11,7 @@ import {
   itemKey,
   sha256Hex,
   turnKey,
-} from "@memex/model";
+} from "@memindex/model";
 import { z } from "zod";
 
 export const CAPTURE_FORMAT = "superwhisper-row";

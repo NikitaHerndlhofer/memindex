@@ -1,5 +1,5 @@
-import type { Embedder } from "@memex/embed";
-import type { WriteStore } from "@memex/store";
+import type { Embedder } from "@memindex/embed";
+import type { WriteStore } from "@memindex/store";
 import type { Log, Registry } from "../registry.ts";
 
 export interface JobContext {
@@ -42,7 +42,7 @@ export interface JobDef {
   /** Bump when the job's behavior changes; a one-shot ledger row with another version restarts. */
   readonly codeVersion: number;
   readonly describe: string;
-  /** Included in `memex jobs run` without `--only` and after ingest. */
+  /** Included in `memindex jobs run` without `--only` and after ingest. */
   readonly runByDefault: boolean;
   pending(ctx: JobContext): Promise<number | null>;
   run(ctx: JobContext, budget: Budget): Promise<JobReport>;

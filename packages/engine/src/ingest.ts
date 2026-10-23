@@ -1,6 +1,6 @@
-import type { ItemKey, Sighting, SourceId } from "@memex/model";
-import type { Location, SourceKit, SourcePlugin } from "@memex/sources";
-import type { WriteStore } from "@memex/store";
+import type { ItemKey, Sighting, SourceId } from "@memindex/model";
+import type { Location, SourceKit, SourcePlugin } from "@memindex/sources";
+import type { WriteStore } from "@memindex/store";
 import { tryLock } from "./lock.ts";
 import type { Log, Registry } from "./registry.ts";
 
@@ -70,7 +70,7 @@ export async function ingestSource(
       ? tryLock(deps.lockDir, `${deps.store.producer}.${plugin.id}`)
       : () => {};
   if (!release) {
-    tally.skipped.push({ source: plugin.id, reason: "another memex process is ingesting this source" });
+    tally.skipped.push({ source: plugin.id, reason: "another memindex process is ingesting this source" });
     return;
   }
   try {

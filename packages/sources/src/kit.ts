@@ -2,10 +2,10 @@ import { Database, type SQLQueryBindings } from "bun:sqlite";
 import { existsSync, readdirSync, statSync, unlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { LocationId } from "@memex/model";
+import type { LocationId } from "@memindex/model";
 import type { SourceDb, SourceKit } from "./contract.ts";
 
-const SNAPSHOT_PREFIX = "memex-snap-";
+const SNAPSHOT_PREFIX = "memindex-snap-";
 const SNAPSHOT_STALE_MS = 60 * 60 * 1000;
 const SQLITE3_BINS = ["/opt/homebrew/opt/sqlite/bin/sqlite3", "/usr/local/opt/sqlite/bin/sqlite3"];
 

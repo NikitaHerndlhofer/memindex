@@ -48,7 +48,7 @@ export function selfInvocation(args: readonly string[]): string[] {
  * null in development (`bun src/cli.ts`), where no stable path exists.
  */
 export function stableBinPath(): string | null {
-  for (const p of ["/opt/homebrew/bin/memex", "/usr/local/bin/memex"]) if (existsSync(p)) return p;
+  for (const p of ["/opt/homebrew/bin/memindex", "/usr/local/bin/memindex"]) if (existsSync(p)) return p;
   const exec = process.execPath;
   if (!exec || /\/bun$/.test(exec)) return null;
   try {

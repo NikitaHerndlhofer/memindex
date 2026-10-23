@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { producerId } from "@memex/model";
+import { producerId } from "@memindex/model";
 import { chunkHash, type ItemSnapshot, planItemWrite, turnHash } from "../src/core/plan.ts";
 import {
   bindNamedParams,

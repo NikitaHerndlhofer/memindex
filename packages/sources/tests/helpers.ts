@@ -2,7 +2,7 @@ import { Database } from "bun:sqlite";
 import { cpSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { LocationId, Sighting } from "@memex/model";
+import type { LocationId, Sighting } from "@memindex/model";
 import { createSourceKit, type DisposableSourceKit, type ScanResult } from "../src/index.ts";
 
 const BREW_SQLITE = "/opt/homebrew/opt/sqlite/lib/libsqlite3.dylib";
@@ -40,7 +40,7 @@ export function commit(
 }
 
 export function tmpCopy(fixture: string): string {
-  const dir = mkdtempSync(join(tmpdir(), "memex-sources-test-"));
+  const dir = mkdtempSync(join(tmpdir(), "memindex-sources-test-"));
   cpSync(join(FIXTURES, fixture), join(dir, fixture), { recursive: true });
   return dir;
 }

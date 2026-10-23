@@ -2,10 +2,10 @@ import {
   type ArchiveStatus,
   checkEmbedder,
   loadConfig,
-  type MemexConfig,
+  type MemindexConfig,
   migrateArchive,
   openArchive,
-} from "@memex/engine";
+} from "@memindex/engine";
 import { defineCommand } from "citty";
 import { z } from "zod";
 import { parseParams } from "../args.ts";
@@ -16,7 +16,7 @@ import { type SkillState, skillStates, skillTargets } from "../install/skill.ts"
 import { fromArray, render } from "../render.ts";
 import { VERSION } from "../version.ts";
 
-const storeLabel = (cfg: MemexConfig) => (cfg.store.backend === "sqlite" ? cfg.store.path : cfg.store.url);
+const storeLabel = (cfg: MemindexConfig) => (cfg.store.backend === "sqlite" ? cfg.store.path : cfg.store.url);
 
 function statusText(
   s: ArchiveStatus,
@@ -24,7 +24,7 @@ function statusText(
   watcher: boolean,
 ): string {
   const lines = [
-    `memex ${VERSION}`,
+    `memindex ${VERSION}`,
     `store     ${s.backend} ${s.store.backend === "sqlite" ? s.store.path : s.store.url}`,
     `schema    ${s.schema.applied}/${s.schema.shipped} (${s.schema.state}), view contract v${s.schema.contract}`,
     `producer  ${s.producer ?? "(read-only)"}`,
@@ -95,7 +95,7 @@ const JobsArgs = z.object({
 export const jobsCommand = defineCommand({
   meta: {
     name: "jobs",
-    description: "Data jobs: `memex jobs` (status) or `memex jobs run [--only id,…] [--budget ms]`",
+    description: "Data jobs: `memindex jobs` (status) or `memindex jobs run [--only id,…] [--budget ms]`",
   },
   args: {
     action: { type: "positional", required: false, description: "status (default) | run" },
@@ -154,7 +154,7 @@ interface Check {
 
 export async function runDoctor(): Promise<{ ok: boolean; checks: Check[] }> {
   const checks: Check[] = [];
-  let cfg: MemexConfig;
+  let cfg: MemindexConfig;
   try {
     cfg = await loadConfig();
     checks.push({ name: "config", ok: true, detail: cfg.paths.configFile });
@@ -189,7 +189,7 @@ export async function runDoctor(): Promise<{ ok: boolean; checks: Check[] }> {
         name: "archive",
         ok: schema.state !== "behind",
         detail: `${storeLabel(cfg)} (schema ${schema.applied}/${schema.shipped}, ${schema.state})`,
-        ...(schema.state === "behind" ? { hint: "memex migrate" } : {}),
+        ...(schema.state === "behind" ? { hint: "memindex migrate" } : {}),
       });
       const skills = await skillStates(
         archive.skill(),
@@ -201,7 +201,7 @@ export async function runDoctor(): Promise<{ ok: boolean; checks: Check[] }> {
         name: "agent skill",
         ok: stale.length === 0,
         detail: stale.length === 0 ? "current" : stale.map((k) => `${k.state}: ${k.path}`).join("; "),
-        ...(stale.length ? { hint: "memex install-skill" } : {}),
+        ...(stale.length ? { hint: "memindex install-skill" } : {}),
       });
     } finally {
       await archive.close();
@@ -211,7 +211,7 @@ export async function runDoctor(): Promise<{ ok: boolean; checks: Check[] }> {
       name: "archive",
       ok: false,
       detail: describeError(e),
-      hint: "memex install (creates and migrates the archive)",
+      hint: "memindex install (creates and migrates the archive)",
     });
   }
   const loaded = launchAgentLoaded();
@@ -219,7 +219,7 @@ export async function runDoctor(): Promise<{ ok: boolean; checks: Check[] }> {
     name: "watcher (launchd)",
     ok: loaded,
     detail: `${PLIST_LABEL} ${loaded ? "loaded" : "not loaded"}`,
-    ...(loaded ? {} : { hint: "memex install" }),
+    ...(loaded ? {} : { hint: "memindex install" }),
   });
   return { ok: checks.every((c) => c.ok), checks };
 }

@@ -1,4 +1,4 @@
-import type { EmbedHealth } from "@memex/engine";
+import type { EmbedHealth } from "@memindex/engine";
 import { run } from "../spawn.ts";
 
 export interface OllamaSteps {
@@ -35,7 +35,7 @@ export async function ensureOllama(model: string, steps: OllamaSteps, waitMs = 8
     }
     if (!h.ok && h.reason === "unreachable") {
       steps.log(
-        "Ollama is still unreachable. Install it with `brew install ollama`, then re-run `memex install`.",
+        "Ollama is still unreachable. Install it with `brew install ollama`, then re-run `memindex install`.",
       );
       return h;
     }

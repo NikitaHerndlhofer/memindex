@@ -1,10 +1,10 @@
 /**
- * @memex/sources — the in-tree source plugins and chunkers. SOURCES and CHUNKERS are the only lists;
+ * @memindex/sources — the in-tree source plugins and chunkers. SOURCES and CHUNKERS are the only lists;
  * everything that needs "all sources" (facet views, watch paths, hook dispatch, status rows) asks the
  * registry built from them.
  */
 
-import type { Chunker, ChunkerId, Facets, SourceId } from "@memex/model";
+import type { Chunker, ChunkerId, Facets, SourceId } from "@memindex/model";
 import { transcriptChunker } from "./chunkers/transcript.ts";
 import { wordsChunker } from "./chunkers/words.ts";
 import { claudeCode } from "./claude-code/index.ts";

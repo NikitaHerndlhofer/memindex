@@ -23,7 +23,7 @@ import {
   sourceId,
   type TurnDraft,
   turnKey,
-} from "@memex/model";
+} from "@memindex/model";
 import { z } from "zod";
 import { blockToPart } from "../blocks.ts";
 import { transcriptChunker } from "../chunkers/transcript.ts";
@@ -52,7 +52,7 @@ export const ClaudeCodeMeta = z.object({
 export type ClaudeCodeMeta = z.infer<typeof ClaudeCodeMeta>;
 
 function root(kit: SourceKit): string {
-  return kit.env.MEMEX_CLAUDE_CODE_DIR ?? join(kit.home, ".claude", "projects");
+  return kit.env.MEMINDEX_CLAUDE_CODE_DIR ?? join(kit.home, ".claude", "projects");
 }
 
 function isSubagentPath(path: string): boolean {

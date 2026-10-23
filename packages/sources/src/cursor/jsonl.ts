@@ -20,7 +20,7 @@ import {
   sha256Hex,
   type TurnDraft,
   turnKey,
-} from "@memex/model";
+} from "@memindex/model";
 import { blockToPart } from "../blocks.ts";
 import { asRecord, asString, parseJson, repoFromPath, resolveDashedPath, UUID } from "../util.ts";
 import type { CursorMeta } from "./meta.ts";

@@ -1,13 +1,13 @@
 import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
-import type { Sighting } from "@memex/model";
+import type { Sighting } from "@memindex/model";
 import { claudeCode } from "../src/claude-code/index.ts";
 import { collect, commit, FIXTURES, makeKit } from "./helpers.ts";
 
 const SID = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
 
 describe("claude-code", () => {
-  const kit = makeKit({ MEMEX_CLAUDE_CODE_DIR: join(FIXTURES, "claude-projects") });
+  const kit = makeKit({ MEMINDEX_CLAUDE_CODE_DIR: join(FIXTURES, "claude-projects") });
 
   test("scan lists sessions and subagents with last timestamp and file hash", async () => {
     const [loc] = await claudeCode.locations(kit);

@@ -1,4 +1,4 @@
-import type { VectorSpace } from "@memex/model";
+import type { VectorSpace } from "@memindex/model";
 
 export interface Embedder {
   readonly space: VectorSpace;

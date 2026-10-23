@@ -1,5 +1,5 @@
 /**
- * @memex/model — the one content model every source maps into. Pure types and pure functions:
+ * @memindex/model — the one content model every source maps into. Pure types and pure functions:
  * no I/O, no SQL. Every other package depends on this one; it depends on nothing.
  *
  *   Item ─< Turn ─< Chunk ──(content_hash)──> Vector[space]

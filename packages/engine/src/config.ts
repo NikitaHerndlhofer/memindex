@@ -3,13 +3,13 @@ import { existsSync } from "node:fs";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { type ProducerId, producerId, type SourceId, sourceId } from "@memex/model";
-import type { StoreConfig } from "@memex/store";
+import { type ProducerId, producerId, type SourceId, sourceId } from "@memindex/model";
+import type { StoreConfig } from "@memindex/store";
 import { z } from "zod";
 
 export type Env = Readonly<Record<string, string | undefined>>;
 
-export interface MemexPaths {
+export interface MemindexPaths {
   readonly home: string;
   readonly configDir: string;
   readonly configFile: string;
@@ -24,8 +24,8 @@ export interface OllamaConfig {
   readonly keepAlive?: string;
 }
 
-export interface MemexConfig {
-  readonly paths: MemexPaths;
+export interface MemindexConfig {
+  readonly paths: MemindexPaths;
   /** null until the first write-open mints one. */
   readonly producerId: ProducerId | null;
   readonly store: StoreConfig;
@@ -55,15 +55,15 @@ export const LOCAL_SUPABASE_URL = "postgresql://postgres:postgres@127.0.0.1:5432
 
 export const OLLAMA_DEFAULTS = { host: "http://127.0.0.1:11434", model: "bge-m3", dim: 1024 } as const;
 
-export function resolvePaths(env: Env = process.env): MemexPaths {
+export function resolvePaths(env: Env = process.env): MemindexPaths {
   const home = env.HOME ?? homedir();
-  const configDir = env.MEMEX_CONFIG_DIR ? resolve(env.MEMEX_CONFIG_DIR) : join(home, ".config", "memex");
+  const configDir = env.MEMINDEX_CONFIG_DIR ? resolve(env.MEMINDEX_CONFIG_DIR) : join(home, ".config", "memindex");
   return {
     home,
     configDir,
     configFile: join(configDir, "config.json"),
     lockDir: join(configDir, "locks"),
-    logDir: join(home, "Library", "Logs", "memex"),
+    logDir: join(home, "Library", "Logs", "memindex"),
   };
 }
 
@@ -87,28 +87,28 @@ async function readConfigFile(file: string): Promise<ConfigFile> {
   return parsed.data;
 }
 
-/** File, then env overrides (MEMEX_STORE, MEMEX_OLLAMA_HOST ?? OLLAMA_HOST, MEMEX_EMBED_MODEL). */
-export async function loadConfig(env: Env = process.env): Promise<MemexConfig> {
+/** File, then env overrides (MEMINDEX_STORE, MEMINDEX_OLLAMA_HOST ?? OLLAMA_HOST, MEMINDEX_EMBED_MODEL). */
+export async function loadConfig(env: Env = process.env): Promise<MemindexConfig> {
   const paths = resolvePaths(env);
   const file = await readConfigFile(paths.configFile);
-  const storeSpec = env.MEMEX_STORE ?? file.store;
-  const host = env.MEMEX_OLLAMA_HOST ?? env.OLLAMA_HOST ?? file.ollama?.host ?? OLLAMA_DEFAULTS.host;
+  const storeSpec = env.MEMINDEX_STORE ?? file.store;
+  const host = env.MEMINDEX_OLLAMA_HOST ?? env.OLLAMA_HOST ?? file.ollama?.host ?? OLLAMA_DEFAULTS.host;
   return {
     paths,
     producerId: file.producerId ? producerId(file.producerId) : null,
     store: parseStoreSpec(storeSpec ?? LOCAL_SUPABASE_URL, paths.home),
     ollama: {
       host: /^https?:\/\//.test(host) ? host : `http://${host}`,
-      model: env.MEMEX_EMBED_MODEL ?? file.ollama?.model ?? OLLAMA_DEFAULTS.model,
+      model: env.MEMINDEX_EMBED_MODEL ?? file.ollama?.model ?? OLLAMA_DEFAULTS.model,
       dim: file.ollama?.dim ?? OLLAMA_DEFAULTS.dim,
-      ...(env.MEMEX_OLLAMA_KEEP_ALIVE ? { keepAlive: env.MEMEX_OLLAMA_KEEP_ALIVE } : {}),
+      ...(env.MEMINDEX_OLLAMA_KEEP_ALIVE ? { keepAlive: env.MEMINDEX_OLLAMA_KEEP_ALIVE } : {}),
     },
     disabledSources: (file.disabledSources ?? []).map(sourceId),
   };
 }
 
 /** Mints and persists the per-machine producer id on first write-open. Other file fields are preserved. */
-export async function ensureProducerId(cfg: MemexConfig): Promise<ProducerId> {
+export async function ensureProducerId(cfg: MemindexConfig): Promise<ProducerId> {
   if (cfg.producerId) return cfg.producerId;
   const file = await readConfigFile(cfg.paths.configFile);
   if (file.producerId) return producerId(file.producerId);

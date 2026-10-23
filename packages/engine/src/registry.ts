@@ -1,7 +1,7 @@
-import type { Chunker, ChunkerId, Facets, LocationId, SourceId } from "@memex/model";
-import type { SourceKit, SourcePlugin } from "@memex/sources";
+import type { Chunker, ChunkerId, Facets, LocationId, SourceId } from "@memindex/model";
+import type { SourceKit, SourcePlugin } from "@memindex/sources";
 
-/** The slice of `@memex/sources`' registry the engine relies on. */
+/** The slice of `@memindex/sources`' registry the engine relies on. */
 export interface Registry {
   readonly all: readonly SourcePlugin[];
   chunker(id: ChunkerId): Chunker;
@@ -16,10 +16,10 @@ export type KitFactory = (source: SourceId, cursorGet: CursorGet) => SourceKit;
 export type Log = (msg: string, data?: Record<string, unknown>) => void;
 
 export function stderrLog(env: Readonly<Record<string, string | undefined>> = process.env): Log {
-  const quiet = env.MEMEX_QUIET === "1";
+  const quiet = env.MEMINDEX_QUIET === "1";
   return (msg, data) => {
     if (quiet) return;
-    process.stderr.write(`[memex] ${msg}${data ? ` ${JSON.stringify(data)}` : ""}\n`);
+    process.stderr.write(`[memindex] ${msg}${data ? ` ${JSON.stringify(data)}` : ""}\n`);
   };
 }
 
