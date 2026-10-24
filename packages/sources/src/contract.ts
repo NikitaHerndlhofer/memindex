@@ -83,7 +83,13 @@ export interface SourcePlugin<Meta = unknown> {
   /** Targeted listing for hooks. Default: scan + filter. */
   sight?(native: string, location: Location, kit: SourceKit): Promise<Sighting | null>;
   readonly triggers: {
+    /**
+     * Paths watched recursively for file events. Small trees only: every directory costs a native
+     * watcher, and the watcher polls a tree with more than a few hundred directories instead.
+     */
     readonly watch: (kit: SourceKit) => readonly string[];
+    /** Also ingest on this timer; scan's "unchanged" fast path keeps an idle tick cheap. */
+    readonly pollEvery?: { readonly minutes: number };
     readonly hooks: HookSpec | null;
   };
   /** Short section appended to the generated SKILL.md. */

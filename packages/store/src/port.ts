@@ -202,7 +202,12 @@ export interface VectorRepo {
   /** Content hashes of live, embeddable chunks with no vector in `space`. `prefer` items first. */
   backlog(
     space: VectorSpace,
-    opts: { readonly limit: number; readonly prefer?: readonly ItemKey[] },
+    opts: {
+      readonly limit: number;
+      readonly prefer?: readonly ItemKey[];
+      /** Hashes this run already gave up on. */
+      readonly exclude?: readonly ContentHash[];
+    },
   ): Promise<readonly PendingEmbed[]>;
   backlogSize(space: VectorSpace): Promise<number>;
   /** Insert-if-absent. Two producers embedding the same text race harmlessly. Returns rows inserted. */

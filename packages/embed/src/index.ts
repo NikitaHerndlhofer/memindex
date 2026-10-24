@@ -3,6 +3,7 @@ export {
   type Embedder,
   EmbedError,
   type EmbedHealth,
+  type EmbedOutcome,
   type OllamaEmbedder,
   type OllamaOptions,
   type PullProgress,

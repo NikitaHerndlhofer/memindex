@@ -150,12 +150,16 @@ export const watchCommand = defineCommand({
   args: {
     debounce: { type: "string", description: "Debounce window in ms (default 2000)" },
   },
-  run: action(async ({ args }) => {
-    const debounceMs = z.coerce.number().int().min(0).default(2_000).parse(args.debounce);
-    await withArchive("write", async (archive) => {
-      await refreshInstalledSkills(archive);
-      await archive.watch({ debounceMs });
-    });
-    return 0;
-  }),
+  run: async (ctx) => {
+    await action(async ({ args }: typeof ctx) => {
+      const debounceMs = z.coerce.number().int().min(0).default(2_000).parse(args.debounce);
+      await withArchive("write", async (archive) => {
+        await refreshInstalledSkills(archive);
+        await archive.watch({ debounceMs });
+      });
+      return 0;
+    })(ctx);
+    // A run abandoned at shutdown can still hold sockets (Ollama, Postgres) that keep the process alive.
+    process.exit();
+  },
 });

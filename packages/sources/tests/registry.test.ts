@@ -48,8 +48,14 @@ test("one source list; the registry derives facets, plugin-owned chunkers and wa
     source: "superwhisper",
     path: "/Users/test/Library/Application Support/superwhisper/database",
   });
-  expect(watch).toContainEqual({ source: "cursor", path: "/Users/test/.cursor/projects" });
   expect(watch).toContainEqual({ source: "claude-code", path: "/Users/test/.claude/projects" });
+  expect(watch.filter((w) => w.source === "cursor")).toEqual([]);
+  expect(
+    SOURCES.filter((s) => s.triggers.pollEvery).map((s) => ({
+      id: s.id as string,
+      poll: s.triggers.pollEvery,
+    })),
+  ).toEqual([{ id: "cursor", poll: { minutes: 15 } }]);
   expect(SOURCES.filter((s) => s.triggers.hooks).map((s) => s.id as string)).toEqual(["cursor"]);
 });
 

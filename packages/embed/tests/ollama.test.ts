@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { createOllamaEmbedder, EmbedError } from "@memindex/embed";
+import { createOllamaEmbedder, EmbedError, type EmbedOutcome } from "@memindex/embed";
 
 type Handler = (req: Request, body: { input: string[] } | null) => Response | Promise<Response>;
 
@@ -29,6 +29,11 @@ afterEach(() => {
 });
 
 const vec = (n: number, dim = 3) => Array.from({ length: dim }, (_, i) => (i === 0 ? n : 1));
+const vectors = (out: readonly EmbedOutcome[]): Float32Array[] =>
+  out.map((v) => {
+    if (!(v instanceof Float32Array)) throw new Error(`expected a vector, got ${JSON.stringify(v)}`);
+    return v;
+  });
 const ok = (body: { input: string[] } | null) =>
   Response.json({ embeddings: (body?.input ?? []).map((_, i) => vec(i + 2)) });
 
@@ -37,7 +42,7 @@ describe("createOllamaEmbedder", () => {
     const host = serve((_, body) => ok(body));
     const e = createOllamaEmbedder({ host, model: "m", dim: 3, keepAlive: "5m" });
     expect(e.space).toEqual({ id: "m@3", model: "m", dim: 3 });
-    const out = await e.embed(["a", "b"]);
+    const out = vectors(await e.embed(["a", "b"]));
     expect(out).toHaveLength(2);
     for (const v of out) expect(Math.hypot(...v)).toBeCloseTo(1, 5);
     expect(out[0]?.[0]).toBeCloseTo(2 / Math.sqrt(6), 5);
@@ -60,12 +65,54 @@ describe("createOllamaEmbedder", () => {
     expect(requests.filter((r) => r.body?.input.length === 1)).toHaveLength(5);
   });
 
-  test("HTTP 400 on a single input is a bad_response error", async () => {
+  test("HTTP 413 halves the batch like 400", async () => {
+    const host = serve((_, body) =>
+      (body?.input.length ?? 0) > 1
+        ? Response.json({ error: "the input length exceeds the context length" }, { status: 413 })
+        : ok(body),
+    );
+    const e = createOllamaEmbedder({ host, model: "m", dim: 3, batchSize: 8 });
+    expect(vectors(await e.embed(["a", "b", "c", "d", "e"]))).toHaveLength(5);
+    expect(requests.filter((r) => r.body?.input.length === 1)).toHaveLength(5);
+  });
+
+  test("a single input rejected for length is retried once as a safe prefix", async () => {
+    const long = `${"x".repeat(9_000)}tail`;
+    const host = serve((_, body) =>
+      (body?.input[0]?.length ?? 0) > 6_000
+        ? Response.json({ error: "the input length exceeds the context length" }, { status: 413 })
+        : ok(body),
+    );
+    const out = await createOllamaEmbedder({ host, model: "m", dim: 3 }).embed([long]);
+    expect(out[0]).toBeInstanceOf(Float32Array);
+    expect(requests.map((r) => r.body?.input[0]?.length)).toEqual([long.length, 6_000]);
+    expect(long.startsWith(requests[1]?.body?.input[0] ?? "-")).toBe(true);
+  });
+
+  test("an input still rejected after the retry comes back rejected; its batch neighbours keep vectors", async () => {
+    const bad = "bad ".repeat(3_000);
+    const host = serve((_, body) =>
+      body?.input.some((t) => t.startsWith("bad"))
+        ? Response.json({ error: "the input length exceeds the context length" }, { status: 413 })
+        : ok(body),
+    );
+    const out = await createOllamaEmbedder({ host, model: "m", dim: 3, batchSize: 8 }).embed(["a", bad, "c"]);
+    expect(out[0]).toBeInstanceOf(Float32Array);
+    expect(out[2]).toBeInstanceOf(Float32Array);
+    expect(out[1]).toEqual({
+      rejected:
+        "ollama rejected this input, also when cut to 6000 chars: HTTP 413: the input length exceeds the context length",
+    });
+    expect(
+      requests.filter((r) => r.body?.input[0]?.startsWith("bad")).map((r) => r.body?.input.length),
+    ).toEqual([1, 1]);
+  });
+
+  test("a short input rejected with HTTP 400 comes back rejected without a retry", async () => {
     const host = serve(() => new Response("nope", { status: 400 }));
-    const e = createOllamaEmbedder({ host, model: "m", dim: 3 });
-    const err = await e.embed(["a"]).catch((x: unknown) => x);
-    expect(err).toBeInstanceOf(EmbedError);
-    expect((err as EmbedError).code).toBe("bad_response");
+    const out = await createOllamaEmbedder({ host, model: "m", dim: 3 }).embed(["a"]);
+    expect(out).toEqual([{ rejected: "ollama rejected this input: HTTP 400: nope" }]);
+    expect(requests).toHaveLength(1);
   });
 
   test("retries 5xx and 429, then succeeds", async () => {
@@ -134,7 +181,7 @@ describe("createOllamaEmbedder", () => {
     });
     const e = createOllamaEmbedder({ host, model: "m", dim: 3, batchSize: 1, concurrency: 3 });
     const inputs = Array.from({ length: 9 }, (_, i) => String(i + 1));
-    const out = await e.embed(inputs);
+    const out = vectors(await e.embed(inputs));
     expect(peak).toBe(3);
     expect(out.map((v) => Math.round((v[0] ?? 0) / (v[1] ?? 1)))).toEqual(inputs.map(Number));
   });

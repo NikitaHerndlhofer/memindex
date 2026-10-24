@@ -1,9 +1,17 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import type { EmbedHealth, PullProgress } from "@memindex/engine";
-import { PLIST_LABEL, renderPlist } from "../src/install/launchd.ts";
+import { PLIST_LABEL, renderPlist, writePlist } from "../src/install/launchd.ts";
 import { ensureOllama, formatPull } from "../src/install/ollama.ts";
 import { installSkill, refreshSkills, skillStates, skillTargets } from "../src/install/skill.ts";
 import { fromArray, render } from "../src/render.ts";
@@ -95,6 +103,24 @@ describe("launchd plist", () => {
     expect(xml).toContain("<integer>30</integer>");
     expect(xml).toContain("/l/a&amp;b.log");
     expect(xml).not.toContain("StartInterval");
+  });
+
+  test("runs as a low-priority background process, and reinstalling rewrites an existing plist", async () => {
+    const path = join(dir, "Library", "LaunchAgents", `${PLIST_LABEL}.plist`);
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, renderPlist({ binPath: "/old/memindex", logPath: "/l/old.log", home: dir }));
+    const logPath = join(dir, "logs", "watch.log");
+    expect(await writePlist({ binPath: "/opt/homebrew/bin/memindex", logPath, home: dir })).toBe(path);
+    const parsed = JSON.parse(
+      Bun.spawnSync(["plutil", "-convert", "json", "-o", "-", path]).stdout.toString(),
+    ) as Record<string, unknown>;
+    expect(parsed).toMatchObject({
+      ProgramArguments: ["/opt/homebrew/bin/memindex", "watch"],
+      ProcessType: "Background",
+      LowPriorityIO: true,
+      Nice: 10,
+      StandardErrorPath: logPath,
+    });
   });
 });
 

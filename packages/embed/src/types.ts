@@ -1,9 +1,19 @@
 import type { VectorSpace } from "@memindex/model";
 
+/** The embedder refused this one input; there is no vector for it. */
+interface RejectedInput {
+  readonly rejected: string;
+}
+
+export type EmbedOutcome = Float32Array | RejectedInput;
+
 export interface Embedder {
   readonly space: VectorSpace;
-  /** L2-normalized vectors, one per input, same order. Splits oversized batches on HTTP 400. */
-  embed(texts: readonly string[]): Promise<readonly Float32Array[]>;
+  /**
+   * One outcome per input, same order: an L2-normalized vector, or the reason the embedder refused
+   * that input. Oversized batches are split; a refused input never fails its neighbours.
+   */
+  embed(texts: readonly string[]): Promise<readonly EmbedOutcome[]>;
   health(): Promise<EmbedHealth>;
 }
 

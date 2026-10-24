@@ -304,6 +304,9 @@ class ArchiveImpl implements Archive {
       embedded = r.done;
       backlog = r.remaining;
       if (r.error) tally.errors.push({ source: "embed", message: r.error });
+      for (const s of r.skipped ?? []) {
+        tally.errors.push({ source: "embed", message: `embed skipped chunk ${s.unit}: ${s.reason}` });
+      }
     }
     return {
       outcomes: { ...tally.outcomes },
@@ -324,7 +327,12 @@ class ArchiveImpl implements Archive {
     const targets = this.enabled().map((plugin) => {
       const kit: DisposableKit = this.p.kitFactory(plugin.id, async () => null);
       try {
-        return { source: plugin.id, paths: plugin.triggers.watch(kit) };
+        const poll = plugin.triggers.pollEvery;
+        return {
+          source: plugin.id,
+          paths: plugin.triggers.watch(kit),
+          pollEveryMs: poll ? poll.minutes * 60_000 : null,
+        };
       } finally {
         kit.dispose?.();
       }

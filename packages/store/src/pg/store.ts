@@ -596,8 +596,13 @@ export class PgWriteStore extends PgReadStore implements WriteStore {
 
   private async backlog(
     space: VectorSpace,
-    opts: { readonly limit: number; readonly prefer?: readonly ItemKey[] },
+    opts: {
+      readonly limit: number;
+      readonly prefer?: readonly ItemKey[];
+      readonly exclude?: readonly ContentHash[];
+    },
   ): Promise<readonly PendingEmbed[]> {
+    const exclude = opts.exclude ?? [];
     const pending = (preferOnly: boolean, limit: number, skip: readonly string[]) => sql`
       SELECT DISTINCT ON (c.content_hash) c.content_hash, coalesce(c.embed_text, c.text) AS embed_text
       FROM memindex.chunk c JOIN memindex.item i ON i.item_key = c.item_key
@@ -613,16 +618,10 @@ export class PgWriteStore extends PgReadStore implements WriteStore {
         return { hash: v.str(r, "content_hash") as ContentHash, embedText: v.str(r, "embed_text") };
       });
     const limit = Math.max(1, Math.floor(opts.limit));
-    const first = opts.prefer?.length ? parse(await this.db.execute(pending(true, limit, []))) : [];
+    const first = opts.prefer?.length ? parse(await this.db.execute(pending(true, limit, exclude))) : [];
     if (first.length >= limit) return first;
     const rest = parse(
-      await this.db.execute(
-        pending(
-          false,
-          limit - first.length,
-          first.map((p) => p.hash),
-        ),
-      ),
+      await this.db.execute(pending(false, limit - first.length, [...exclude, ...first.map((p) => p.hash)])),
     );
     return [...first, ...rest];
   }

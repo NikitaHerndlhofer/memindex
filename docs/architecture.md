@@ -141,18 +141,18 @@ per-plugin maintenance becomes useful.
 
 Use a maintained library wherever it replaces code we would otherwise own.
 
-| Concern                  | Tool                                   | Why                                                                                                               |
-| ------------------------ | -------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
-| Postgres driver          | `postgres` (postgres.js)               | The driver Supabase and Drizzle document; handles the transaction pooler with `prepare: false`                    |
-| Schema, queries          | Drizzle ORM                            | TypeScript schema is the single source of truth; typed CRUD; raw `sql` for search and locking                     |
-| Migrations               | drizzle-kit + Supabase CLI             | drizzle-kit generates Supabase-prefixed files into `supabase/migrations`; the CLI is the only migrator and ledger |
-| Ollama                   | `ollama` (official client)             | `embed` with `truncate`/`keep_alive`, plus `list` and streamed `pull` for `install` and `doctor`                  |
-| Retries, concurrency     | `p-retry`, `p-limit`                   | Backoff on Ollama and network errors; bounded parallel embedding                                                  |
-| Prose and code splitting | `@langchain/textsplitters`             | Recursive and language-aware splitters inside `parts@1`; `words@1` stays custom to match swrag byte for byte      |
-| CLI                      | `citty` + `consola` + `@clack/prompts` | Commands, leveled logging, and the `install` wizard                                                               |
-| File watching            | `chokidar`                             | Debounced, recursive, pure JS, so `bun build --compile` keeps working                                             |
-| Validation               | `zod`                                  | Config, plugin meta, Ollama and hook payloads at the boundary                                                     |
-| Lint, dead code          | Biome, `knip`                          | Formatting and lint; unused exports and dependencies                                                              |
+| Concern                  | Tool                                   | Why                                                                                                                                                                                                      |
+| ------------------------ | -------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Postgres driver          | `postgres` (postgres.js)               | The driver Supabase and Drizzle document; handles the transaction pooler with `prepare: false`                                                                                                           |
+| Schema, queries          | Drizzle ORM                            | TypeScript schema is the single source of truth; typed CRUD; raw `sql` for search and locking                                                                                                            |
+| Migrations               | drizzle-kit + Supabase CLI             | drizzle-kit generates Supabase-prefixed files into `supabase/migrations`; the CLI is the only migrator and ledger                                                                                        |
+| Ollama                   | `ollama` (official client)             | `embed` with `truncate`/`keep_alive`, plus `list` and streamed `pull` for `install` and `doctor`                                                                                                         |
+| Retries, concurrency     | `p-retry`, `p-limit`                   | Backoff on Ollama and network errors; bounded parallel embedding                                                                                                                                         |
+| Prose and code splitting | `@langchain/textsplitters`             | Recursive and language-aware splitters inside `parts@1`; `words@1` stays custom to match swrag byte for byte                                                                                             |
+| CLI                      | `citty` + `consola` + `@clack/prompts` | Commands, leveled logging, and the `install` wizard                                                                                                                                                      |
+| File watching            | `chokidar`                             | Small trees only (Super Whisper, Claude Code): under Bun its setup is quadratic in directories and blocks the event loop, so trees over 300 directories and Cursor (hooks plus a 15-min poll) are polled |
+| Validation               | `zod`                                  | Config, plugin meta, Ollama and hook payloads at the boundary                                                                                                                                            |
+| Lint, dead code          | Biome, `knip`                          | Formatting and lint; unused exports and dependencies                                                                                                                                                     |
 
 Not adopted: a job queue (`pg-boss`, pgmq), because convergent jobs are predicates over the data
 and a queue would be a second source of truth; an MCP server is a strong follow-up once recipes

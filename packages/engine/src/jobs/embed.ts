@@ -1,5 +1,5 @@
 import type { Embedder } from "@memindex/embed";
-import type { ItemKey } from "@memindex/model";
+import type { ContentHash, ItemKey } from "@memindex/model";
 import type { WriteStore } from "@memindex/store";
 import { errorMessage } from "../ingest.ts";
 import type { Budget, JobDef, JobReport } from "./types.ts";
@@ -20,11 +20,13 @@ export async function embedBacklog(
   let done = 0;
   let previous = "";
   let error: string | null = null;
+  const skipped: { unit: ContentHash; reason: string }[] = [];
   const limit = budget.limit ?? Number.POSITIVE_INFINITY;
   while (!budget.expired() && done < limit) {
     const pending = await store.vectors.backlog(space, {
       limit: Math.min(EMBED_BATCH, limit - done),
       ...(prefer.length > 0 ? { prefer } : {}),
+      ...(skipped.length > 0 ? { exclude: skipped.map((s) => s.unit) } : {}),
     });
     if (pending.length === 0) break;
     const fingerprint = pending.map((p) => p.hash).join(",");
@@ -34,17 +36,26 @@ export async function embedBacklog(
     }
     previous = fingerprint;
     try {
-      const vectors = await embedder.embed(pending.map((p) => p.embedText));
-      done += await store.vectors.put(
-        space,
-        pending.map((p, i) => ({ hash: p.hash, vector: vectors[i] as Float32Array })),
-      );
+      const outcomes = await embedder.embed(pending.map((p) => p.embedText));
+      const vectors: { hash: ContentHash; vector: Float32Array }[] = [];
+      pending.forEach((p, i) => {
+        const o = outcomes[i];
+        if (o instanceof Float32Array) vectors.push({ hash: p.hash, vector: o });
+        else skipped.push({ unit: p.hash, reason: o?.rejected ?? "embedder returned no outcome" });
+      });
+      done += await store.vectors.put(space, vectors);
     } catch (e) {
       error = errorMessage(e);
       break;
     }
   }
-  return { id: "embed", done, remaining: await store.vectors.backlogSize(space), error };
+  return {
+    id: "embed",
+    done,
+    remaining: await store.vectors.backlogSize(space),
+    error,
+    ...(skipped.length > 0 ? { skipped } : {}),
+  };
 }
 
 export const embedJob: JobDef = {

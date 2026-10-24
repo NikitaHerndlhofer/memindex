@@ -8,6 +8,18 @@ import { join } from "node:path";
  */
 const MAX_LOCK_AGE_MS = 24 * 3600_000;
 
+/** Locks this process holds; removed on exit so a reused pid never makes a leftover look live. */
+const held = new Set<string>();
+let exitHook = false;
+
+function unlinkQuiet(path: string): void {
+  try {
+    unlinkSync(path);
+  } catch {
+    // already removed by a stale-lock steal; nothing to release
+  }
+}
+
 /**
  * Best-effort per-(producer, source) lock file. Avoids duplicate work between the watcher, hooks
  * and manual runs; correctness never depends on it (apply is transactional and revision-ordered).
@@ -19,12 +31,16 @@ export function tryLock(dir: string, name: string): (() => void) | null {
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
       writeFileSync(path, String(process.pid), { flag: "wx" });
+      held.add(path);
+      if (!exitHook) {
+        exitHook = true;
+        process.once("exit", () => {
+          for (const p of held) unlinkQuiet(p);
+        });
+      }
       return () => {
-        try {
-          unlinkSync(path);
-        } catch {
-          // already removed by a stale-lock steal; nothing to release
-        }
+        held.delete(path);
+        unlinkQuiet(path);
       };
     } catch (e) {
       if (!isErrno(e, "EEXIST")) throw e;

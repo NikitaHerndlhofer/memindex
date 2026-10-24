@@ -114,11 +114,15 @@ export class FakeStore implements WriteStore {
   }
 
   readonly vectors = {
-    backlog: async (_space: unknown, opts: { limit: number }): Promise<readonly PendingEmbed[]> => {
+    backlog: async (
+      _space: unknown,
+      opts: { limit: number; exclude?: readonly string[] },
+    ): Promise<readonly PendingEmbed[]> => {
+      const exclude = new Set(opts.exclude);
       const out = new Map<string, PendingEmbed>();
       for (const { chunks } of this.items.values()) {
         for (const c of chunks)
-          if (c.embed && !this.vecs.has(c.contentHash))
+          if (c.embed && !this.vecs.has(c.contentHash) && !exclude.has(c.contentHash))
             out.set(c.contentHash, { hash: c.contentHash, embedText: c.embedText });
       }
       return [...out.values()].slice(0, opts.limit);

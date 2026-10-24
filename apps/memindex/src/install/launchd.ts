@@ -19,7 +19,10 @@ export interface PlistTemplate {
   readonly throttleSeconds?: number;
 }
 
-/** Keepalive agent: launchd restarts `memindex watch`, which reacts to FSEvents itself (no StartInterval). */
+/**
+ * Keepalive agent: launchd restarts `memindex watch`, which watches and polls sources itself (no
+ * StartInterval). Background, low-priority I/O and nice 10 keep ingest and embedding off the user's way.
+ */
 export function renderPlist(t: PlistTemplate): string {
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -38,6 +41,12 @@ export function renderPlist(t: PlistTemplate): string {
   <true/>
   <key>ThrottleInterval</key>
   <integer>${t.throttleSeconds ?? 30}</integer>
+  <key>ProcessType</key>
+  <string>Background</string>
+  <key>LowPriorityIO</key>
+  <true/>
+  <key>Nice</key>
+  <integer>10</integer>
   <key>StandardOutPath</key>
   <string>${escapeXml(t.logPath)}</string>
   <key>StandardErrorPath</key>
@@ -69,11 +78,17 @@ function bootout(label: string): void {
   run(["launchctl", "bootout", `gui/${uid()}/${label}`], { timeoutMs: 5_000 });
 }
 
-export async function installLaunchAgent(t: PlistTemplate): Promise<string> {
+/** Writes (or overwrites) the agent's plist; launchd reads it only on the next bootstrap. */
+export async function writePlist(t: PlistTemplate): Promise<string> {
   const path = plistPath(t.home);
   await mkdir(dirname(path), { recursive: true });
   await mkdir(dirname(t.logPath), { recursive: true });
   await writeFile(path, renderPlist(t), "utf8");
+  return path;
+}
+
+export async function installLaunchAgent(t: PlistTemplate): Promise<string> {
+  const path = await writePlist(t);
   bootout(PLIST_LABEL);
   const r = run(["launchctl", "bootstrap", `gui/${uid()}`, path], { timeoutMs: 10_000 });
   if (r.exitCode !== 0) throw new Error(`launchctl bootstrap failed: ${r.stderr.trim()}`);

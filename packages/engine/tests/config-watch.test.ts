@@ -107,7 +107,7 @@ describe("watchSources", () => {
     const done = new Promise<void>((resolve) => {
       let n = 0;
       void watchSources(
-        [{ source: "s", paths: [watched, join(dir, "missing")] }],
+        [{ source: "s", paths: [watched, join(dir, "missing")], pollEveryMs: null }],
         async (source) => {
           runs.push(source);
           if (runs.length === 2) await new Promise<void>((r) => (release = r));

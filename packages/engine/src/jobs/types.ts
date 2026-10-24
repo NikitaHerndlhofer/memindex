@@ -32,6 +32,8 @@ export interface JobReport {
   /** null when the job can't count cheaply. */
   readonly remaining: number | null;
   readonly error: string | null;
+  /** Units passed over in this run without converging (e.g. chunks the embedder refused); still pending. */
+  readonly skipped?: readonly { readonly unit: string; readonly reason: string }[];
 }
 
 /**

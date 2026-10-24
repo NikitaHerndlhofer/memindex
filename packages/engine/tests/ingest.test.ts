@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { chunkerId, itemKey, locationId } from "@memindex/model";
@@ -161,6 +161,51 @@ describe("ingest loop", () => {
     const r2 = await archive.ingest();
     expect(r2.skipped).toHaveLength(0);
     expect(r2.outcomes.applied).toBe(2);
+  });
+
+  test("a sweep whose scan throws releases its lock for the next run", async () => {
+    const lockDir = join(dir, "locks");
+    let fail = true;
+    const plugin = fakePlugin({
+      entries: entries(),
+      unchanged: () => {
+        if (fail) throw new Error("scan boom");
+        return false;
+      },
+    });
+    const { archive } = await open(plugin, new FakeStore(), { lockDir });
+    const r = await archive.ingest();
+    expect(r.errors.map((e) => e.message)).toEqual(["fake: scan boom"]);
+    expect(existsSync(join(lockDir, `${PRODUCER}.${SRC}.lock`))).toBe(false);
+    fail = false;
+    const r2 = await archive.ingest();
+    expect(r2.skipped).toEqual([]);
+    expect(r2.outcomes.applied).toBe(2);
+  });
+
+  test("a chunk the embedder rejects is skipped and reported; the rest of the backlog still embeds", async () => {
+    const base = fakeEmbedder();
+    const embedder = {
+      ...base,
+      embed: async (texts: readonly string[]) => {
+        const out = await base.embed(texts);
+        return out.map((v, i) => (texts[i] === "poison" ? { rejected: "HTTP 413: too long" } : v));
+      },
+    };
+    const items = [...many(70), { native: "p", hash: "hp", text: "poison" }];
+    const { archive, store } = await open(fakePlugin({ entries: items }), new FakeStore(), { embedder });
+    await archive.ingest();
+    const [report] = await archive.jobs.run({ only: ["embed"] });
+    expect(report?.done).toBe(70);
+    expect(report?.remaining).toBe(1);
+    expect(report?.error).toBeNull();
+    expect(report?.skipped).toEqual([{ unit: expect.any(String), reason: "HTTP 413: too long" }]);
+    expect(store.vecs.size).toBe(70);
+    expect(store.vecs.has(report?.skipped?.[0]?.unit ?? "")).toBe(false);
+    const r = await archive.ingest({ embed: { budgetMs: 5_000 } });
+    expect(r.errors.map((e) => e.message)).toEqual([
+      expect.stringMatching(/^embed skipped chunk [0-9a-f]+: HTTP 413: too long$/),
+    ]);
   });
 
   test("embed budget after ingest writes vectors for new chunks", async () => {

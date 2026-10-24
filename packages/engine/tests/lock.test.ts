@@ -43,6 +43,18 @@ describe("tryLock", () => {
     expect(existsSync(join(dir, `${NAME}.lock`))).toBe(false);
   });
 
+  test("a process that exits without releasing leaves no lock behind", async () => {
+    const proc = Bun.spawn([
+      process.execPath,
+      "-e",
+      `const { tryLock } = await import(${JSON.stringify(LOCK_TS)});
+       if (!tryLock(${JSON.stringify(dir)}, ${JSON.stringify(NAME)})) process.exit(2);
+       process.exit(0);`,
+    ]);
+    expect(await proc.exited).toBe(0);
+    expect(existsSync(join(dir, `${NAME}.lock`))).toBe(false);
+  });
+
   test("a lock this process holds is not re-entered until released", () => {
     const release = tryLock(dir, NAME);
     expect(release).not.toBeNull();

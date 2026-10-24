@@ -1,5 +1,5 @@
 import { existsSync, readdirSync, statSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import { itemKey, locationId, parseItemKey, type Sighting, sourceId } from "@memindex/model";
 import { partsChunker } from "../agent-chat/chunker.ts";
 import type { Location, ScanResult, SourceDb, SourceKit, SourcePlugin } from "../contract.ts";
@@ -188,7 +188,8 @@ export const cursor: SourcePlugin<CursorMeta> = {
   },
 
   triggers: {
-    watch: (kit) => [dirname(dbPath(kit)), transcriptsRoot(kit)],
+    watch: () => [],
+    pollEvery: { minutes: 15 },
     hooks: cursorHooks,
   },
 

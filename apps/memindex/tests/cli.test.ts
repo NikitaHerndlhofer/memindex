@@ -25,6 +25,17 @@ describe("memindex CLI (subprocess)", () => {
     expect(r.stdout.trim()).toBe((pkg as { version: string }).version);
   });
 
+  test("`help` prints the usage like --help; `help <command>` prints that command's usage", () => {
+    const env = { NODE_ENV: "production" };
+    const top = memindex(["help"], { env });
+    expect(top.code).toBe(0);
+    expect(`${top.stdout}${top.stderr}`).toContain("USAGE memindex ingest|");
+    expect(top.stderr).not.toContain("Unknown command");
+    const sub = memindex(["help", "status"], { env });
+    expect(sub.code).toBe(0);
+    expect(`${sub.stdout}${sub.stderr}`).toContain("USAGE memindex status");
+  });
+
   test("q recipes --json lists every recipe without opening the archive", () => {
     const r = memindex(["q", "recipes", "--json"]);
     expect(r.code).toBe(0);

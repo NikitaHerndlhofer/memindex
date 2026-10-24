@@ -81,4 +81,10 @@ export {
 export { findRecipe, type ParamType, RECIPES, type Recipe, type RecipeParam } from "./recipes.ts";
 export type { CursorGet, KitFactory, Registry } from "./registry.ts";
 export { renderSkill, type SkillScope, VIEW_CONTRACT } from "./skill.ts";
-export { type WatchOptions, type WatchTarget, watchSources } from "./watch.ts";
+export {
+  type PathWatcher,
+  type WatchFactory,
+  type WatchOptions,
+  type WatchTarget,
+  watchSources,
+} from "./watch.ts";

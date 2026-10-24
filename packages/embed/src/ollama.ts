@@ -6,6 +6,7 @@ import { z } from "zod";
 import {
   EmbedError,
   type EmbedHealth,
+  type EmbedOutcome,
   type OllamaEmbedder,
   type OllamaOptions,
   type PullProgress,
@@ -32,8 +33,14 @@ const DEFAULTS = {
 } as const;
 const HEALTH_TIMEOUT_MS = 2_000;
 
-/** 400 is the one non-transient status worth reacting to: Ollama's answer to an oversized batch. */
+/**
+ * 400 and 413 are the non-transient statuses worth reacting to: Ollama's answers to an oversized
+ * batch or input. Its own truncation can leave an input one token over the runner's batch (413).
+ */
 class BatchRejected extends Error {}
+const REJECTED_STATUSES = new Set([400, 413]);
+/** A prefix well under bge-m3's 2,048-token runner batch even for dense text (~3 chars per token). */
+const SAFE_PREFIX_CHARS = 6_000;
 
 /** `ollama`'s ResponseError isn't exported; it carries the HTTP status as `status_code`. */
 function httpStatus(e: unknown): number | null {
@@ -76,7 +83,8 @@ export function createOllamaEmbedder(opts: OllamaOptions): OllamaEmbedder {
             });
           } catch (e) {
             const status = httpStatus(e);
-            if (status === 400) throw new AbortError(new BatchRejected(`HTTP 400: ${errorMessage(e)}`));
+            if (status !== null && REJECTED_STATUSES.has(status))
+              throw new AbortError(new BatchRejected(`HTTP ${status}: ${errorMessage(e)}`));
             if (status !== null && status < 500 && status !== 429) {
               throw new AbortError(
                 new EmbedError("bad_response", `ollama /api/embed HTTP ${status}: ${errorMessage(e)}`),
@@ -117,15 +125,29 @@ export function createOllamaEmbedder(opts: OllamaOptions): OllamaEmbedder {
     });
   }
 
-  async function embedBatch(texts: readonly string[]): Promise<Float32Array[]> {
+  async function embedBatch(texts: readonly string[]): Promise<EmbedOutcome[]> {
     try {
       return parseVectors(await post(texts), texts.length);
     } catch (e) {
       if (!(e instanceof BatchRejected)) throw e;
-      if (texts.length === 1)
-        throw new EmbedError("bad_response", `ollama rejected a single input: ${e.message}`);
+      if (texts.length === 1) return [await embedRejected(texts[0] ?? "", e)];
       const mid = Math.ceil(texts.length / 2);
       return [...(await embedBatch(texts.slice(0, mid))), ...(await embedBatch(texts.slice(mid)))];
+    }
+  }
+
+  /** One retry with a safe prefix; the vector then covers only that prefix. */
+  async function embedRejected(text: string, first: BatchRejected): Promise<EmbedOutcome> {
+    if (text.length <= SAFE_PREFIX_CHARS) return { rejected: `ollama rejected this input: ${first.message}` };
+    try {
+      const highSurrogateAtCut = /[\uD800-\uDBFF]/.test(text[SAFE_PREFIX_CHARS - 1] ?? "");
+      const prefix = text.slice(0, SAFE_PREFIX_CHARS - (highSurrogateAtCut ? 1 : 0));
+      return parseVectors(await post([prefix]), 1)[0] as Float32Array;
+    } catch (e) {
+      if (!(e instanceof BatchRejected)) throw e;
+      return {
+        rejected: `ollama rejected this input, also when cut to ${SAFE_PREFIX_CHARS} chars: ${e.message}`,
+      };
     }
   }
 

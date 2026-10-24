@@ -38,8 +38,10 @@ export const main = defineCommand({
 if (import.meta.main) {
   const argv = process.argv.slice(2);
   // A global flag: stripped here so no subcommand has to declare it; children inherit the env.
-  const rawArgs = argv.filter((a) => a !== "--verbose");
-  if (rawArgs.length !== argv.length) {
+  const flagless = argv.filter((a) => a !== "--verbose");
+  // citty has no `help` command; `memindex help [cmd]` means `memindex [cmd] --help`.
+  const rawArgs = flagless[0] === "help" ? [...flagless.slice(1), "--help"] : flagless;
+  if (flagless.length !== argv.length) {
     process.env.MEMINDEX_VERBOSE = "1";
     log.level = LogLevels.debug;
   }
