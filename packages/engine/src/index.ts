@@ -5,8 +5,13 @@
  *   jobs   = convergent derived-state jobs + one-shot data jobs
  */
 export type { EmbedHealth, PullProgress } from "@memindex/embed";
-/** The Supabase project (config + migrations) embedded in this binary, for `memindex install`. */
-export { materializeSupabaseProject } from "@memindex/store";
+export {
+  type ExtensionCheck,
+  ensureExtensionsSearchPath,
+  probeStore,
+  type SchemaStatus,
+  type StoreProbe,
+} from "@memindex/store";
 export {
   type Archive,
   type ArchiveStatus,
@@ -20,15 +25,18 @@ export {
 export {
   type Env,
   ensureProducerId,
-  LOCAL_SUPABASE_URL,
   loadConfig,
   type MemindexConfig,
   type MemindexPaths,
   OLLAMA_DEFAULTS,
   type OllamaConfig,
-  parseStoreSpec,
+  parseStoreUrl,
+  redactUrl,
   resolvePaths,
   type SearchScope,
+  type StoreSetting,
+  saveStore,
+  storeConfig,
 } from "./config.ts";
 export {
   type IngestDeps,

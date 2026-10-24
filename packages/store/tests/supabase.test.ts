@@ -11,9 +11,11 @@ import { join } from "node:path";
 import { contentHash } from "@memindex/model";
 import postgres from "postgres";
 import {
+  ensureExtensionsSearchPath,
   materializeSupabaseProject,
   migrateStore,
   openStore,
+  probeStore,
   type StoreConfig,
   StoreError,
 } from "../src/index.ts";
@@ -237,30 +239,15 @@ describe("supabase CLI is the migrator", () => {
     await w.close();
   }, 120_000);
 
-  test("materializeSupabaseProject writes the shipped migrations exactly, as the installed `memindex` stack", () => {
+  test("materializeSupabaseProject writes the shipped migrations exactly, with the target's db port", () => {
     const dir = mkdtempSync(join(tmpdir(), "memindex-project-"));
     try {
       mkdirSync(join(dir, "supabase", "migrations"), { recursive: true });
       writeFileSync(join(dir, "supabase", "migrations", "29990101000000_stale.sql"), "SELECT 1;");
-      expect(materializeSupabaseProject(dir)).toEqual({ projectDir: dir });
-      materializeSupabaseProject(dir);
+      expect(materializeSupabaseProject(dir, 54329)).toEqual({ projectDir: dir });
+      materializeSupabaseProject(dir, 6000);
       const repo = join(import.meta.dir, "../../../supabase");
-      type Toml = { project_id: string; api: { port: number }; db: { port: number; shadow_port: number } };
-      const installed = Bun.TOML.parse(readFileSync(join(dir, "supabase", "config.toml"), "utf8")) as Toml;
-      const dev = Bun.TOML.parse(readFileSync(join(repo, "config.toml"), "utf8")) as Toml;
-      expect(installed).toMatchObject({
-        project_id: "memindex",
-        api: { port: 54321 },
-        db: { port: 54322, shadow_port: 54320 },
-      });
-      expect(dev).toMatchObject({
-        project_id: "memindex-dev",
-        api: { port: 54421 },
-        db: { port: 54422, shadow_port: 54420 },
-      });
-      materializeSupabaseProject(dir, { dbPort: 6000 });
       expect(Bun.TOML.parse(readFileSync(join(dir, "supabase", "config.toml"), "utf8"))).toMatchObject({
-        project_id: "memindex",
         db: { port: 6000 },
       });
       const sqlFiles = (d: string) =>
@@ -315,4 +302,62 @@ console.log(JSON.stringify(await migrateStore({ backend: "postgres", url: proces
       await admin.unsafe(`DROP DATABASE IF EXISTS ${db} WITH (FORCE)`);
     }
   }, 120_000);
+});
+
+describe("probe and search_path preparation (plain Postgres roles, no Supabase role defaults)", () => {
+  const db = `memindex_probe_${process.pid}`;
+  const owner = `memindex_probe_owner_${process.pid}`;
+  const as = (user: string): StoreConfig => {
+    const u = new URL(urlFor(user));
+    u.pathname = `/${db}`;
+    return { backend: "postgres", url: u.toString() };
+  };
+
+  beforeAll(async () => {
+    await ensureLogins();
+    await admin.unsafe(`DROP DATABASE IF EXISTS ${db} WITH (FORCE)`);
+    await admin.unsafe(`DROP ROLE IF EXISTS ${owner}`);
+    await admin.unsafe(`CREATE ROLE ${owner} LOGIN PASSWORD 'memindex-test'`);
+    const [me] = await admin`SELECT current_user AS name`;
+    // A literal `GRANT … TO current_user` crashes the backend under Supabase's supautils.
+    await admin.unsafe(`GRANT ${owner} TO "${me?.name}"`);
+    await admin.unsafe(`CREATE DATABASE ${db} OWNER ${owner}`);
+  });
+  afterAll(async () => {
+    await admin.unsafe(`DROP DATABASE IF EXISTS ${db} WITH (FORCE)`);
+    await admin.unsafe(`DROP ROLE IF EXISTS ${owner}`);
+  });
+
+  test("reports server, extensions and a search_path without `extensions`", async () => {
+    const p = await probeStore(as(owner));
+    expect(p).toMatchObject({ user: owner, database: db, searchPathOk: false });
+    expect(p.extensions.map((x) => [x.name, x.problem])).toEqual([
+      ["vector", null],
+      ["pg_trgm", null],
+      ["unaccent", null],
+      ["btree_gin", null],
+    ]);
+    expect(p.extensions.find((x) => x.name === "vector")?.available).toMatch(/^0\.(8|9)|^[1-9]/);
+  });
+
+  test("a non-owner gets the exact ALTER DATABASE to run", async () => {
+    const err = await ensureExtensionsSearchPath(as(LOGINS.reader.user)).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(StoreError);
+    expect((err as StoreError).fix).toBe(
+      `as the database owner or a superuser: ALTER DATABASE "${db}" SET search_path = "$user", public, extensions;`,
+    );
+  });
+
+  test("the owner sets the database default once; a role-level search_path is reported with its fix", async () => {
+    expect(await ensureExtensionsSearchPath(as(owner))).toBe(true);
+    expect((await probeStore(as(owner))).searchPathOk).toBe(true);
+    expect((await probeStore(as(LOGINS.reader.user))).searchPathOk).toBe(true);
+    expect(await ensureExtensionsSearchPath(as(owner))).toBe(false);
+
+    await admin.unsafe(`ALTER ROLE ${owner} IN DATABASE ${db} SET search_path = public`);
+    const err = await ensureExtensionsSearchPath(as(owner)).catch((e: unknown) => e);
+    expect((err as StoreError).fix).toBe(
+      `ALTER ROLE "${owner}" SET search_path = "$user", public, extensions; (a role-level search_path overrides the database default)`,
+    );
+  });
 });

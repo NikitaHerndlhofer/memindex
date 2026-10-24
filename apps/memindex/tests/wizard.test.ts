@@ -1,24 +1,17 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import {
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  readdirSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import {
-  type EmbedHealth,
-  loadConfig,
-  materializeSupabaseProject,
-  type PullProgress,
-} from "@memindex/engine";
+import { type EmbedHealth, loadConfig, type PullProgress, type StoreProbe } from "@memindex/engine";
 import { removeLegacyCursorHooks } from "../src/install/hooks.ts";
 import type { Task, Ui } from "../src/install/ui.ts";
-import { type InstallDeps, installPaths, runInstall, type StepResult } from "../src/install/wizard.ts";
+import {
+  type InstallDeps,
+  installPaths,
+  runInstall,
+  type StepResult,
+  supabaseAdvice,
+} from "../src/install/wizard.ts";
 import type { RunResult } from "../src/spawn.ts";
 
 let home: string;
@@ -28,8 +21,9 @@ beforeEach(() => {
 afterEach(() => rmSync(home, { recursive: true, force: true }));
 
 const ok: RunResult = { exitCode: 0, stdout: "", stderr: "" };
+const URL_ = "postgresql://memindex:s3cret@127.0.0.1:54329/memindex";
 
-function recordingUi(answer = true): Ui & { lines: string[] } {
+function recordingUi(answer = true, texts: string[] = []): Ui & { lines: string[] } {
   const lines: string[] = [];
   const task = (title: string): Task => ({
     update: (m) => lines.push(`… ${title}: ${m}`),
@@ -45,17 +39,37 @@ function recordingUi(answer = true): Ui & { lines: string[] } {
       lines.push(`? ${m}`);
       return answer;
     },
+    text: async (q) => {
+      lines.push(`? ${q.message} [${q.initial ?? ""}]`);
+      return texts.length > 0 ? (texts.shift() as string) : (q.initial ?? "");
+    },
     task,
     info: (m) => lines.push(m),
-    warn: (m) => lines.push(m),
+    warn: (m) => lines.push(`warn ${m}`),
   };
 }
+
+const healthyProbe: StoreProbe = {
+  server: "17.6",
+  user: "memindex",
+  database: "memindex",
+  searchPath: '"$user", public, extensions',
+  searchPathOk: true,
+  extensions: [
+    { name: "vector", installed: null, available: "0.8.0", problem: null },
+    { name: "pg_trgm", installed: null, available: "1.6", problem: null },
+    { name: "unaccent", installed: null, available: "1.1", problem: null },
+    { name: "btree_gin", installed: null, available: "1.3", problem: null },
+  ],
+};
 
 interface Harness {
   deps: InstallDeps;
   commands: string[];
   plists: string[];
   hookBins: string[];
+  saved: string[];
+  migrated: string[];
   ui: ReturnType<typeof recordingUi>;
 }
 
@@ -67,6 +81,9 @@ async function harness(
     health?: EmbedHealth[];
     bin?: string | null;
     answer?: boolean;
+    texts?: string[];
+    probe?: (url: string) => Promise<StoreProbe>;
+    ensureSearchPath?: () => Promise<boolean>;
     migrate?: () => Promise<never>;
   } = {},
 ): Promise<Harness> {
@@ -75,11 +92,13 @@ async function harness(
   const commands: string[] = [];
   const plists: string[] = [];
   const hookBins: string[] = [];
+  const saved: string[] = [];
+  const migrated: string[] = [];
   const missing: EmbedHealth = { ok: false, reason: "model_missing", detail: "not pulled" };
   // The wizard checks once before asking about the download, then ensureOllama re-checks.
   const health = over.health ?? [missing, missing];
-  const ui = recordingUi(over.answer);
-  const present = { brew: true, supabase: true, docker: true, ollama: true, ...over.which };
+  const ui = recordingUi(over.answer, over.texts);
+  const present = { brew: true, supabase: true, ollama: true, ...over.which };
   const deps: InstallDeps = {
     paths: installPaths(config, env),
     config,
@@ -91,10 +110,19 @@ async function harness(
     },
     which: (name) => (present[name as keyof typeof present] ? `/usr/local/bin/${name}` : null),
     sleep: async () => {},
-    materialize: materializeSupabaseProject,
-    migrate:
-      over.migrate ??
-      (async () => ({ applied: 4, shipped: 4, state: "current" as const, contract: 2 }) as never),
+    store: {
+      probe: over.probe ?? (async () => healthyProbe),
+      ensureSearchPath: over.ensureSearchPath ?? (async () => true),
+      save: async (url) => {
+        saved.push(url);
+      },
+      migrate:
+        over.migrate ??
+        (async (url) => {
+          migrated.push(url);
+          return { applied: 4, shipped: 4, state: "current" as const, contract: 2 } as never;
+        }),
+    },
     ollama: {
       health: async () => health.shift() ?? { ok: true, model: "bge-m3" },
       pull: async (onProgress: (p: PullProgress) => void) => {
@@ -121,29 +149,32 @@ async function harness(
       close: async () => {},
     }),
   };
-  return { deps, commands, plists, hookBins, ui };
+  return { deps, commands, plists, hookBins, saved, migrated, ui };
 }
 
-const NONE = { skip: {} };
+const WITH_URL = { url: URL_, skip: {} };
 const statuses = (r: readonly StepResult[]) => Object.fromEntries(r.map((s) => [s.step, s.status]));
+const detail = (r: readonly StepResult[], step: string) => r.find((s) => s.step === step)?.detail ?? "";
 
 describe("memindex install wizard", () => {
-  test("fresh machine: Supabase project started from the app-support dir, migrated, model pulled, watcher, hooks, skill", async () => {
+  test("--url: checked, saved, migrated with the CLI; model pulled, watcher, hooks, skill; no Docker", async () => {
     const h = await harness();
-    const results = await runInstall(h.deps, NONE);
+    const results = await runInstall(h.deps, WITH_URL);
     expect(statuses(results)).toEqual({
-      docker: "ok",
-      supabase: "ok",
+      database: "ok",
       migrate: "ok",
       ollama: "ok",
       watcher: "ok",
       hooks: "ok",
       skill: "ok",
     });
-    const appSupport = join(home, "Library", "Application Support", "memindex");
-    expect(existsSync(join(appSupport, "supabase", "config.toml"))).toBe(true);
-    expect(readdirSync(join(appSupport, "supabase", "migrations")).length).toBeGreaterThan(0);
-    expect(h.commands).toEqual(["docker info", `supabase start --workdir ${appSupport}`, "ollama-pull"]);
+    expect(detail(results, "database")).toBe(
+      "PostgreSQL 17.6 as memindex on memindex; vector 0.8.0 (available), pg_trgm 1.6 (available), unaccent 1.1 (available), btree_gin 1.3 (available)",
+    );
+    expect(h.saved).toEqual([URL_]);
+    expect(h.migrated).toEqual([URL_]);
+    expect(h.commands).toEqual(["ollama-pull"]);
+    expect(h.ui.lines.some((l) => l.includes("s3cret"))).toBe(false);
     expect(h.plists).toEqual(["/opt/homebrew/bin/memindex"]);
     expect(h.hookBins).toEqual(["/opt/homebrew/bin/memindex"]);
     for (const p of [".cursor", ".claude"]) {
@@ -153,6 +184,132 @@ describe("memindex install wizard", () => {
       join(home, ".cursor", "skills", "memindex", "SKILL.md"),
     );
     expect(h.ui.lines.some((l) => l.includes("pulling bge-m3: downloading 50%"))).toBe(true);
+  });
+
+  test("no --url: asks, defaulting to the configured database", async () => {
+    const h = await harness({ env: { MEMINDEX_STORE: "postgres://u:pw@db.example.com:5432/x" } });
+    const results = await runInstall(h.deps, { skip: { ollama: true, watch: true } });
+    expect(h.ui.lines).toContain(
+      "? Postgres URL for the archive (Supabase or any Postgres with pgvector) [postgres://u:pw@db.example.com:5432/x]",
+    );
+    expect(h.saved).toEqual(["postgres://u:pw@db.example.com:5432/x"]);
+    expect(statuses(results).migrate).toBe("ok");
+  });
+
+  test("no URL at all: offers the bundled docker-compose database, never runs Docker", async () => {
+    const h = await harness({ texts: ["", ""] });
+    const results = await runInstall(h.deps, { skip: { ollama: true, watch: true } });
+    expect(statuses(results)).toEqual({
+      database: "failed",
+      ollama: "skipped",
+      watcher: "skipped",
+      hooks: "skipped",
+      skill: "skipped",
+    });
+    const offer = h.ui.lines.find((l) => l.startsWith("No database yet?")) ?? "";
+    expect(offer).toContain("image: pgvector/pgvector:pg17");
+    expect(offer).toContain("postgresql://memindex:memindex@127.0.0.1:54329/memindex");
+    expect(h.commands).toEqual([]);
+    expect(h.saved).toEqual([]);
+  });
+
+  test("a URL entered after the offer is used", async () => {
+    const h = await harness({ texts: ["", URL_] });
+    await runInstall(h.deps, { skip: { ollama: true, watch: true } });
+    expect(h.saved).toEqual([URL_]);
+  });
+
+  test("not a Postgres URL: fails before connecting", async () => {
+    const h = await harness();
+    const results = await runInstall(h.deps, { url: "mysql://x@y/z", skip: { ollama: true, watch: true } });
+    expect(detail(results, "database")).toBe("database URL: expected a postgres:// or postgresql:// URL");
+    expect(h.saved).toEqual([]);
+  });
+
+  test("missing extensions: each is named with its fix; nothing saved or migrated, the rest still runs", async () => {
+    const h = await harness({
+      probe: async () => ({
+        ...healthyProbe,
+        extensions: [
+          {
+            name: "vector",
+            installed: null,
+            available: "0.7.4",
+            problem: "server ships 0.7.4, need >= 0.8.0",
+          },
+          { name: "pg_trgm", installed: null, available: null, problem: "not available on this server" },
+          { name: "unaccent", installed: "1.1", available: "1.1", problem: null },
+          { name: "btree_gin", installed: null, available: "1.3", problem: null },
+        ],
+      }),
+    });
+    const results = await runInstall(h.deps, WITH_URL);
+    expect(statuses(results)).toMatchObject({ database: "failed", ollama: "ok", hooks: "skipped" });
+    expect(detail(results, "database")).toBe(
+      "missing extensions; vector: server ships 0.7.4, need >= 0.8.0 (fix: install pgvector >= 0.8 on the server, or use the bundled docker-compose.yml (pgvector/pgvector:pg17)); pg_trgm: not available on this server (fix: install the server's contrib modules (e.g. the postgresql-contrib package))",
+    );
+    expect(h.saved).toEqual([]);
+    expect(h.migrated).toEqual([]);
+  });
+
+  test("Supabase: dashboard hint for extensions, session pooler recommended over the transaction pooler", async () => {
+    const url = "postgresql://postgres.abc:pw@aws-0-eu-central-1.pooler.supabase.com:6543/postgres";
+    const h = await harness({
+      probe: async () => ({
+        ...healthyProbe,
+        extensions: [
+          { name: "vector", installed: null, available: null, problem: "not available on this server" },
+        ],
+      }),
+    });
+    const results = await runInstall(h.deps, { url, skip: { ollama: true, watch: true } });
+    expect(detail(results, "database")).toContain(
+      'fix: enable "vector" in the Supabase dashboard (Database → Extensions)',
+    );
+    expect(h.ui.lines.some((l) => l.startsWith("warn This is Supabase's transaction pooler"))).toBe(true);
+    expect(supabaseAdvice(url.replace(":6543", ":5432"))).toBeNull();
+    expect(supabaseAdvice("postgresql://postgres:pw@db.abcdefgh.supabase.co:5432/postgres")).toContain(
+      "session pooler",
+    );
+    expect(supabaseAdvice(URL_)).toBeNull();
+  });
+
+  test("extensions schema not on the search_path: install sets it, or fails with the exact SQL", async () => {
+    const off = { ...healthyProbe, searchPath: '"$user", public', searchPathOk: false };
+    const fixed = await harness({ probe: async () => off });
+    const r1 = await runInstall(fixed.deps, { ...WITH_URL, skip: { ollama: true, watch: true } });
+    expect(detail(r1, "database")).toContain("set memindex's search_path to include extensions");
+    expect(statuses(r1).migrate).toBe("ok");
+
+    const denied = await harness({
+      probe: async () => off,
+      ensureSearchPath: async () => {
+        throw Object.assign(new Error("unsupported: may not change the database default"), {
+          fix: 'ALTER DATABASE "memindex" SET search_path = "$user", public, extensions;',
+        });
+      },
+    });
+    const r2 = await runInstall(denied.deps, { ...WITH_URL, skip: { ollama: true, watch: true } });
+    expect(detail(r2, "database")).toBe(
+      'unsupported: may not change the database default; fix: ALTER DATABASE "memindex" SET search_path = "$user", public, extensions;',
+    );
+    expect(denied.migrated).toEqual([]);
+  });
+
+  test("unreachable database: fails clearly, ollama and the watcher still run", async () => {
+    const h = await harness({
+      probe: async () => {
+        throw new Error("connect ECONNREFUSED 127.0.0.1:54329");
+      },
+    });
+    const results = await runInstall(h.deps, WITH_URL);
+    expect(statuses(results)).toMatchObject({
+      database: "failed",
+      ollama: "ok",
+      watcher: "ok",
+      skill: "skipped",
+    });
+    expect(detail(results, "database")).toBe("cannot connect: connect ECONNREFUSED 127.0.0.1:54329");
   });
 
   test("replaces acrag hooks in ~/.cursor/hooks.json after backing it up", async () => {
@@ -167,7 +324,7 @@ describe("memindex install wizard", () => {
     };
     writeFileSync(file, JSON.stringify(original));
     const h = await harness();
-    const results = await runInstall(h.deps, NONE);
+    const results = await runInstall(h.deps, WITH_URL);
     const hooks = results.find((r) => r.step === "hooks");
     expect(hooks?.status).toBe("ok");
     expect(hooks?.detail).toContain("replaced 2 acrag hook(s)");
@@ -180,45 +337,24 @@ describe("memindex install wizard", () => {
     });
   });
 
-  test("missing Supabase CLI, declined: supabase fails, nothing is brewed, the rest still runs", async () => {
+  test("missing Supabase CLI, declined: nothing is brewed or migrated, hooks and skill wait", async () => {
     const h = await harness({ which: { supabase: false }, answer: false });
-    const s = statuses(await runInstall(h.deps, NONE));
-    expect(s["supabase-cli"]).toBe("failed");
-    expect(s.migrate).toBe("ok");
-    expect(s.skill).toBe("ok");
-    expect(h.commands.filter((c) => c.startsWith("brew") || c.startsWith("supabase"))).toEqual([]);
-  });
-
-  test("missing Supabase CLI, accepted: installs it with Homebrew first", async () => {
-    const h = await harness({ which: { supabase: false } });
-    await runInstall(h.deps, NONE);
-    expect(h.commands[0]).toBe("brew install supabase/tap/supabase");
-  });
-
-  test("Docker daemon down: opens Docker and fails clearly when it never comes up", async () => {
-    const h = await harness({ sh: (cmd) => (cmd[0] === "docker" ? { ...ok, exitCode: 1 } : ok) });
-    const results = await runInstall(h.deps, NONE);
-    expect(statuses(results).docker).toBe("failed");
-    expect(h.commands).toContain("open -a Docker");
-    expect(h.commands.some((c) => c.startsWith("supabase start"))).toBe(false);
-  });
-
-  test("supabase start reporting an already running stack is fine", async () => {
-    const h = await harness({
-      sh: (cmd) =>
-        cmd[0] === "supabase"
-          ? { exitCode: 1, stdout: "", stderr: "supabase start is already running." }
-          : ok,
+    const s = statuses(await runInstall(h.deps, WITH_URL));
+    expect(s).toMatchObject({
+      database: "ok",
+      "supabase-cli": "failed",
+      migrate: "skipped",
+      skill: "skipped",
     });
-    expect(statuses(await runInstall(h.deps, NONE)).supabase).toBe("ok");
+    expect(h.commands.filter((c) => c.startsWith("brew"))).toEqual([]);
+    expect(h.migrated).toEqual([]);
   });
 
-  test("a remote store skips Docker and Supabase but still migrates", async () => {
-    const h = await harness({ env: { MEMINDEX_STORE: "postgres://u@db.example.supabase.co:5432/postgres" } });
-    const s = statuses(await runInstall(h.deps, NONE));
-    expect(s.supabase).toBe("skipped");
-    expect(s.migrate).toBe("ok");
-    expect(h.commands.filter((c) => /^(docker|supabase)/.test(c))).toEqual([]);
+  test("missing Supabase CLI, accepted: installs it with Homebrew before migrating", async () => {
+    const h = await harness({ which: { supabase: false } });
+    await runInstall(h.deps, WITH_URL);
+    expect(h.commands[0]).toBe("brew install supabase/tap/supabase");
+    expect(h.migrated).toEqual([URL_]);
   });
 
   test("development run (no stable binary): watcher and hooks skipped, hooks.json untouched", async () => {
@@ -227,7 +363,7 @@ describe("memindex install wizard", () => {
     const original = JSON.stringify({ version: 1, hooks: { stop: [{ command: "acrag hook stop" }] } });
     writeFileSync(file, original);
     const h = await harness({ bin: null });
-    const s = statuses(await runInstall(h.deps, NONE));
+    const s = statuses(await runInstall(h.deps, WITH_URL));
     expect([s.watcher, s.hooks]).toEqual(["skipped", "skipped"]);
     expect(readFileSync(file, "utf8")).toBe(original);
     expect(readdirSync(dirname(file)).filter((f) => f.startsWith("hooks.json.bak"))).toEqual([]);
@@ -236,12 +372,12 @@ describe("memindex install wizard", () => {
   test("a failed migration skips hooks and skill instead of opening the archive", async () => {
     const h = await harness({
       migrate: async () => {
-        throw new Error("connection refused");
+        throw new Error("supabase migration up failed (exit 1)");
       },
     });
-    const s = statuses(await runInstall(h.deps, { skip: { supabase: true, ollama: true, watch: true } }));
+    const s = statuses(await runInstall(h.deps, { url: URL_, skip: { ollama: true, watch: true } }));
     expect(s).toEqual({
-      supabase: "skipped",
+      database: "ok",
       migrate: "failed",
       ollama: "skipped",
       watcher: "skipped",

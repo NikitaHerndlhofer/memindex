@@ -16,6 +16,7 @@ import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { SQL } from "bun";
+import { redactUrl } from "../packages/engine/src/config.ts";
 import { MIGRATIONS } from "../packages/store/src/migrations.gen.ts";
 import { measureFreeSpace, shortfalls } from "./disk-headroom.ts";
 
@@ -113,8 +114,6 @@ export function formatLine(id: ClauseId, r: ClauseResult): string {
 export function exitCode(results: readonly ClauseResult[]): number {
   return results.some((r) => r.verdict === "NOT VERIFIED") ? 1 : 0;
 }
-
-export const redactUrl = (url: string): string => url.replace(/\/\/([^:/@]+):[^@]*@/, "//$1:***@");
 
 const STOPWORDS = new Set(
   "about above after again against because before being below between could doesn during further having itself myself other ourselves should themselves there these those through under until where which while would youre thats https".split(

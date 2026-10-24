@@ -21,7 +21,7 @@ export function str(r: Rec, k: string): string {
   return v;
 }
 
-function strOrNull(r: Rec, k: string): string | null {
+export function strOrNull(r: Rec, k: string): string | null {
   const v = r[k];
   if (v === null || v === undefined) return null;
   if (typeof v !== "string") throw new RowError(`column ${k}: expected text or null, got ${typeof v}`);

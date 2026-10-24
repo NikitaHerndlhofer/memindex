@@ -48,6 +48,16 @@ describe("memindex CLI (subprocess)", () => {
     expect(readdirSync(r.home).filter((f) => f.startsWith("memindex-hook-"))).toEqual([]);
   });
 
+  test("no database configured: commands point at `memindex install`; `install --yes` needs --url", () => {
+    const status = memindex(["status"], { env: { MEMINDEX_STORE: "" } });
+    expect(status.code).toBe(3);
+    expect(status.stderr).toContain("no database configured");
+    expect(status.stderr).toContain("memindex install");
+    const install = memindex(["install", "--yes"], { env: { MEMINDEX_STORE: "" } });
+    expect(install.code).toBe(1);
+    expect(install.stderr).toContain("--url postgresql://");
+  });
+
   test("path config honors MEMINDEX_CONFIG_DIR; path archive prints the store", () => {
     const cfg = memindex(["path", "config"]);
     expect(cfg.stdout.trim()).toBe(join(cfg.home, "cfg", "config.json"));

@@ -4,9 +4,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   ensureProducerId,
-  LOCAL_SUPABASE_URL,
   loadConfig,
-  parseStoreSpec,
+  redactUrl,
+  saveStore,
+  storeConfig,
   watchSources,
 } from "../src/index.ts";
 import { recordingLog } from "./fakes.ts";
@@ -18,9 +19,10 @@ beforeEach(() => {
 afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
 describe("config", () => {
-  test("defaults: local Supabase, bge-m3@1024, no producer yet", async () => {
+  test("defaults: no database until install names one, bge-m3@1024, no producer yet", async () => {
     const cfg = await loadConfig({ HOME: dir, MEMINDEX_CONFIG_DIR: join(dir, "cfg") });
-    expect(cfg.store).toEqual({ backend: "postgres", url: LOCAL_SUPABASE_URL });
+    expect(cfg.store).toBeNull();
+    expect(() => storeConfig(cfg)).toThrow(/no database configured/);
     expect(cfg.ollama).toEqual({ host: "http://127.0.0.1:11434", model: "bge-m3", dim: 1024 });
     expect(cfg.producerId).toBeNull();
     expect(cfg.paths.configFile).toBe(join(dir, "cfg", "config.json"));
@@ -41,19 +43,46 @@ describe("config", () => {
     });
   });
 
-  test("env overrides: MEMINDEX_STORE path or postgres URL, OLLAMA_HOST without scheme", async () => {
+  test("env overrides: MEMINDEX_STORE postgres URL, OLLAMA_HOST without scheme", async () => {
     const cfg = await loadConfig({
       HOME: dir,
       MEMINDEX_CONFIG_DIR: dir,
       MEMINDEX_STORE: "postgres://u@nas/memindex",
       OLLAMA_HOST: "10.0.0.2:11434",
     });
-    expect(cfg.store).toEqual({ backend: "postgres", url: "postgres://u@nas/memindex" });
+    expect(cfg.store).toEqual({ url: "postgres://u@nas/memindex" });
+    expect(storeConfig(cfg)).toEqual({ backend: "postgres", url: "postgres://u@nas/memindex" });
     expect(cfg.ollama.host).toBe("http://10.0.0.2:11434");
-    expect(parseStoreSpec("~/x.sqlite", "/home/me")).toEqual({
-      backend: "sqlite",
-      path: "/home/me/x.sqlite",
+    await expect(
+      loadConfig({ HOME: dir, MEMINDEX_CONFIG_DIR: dir, MEMINDEX_STORE: "~/x.sqlite" }),
+    ).rejects.toThrow(/MEMINDEX_STORE: expected a postgres:\/\/ or postgresql:\/\/ URL/);
+  });
+
+  test("store: saved as { url }, legacy bare-URL configs still load, the env var wins", async () => {
+    const env = { HOME: dir, MEMINDEX_CONFIG_DIR: dir };
+    writeFileSync(
+      join(dir, "config.json"),
+      JSON.stringify({ store: "postgresql://u:pw@db:5432/x", disabledSources: [] }),
+    );
+    const legacy = await loadConfig(env);
+    expect(legacy.store).toEqual({ url: "postgresql://u:pw@db:5432/x" });
+    await saveStore(legacy, { url: "postgresql://memindex:s3cret@127.0.0.1:54329/memindex" });
+    expect(JSON.parse(readFileSync(join(dir, "config.json"), "utf8"))).toEqual({
+      store: { url: "postgresql://memindex:s3cret@127.0.0.1:54329/memindex" },
+      disabledSources: [],
     });
+    expect((await loadConfig({ ...env, MEMINDEX_STORE: "postgres://other/db" })).store).toEqual({
+      url: "postgres://other/db",
+    });
+    writeFileSync(join(dir, "config.json"), JSON.stringify({ store: "/tmp/archive.sqlite" }));
+    await expect(loadConfig(env)).rejects.toThrow(/config\.json is invalid/);
+  });
+
+  test("redactUrl hides only the password", () => {
+    expect(redactUrl("postgresql://memindex:s3cret@127.0.0.1:54329/memindex")).toBe(
+      "postgresql://memindex:***@127.0.0.1:54329/memindex",
+    );
+    expect(redactUrl("postgres://u@db/x")).toBe("postgres://u@db/x");
   });
 
   test("invalid config files fail loudly with the path", async () => {

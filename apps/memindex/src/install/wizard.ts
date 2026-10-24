@@ -1,5 +1,15 @@
 import { join } from "node:path";
-import type { Archive, EmbedHealth, MemindexConfig, migrateArchive, PullProgress } from "@memindex/engine";
+import {
+  type Archive,
+  type EmbedHealth,
+  type MemindexConfig,
+  type PullProgress,
+  parseStoreUrl,
+  redactUrl,
+  type SchemaStatus,
+  type StoreProbe,
+} from "@memindex/engine";
+import COMPOSE from "../../../../docker-compose.yml" with { type: "text" };
 import type { RunResult } from "../spawn.ts";
 import { removeLegacyCursorHooks } from "./hooks.ts";
 import { LEGACY_LABELS, type PlistTemplate } from "./launchd.ts";
@@ -9,8 +19,6 @@ import type { Task, Ui } from "./ui.ts";
 
 export interface InstallPaths {
   readonly home: string;
-  /** `materializeSupabaseProject` writes `<dir>/supabase/…` here; `supabase start --workdir <dir>`. */
-  readonly appSupportDir: string;
   readonly cursorHooksFile: string;
   readonly watchLog: string;
   readonly skillTrackFile: string;
@@ -23,7 +31,6 @@ export function installPaths(
   const home = config.paths.home;
   return {
     home,
-    appSupportDir: join(home, "Library", "Application Support", "memindex"),
     cursorHooksFile: env.MEMINDEX_CURSOR_HOOKS_FILE ?? join(home, ".cursor", "hooks.json"),
     watchLog: join(config.paths.logDir, "watch.log"),
     skillTrackFile: join(config.paths.configDir, "skills.json"),
@@ -40,8 +47,14 @@ export interface InstallDeps {
   readonly sh: (cmd: readonly string[], opts?: { readonly timeoutMs?: number }) => Promise<RunResult>;
   readonly which: (name: string) => string | null;
   readonly sleep: (ms: number) => Promise<void>;
-  readonly materialize: (dir: string) => { readonly projectDir: string };
-  readonly migrate: () => ReturnType<typeof migrateArchive>;
+  readonly store: {
+    probe(url: string): Promise<StoreProbe>;
+    /** true when it changed the database's search_path. */
+    ensureSearchPath(url: string): Promise<boolean>;
+    /** Writes the URL into the config file. */
+    save(url: string): Promise<void>;
+    migrate(url: string): Promise<SchemaStatus>;
+  };
   readonly ollama: {
     health(): Promise<EmbedHealth>;
     pull(onProgress: (p: PullProgress) => void): Promise<void>;
@@ -51,12 +64,13 @@ export interface InstallDeps {
     uninstall(label: string): Promise<boolean>;
   };
   /** Opened after migrating; write mode. */
-  readonly openArchive: () => Promise<Pick<Archive, "hooks" | "skill" | "close">>;
+  readonly openArchive: (url: string) => Promise<Pick<Archive, "hooks" | "skill" | "close">>;
 }
 
 export interface InstallOptions {
+  /** `--url`; otherwise asked for, defaulting to the configured one. */
+  readonly url?: string;
   readonly skip: {
-    readonly supabase?: boolean;
     readonly ollama?: boolean;
     readonly watch?: boolean;
     readonly hooks?: boolean;
@@ -69,19 +83,8 @@ export interface StepResult {
   readonly detail: string;
 }
 
-const SUPABASE_START_TIMEOUT_MS = 15 * 60_000;
 const BREW_TIMEOUT_MS = 20 * 60_000;
-const DOCKER_WAIT_MS = 90_000;
-
-/** The default install talks to `supabase start`'s stack; a remote store needs neither Docker nor the CLI. */
-function isLocalStore(config: MemindexConfig): boolean {
-  if (config.store.backend !== "postgres") return false;
-  try {
-    return ["127.0.0.1", "localhost", "[::1]"].includes(new URL(config.store.url).hostname);
-  } catch {
-    return false;
-  }
-}
+const COMPOSE_URL = "postgresql://memindex:memindex@127.0.0.1:54329/memindex";
 
 const tail = (r: RunResult) =>
   `${r.stderr}\n${r.stdout}`.trim().split("\n").filter(Boolean).slice(-3).join(" | ") || `exit ${r.exitCode}`;
@@ -128,20 +131,17 @@ class Steps {
 }
 
 /**
- * `memindex install`: (a) Docker + Supabase CLI, (b) the bundled Supabase project started and
- * migrated, (c) Ollama with the embed model, (d) the launchd watcher, (e) agent hooks (old acrag
- * hooks replaced), (f) the skill. Each step is check-and-fix and idempotent; a failed step is
- * reported and the rest still run where they can.
+ * `memindex install`: (a) a Postgres URL, checked for the extensions and search_path the migrations
+ * need, then saved, (b) the schema migrated with the Supabase CLI, (c) Ollama with the embed model,
+ * (d) the launchd watcher, (e) agent hooks (old acrag hooks replaced), (f) the skill. Each step is
+ * check-and-fix and idempotent; a failed step is reported and the rest still run where they can.
+ * memindex never starts a database itself.
  */
 export async function runInstall(d: InstallDeps, opts: InstallOptions): Promise<readonly StepResult[]> {
   const s = new Steps(d);
-  const local = isLocalStore(d.config);
 
-  if (opts.skip.supabase) s.skip("supabase", "--skip-supabase");
-  else if (!local) s.skip("supabase", "the configured store is not the local stack");
-  else if (await prerequisites(d, s)) await startSupabase(d, s);
-
-  const migrated = await migrate(d, s);
+  const url = await database(d, s, opts.url);
+  const migrated = url !== null && (await migrate(d, s, url));
 
   if (opts.skip.ollama) s.skip("ollama", "--skip-ollama");
   else await ollama(d, s);
@@ -149,14 +149,14 @@ export async function runInstall(d: InstallDeps, opts: InstallOptions): Promise<
   if (opts.skip.watch) s.skip("watcher", "--skip-watch");
   else await watcher(d, s);
 
-  if (!migrated) {
+  if (!url || !migrated) {
     s.skip("hooks", "the archive is not migrated");
     s.skip("skill", "the archive is not migrated");
     return s.results;
   }
   let archive: Pick<Archive, "hooks" | "skill" | "close">;
   try {
-    archive = await d.openArchive();
+    archive = await d.openArchive(url);
   } catch (e) {
     s.fail("hooks", `cannot open the archive: ${errorMessage(e)}`);
     s.fail("skill", "cannot open the archive");
@@ -172,53 +172,112 @@ export async function runInstall(d: InstallDeps, opts: InstallOptions): Promise<
   return s.results;
 }
 
-async function prerequisites(d: InstallDeps, s: Steps): Promise<boolean> {
-  if (!d.which("supabase") && !(await s.brewInstall("supabase-cli", ["supabase/tap/supabase"]))) return false;
-  if (!d.which("docker") && !(await s.brewInstall("docker", ["--cask", "docker"]))) return false;
-  const task = d.ui.task("Docker");
-  if ((await d.sh(["docker", "info"], { timeoutMs: 15_000 })).exitCode === 0) {
-    s.ok("docker", "running", task);
-    return true;
+/** The compose file shipped at the repo root, offered (never run) to users without a database. */
+function composeOffer(): string {
+  return [
+    "No database yet? Run memindex's local one with Docker (install never starts it):",
+    "save this as docker-compose.yml, run `docker compose up -d`, then paste",
+    `  ${COMPOSE_URL}`,
+    "",
+    COMPOSE.trim(),
+  ].join("\n");
+}
+
+async function askUrl(d: InstallDeps): Promise<string> {
+  const ask = () =>
+    d.ui.text({
+      message: "Postgres URL for the archive (Supabase or any Postgres with pgvector)",
+      placeholder: "postgresql://user:password@host:5432/postgres",
+      ...(d.config.store ? { initial: d.config.store.url } : {}),
+    });
+  const first = (await ask()).trim();
+  if (first) return first;
+  d.ui.info(composeOffer());
+  return (await ask()).trim();
+}
+
+async function database(d: InstallDeps, s: Steps, given: string | undefined): Promise<string | null> {
+  const raw = given ?? (await askUrl(d));
+  if (!raw) {
+    s.fail("database", `no Postgres URL; pass --url, or start the bundled one (${COMPOSE_URL})`);
+    return null;
   }
-  task.update("daemon not running; opening Docker");
-  await d.sh(["open", "-a", "Docker"], { timeoutMs: 15_000 });
-  for (let waited = 0; waited < DOCKER_WAIT_MS; waited += 2_000) {
-    await d.sleep(2_000);
-    if ((await d.sh(["docker", "info"], { timeoutMs: 15_000 })).exitCode === 0) {
-      s.ok("docker", "started", task);
-      return true;
+  let url: string;
+  try {
+    url = parseStoreUrl(raw, "database URL").url;
+  } catch (e) {
+    s.fail("database", errorMessage(e));
+    return null;
+  }
+  const advice = supabaseAdvice(url);
+  if (advice) d.ui.warn(advice);
+  const task = d.ui.task(`Database ${redactUrl(url)}`);
+  let probe: StoreProbe;
+  try {
+    probe = await d.store.probe(url);
+  } catch (e) {
+    s.fail("database", `cannot connect: ${errorMessage(e)}`, task);
+    return null;
+  }
+  const missing = probe.extensions.filter((x) => x.problem !== null);
+  if (missing.length > 0) {
+    const lines = missing.map((x) => `${x.name}: ${x.problem} (fix: ${extensionHint(url, x.name)})`);
+    s.fail("database", `missing extensions; ${lines.join("; ")}`, task);
+    return null;
+  }
+  let pathNote = "";
+  if (!probe.searchPathOk) {
+    try {
+      if (await d.store.ensureSearchPath(url))
+        pathNote = `; set ${probe.database}'s search_path to include extensions`;
+    } catch (e) {
+      s.fail("database", errorMessage(e), task);
+      return null;
     }
   }
-  s.fail(
-    "docker",
-    "the Docker daemon is not running; start Docker Desktop, then re-run `memindex install`",
+  try {
+    await d.store.save(url);
+  } catch (e) {
+    s.fail("database", `connected, but cannot save the config: ${errorMessage(e)}`, task);
+    return null;
+  }
+  const versions = probe.extensions.map((x) => `${x.name} ${x.installed ?? `${x.available} (available)`}`);
+  s.ok(
+    "database",
+    `PostgreSQL ${probe.server} as ${probe.user} on ${probe.database}; ${versions.join(", ")}${pathNote}`,
     task,
   );
-  return false;
+  return url;
 }
 
-async function startSupabase(d: InstallDeps, s: Steps): Promise<void> {
-  const task = d.ui.task("Local Supabase");
-  let projectDir: string;
-  try {
-    projectDir = d.materialize(d.paths.appSupportDir).projectDir;
-  } catch (e) {
-    s.fail("supabase", `cannot write the Supabase project: ${errorMessage(e)}`, task);
-    return;
+/** Supabase connection-string advice: producers want the session pooler (IPv4, prepared statements). */
+export function supabaseAdvice(url: string): string | null {
+  const u = new URL(url);
+  if (u.hostname.endsWith(".pooler.supabase.com") && u.port === "6543") {
+    return "This is Supabase's transaction pooler (port 6543). Use the session pooler (same host, port 5432): memindex holds advisory locks and transactions across statements.";
   }
-  task.update(`supabase start in ${projectDir} (first run pulls images)`);
-  const r = await d.sh(["supabase", "start", "--workdir", projectDir], {
-    timeoutMs: SUPABASE_START_TIMEOUT_MS,
-  });
-  if (r.exitCode === 0) s.ok("supabase", `running (${projectDir})`, task);
-  else if (/already running/i.test(`${r.stdout}\n${r.stderr}`)) s.ok("supabase", "already running", task);
-  else s.fail("supabase", `supabase start failed: ${tail(r)}`, task);
+  if (/^db\.[a-z0-9]+\.supabase\.co$/.test(u.hostname)) {
+    return "This is Supabase's direct connection, which is IPv6-only on most plans. Prefer the session pooler URL (Dashboard → Connect → Session pooler, port 5432).";
+  }
+  return null;
 }
 
-async function migrate(d: InstallDeps, s: Steps): Promise<boolean> {
+function extensionHint(url: string, name: string): string {
+  if (/\.supabase\.(co|com)$/.test(new URL(url).hostname))
+    return `enable "${name}" in the Supabase dashboard (Database → Extensions)`;
+  if (name === "vector")
+    return "install pgvector >= 0.8 on the server, or use the bundled docker-compose.yml (pgvector/pgvector:pg17)";
+  return "install the server's contrib modules (e.g. the postgresql-contrib package)";
+}
+
+async function migrate(d: InstallDeps, s: Steps, url: string): Promise<boolean> {
+  if (!d.which("supabase") && !(await s.brewInstall("supabase-cli", ["supabase/tap/supabase"]))) {
+    s.skip("migrate", "the Supabase CLI applies the migrations");
+    return false;
+  }
   const task = d.ui.task("Schema");
   try {
-    const st = await d.migrate();
+    const st = await d.store.migrate(url);
     s.ok("migrate", `${st.applied}/${st.shipped} (${st.state}), view contract v${st.contract}`, task);
     return true;
   } catch (e) {
@@ -318,5 +377,6 @@ async function skill(d: InstallDeps, s: Steps, archive: Pick<Archive, "skill">):
 }
 
 function errorMessage(e: unknown): string {
-  return e instanceof Error ? e.message : String(e);
+  if (!(e instanceof Error)) return String(e);
+  return "fix" in e && typeof e.fix === "string" && e.fix ? `${e.message}; fix: ${e.fix}` : e.message;
 }

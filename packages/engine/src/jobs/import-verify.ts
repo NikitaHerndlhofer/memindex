@@ -10,7 +10,7 @@ import { resolve } from "node:path";
 import { vectorSpace } from "@memindex/model";
 import { buildRegistry } from "@memindex/sources";
 import { openStore } from "@memindex/store";
-import { type Env, loadConfig } from "../config.ts";
+import { type Env, loadConfig, storeConfig } from "../config.ts";
 import { defaultAcragPath, verifyAcrag } from "./import-acrag.ts";
 import { defaultSwragPath, verifySwrag } from "./import-swrag.ts";
 import { openLegacy, type VerifyReport } from "./legacy-sqlite.ts";
@@ -33,7 +33,7 @@ export async function verifyLegacyImport(
   const space = vectorSpace(config.ollama.model, config.ollama.dim);
   const db = openLegacy(archivePath);
   try {
-    const store = await openStore(config.store, {
+    const store = await openStore(storeConfig(config), {
       mode: "read",
       facets: registry.facets(),
       vectorSpace: space,

@@ -4,7 +4,7 @@ import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { type ProducerId, producerId, type SourceId, sourceId } from "@memindex/model";
-import type { StoreConfig } from "@memindex/store";
+import { type StoreConfig, StoreError } from "@memindex/store";
 import { z } from "zod";
 
 export type Env = Readonly<Record<string, string | undefined>>;
@@ -31,20 +31,37 @@ export interface SearchScope {
   readonly from: "env" | "config" | null;
 }
 
+/** The archive's Postgres (Supabase or any Postgres with pgvector). */
+export interface StoreSetting {
+  readonly url: string;
+}
+
 export interface MemindexConfig {
   readonly paths: MemindexPaths;
   /** null until the first write-open mints one. */
   readonly producerId: ProducerId | null;
-  readonly store: StoreConfig;
+  /** null until `memindex install` (or MEMINDEX_STORE) names a database. */
+  readonly store: StoreSetting | null;
   readonly ollama: OllamaConfig;
   readonly disabledSources: readonly SourceId[];
   readonly search: SearchScope;
 }
 
+const PostgresUrl = z
+  .string()
+  .regex(/^postgres(ql)?:\/\/./i, "expected a postgres:// or postgresql:// URL")
+  .refine((s) => URL.canParse(s), "not a valid URL");
+
+/** Older configs stored the URL as a bare string; they parse into the object form. */
+const StoreField = z.union([
+  PostgresUrl.transform((url): StoreSetting => ({ url })),
+  z.object({ url: PostgresUrl }).strict(),
+]);
+
 const ConfigFile = z
   .object({
     producerId: z.string().uuid().optional(),
-    store: z.string().min(1).optional(),
+    store: StoreField.optional(),
     ollama: z
       .object({
         host: z.string().url().optional(),
@@ -62,9 +79,6 @@ const ConfigFile = z
   .strict();
 type ConfigFile = z.infer<typeof ConfigFile>;
 
-/** `supabase start`'s default database: the local install's store. */
-export const LOCAL_SUPABASE_URL = "postgresql://postgres:postgres@127.0.0.1:54322/postgres";
-
 export const OLLAMA_DEFAULTS = { host: "http://127.0.0.1:11434", model: "bge-m3", dim: 1024 } as const;
 
 export function resolvePaths(env: Env = process.env): MemindexPaths {
@@ -81,11 +95,33 @@ export function resolvePaths(env: Env = process.env): MemindexPaths {
   };
 }
 
-/** `postgres://…` / `postgresql://…` is Postgres; anything else is a SQLite path (`~` expanded). */
-export function parseStoreSpec(spec: string, home: string): StoreConfig {
-  if (/^postgres(ql)?:\/\//i.test(spec)) return { backend: "postgres", url: spec };
-  const path = spec.startsWith("~/") ? join(home, spec.slice(2)) : resolve(spec);
-  return { backend: "sqlite", path };
+/** Parses a user-entered or env store URL; the error names `where`. */
+export function parseStoreUrl(url: string, where: string): StoreSetting {
+  const parsed = PostgresUrl.safeParse(url.trim());
+  if (!parsed.success) throw new Error(`${where}: ${parsed.error.issues[0]?.message ?? "invalid URL"}`);
+  return { url: parsed.data };
+}
+
+/** The store port's view of the configured database; fails with the install hint when none is set. */
+export function storeConfig(
+  cfg: Pick<MemindexConfig, "store">,
+): Extract<StoreConfig, { backend: "postgres" }> {
+  if (!cfg.store) {
+    throw new StoreError(
+      "missing",
+      "memindex install (or set MEMINDEX_STORE=postgres://…)",
+      "no database configured",
+    );
+  }
+  return { backend: "postgres", url: cfg.store.url };
+}
+
+/** The URL with its password replaced, for status lines and logs. */
+export function redactUrl(url: string): string {
+  if (!URL.canParse(url)) return url;
+  const u = new URL(url);
+  if (u.password) u.password = "***";
+  return u.toString();
 }
 
 async function readConfigFile(file: string): Promise<ConfigFile> {
@@ -118,13 +154,12 @@ function searchScope(env: Env, file: ConfigFile): SearchScope {
 export async function loadConfig(env: Env = process.env): Promise<MemindexConfig> {
   const paths = resolvePaths(env);
   const file = await readConfigFile(paths.configFile);
-  const storeSpec = env.MEMINDEX_STORE ?? file.store;
   const host = env.MEMINDEX_OLLAMA_HOST ?? env.OLLAMA_HOST ?? file.ollama?.host ?? OLLAMA_DEFAULTS.host;
   return {
     search: searchScope(env, file),
     paths,
     producerId: file.producerId ? producerId(file.producerId) : null,
-    store: parseStoreSpec(storeSpec ?? LOCAL_SUPABASE_URL, paths.home),
+    store: env.MEMINDEX_STORE ? parseStoreUrl(env.MEMINDEX_STORE, "MEMINDEX_STORE") : (file.store ?? null),
     ollama: {
       host: /^https?:\/\//.test(host) ? host : `http://${host}`,
       model: env.MEMINDEX_EMBED_MODEL ?? file.ollama?.model ?? OLLAMA_DEFAULTS.model,
@@ -143,6 +178,13 @@ export async function ensureProducerId(cfg: MemindexConfig): Promise<ProducerId>
   const id = producerId(randomUUID());
   await writeConfigFile(cfg.paths.configFile, { ...file, producerId: id });
   return id;
+}
+
+/** Persists the database `memindex install` connected to. Other file fields are preserved. */
+export async function saveStore(cfg: MemindexConfig, store: StoreSetting): Promise<MemindexConfig> {
+  const file = await readConfigFile(cfg.paths.configFile);
+  await writeConfigFile(cfg.paths.configFile, { ...file, store });
+  return { ...cfg, store };
 }
 
 async function writeConfigFile(path: string, data: ConfigFile): Promise<void> {

@@ -15,6 +15,12 @@ export interface Ui {
   outro(msg: string): void;
   /** `--yes` answers every question with yes. */
   confirm(message: string): Promise<boolean>;
+  /** Free-text answer; non-interactive runs answer with `initial` (or ""). */
+  text(q: {
+    readonly message: string;
+    readonly placeholder?: string;
+    readonly initial?: string;
+  }): Promise<string>;
   task(title: string): Task;
   info(msg: string): void;
   warn(msg: string): void;
@@ -33,6 +39,15 @@ export function clackUi(): Ui {
       const answer = await p.confirm({ message });
       if (p.isCancel(answer)) throw new InstallCancelled("install cancelled");
       return answer;
+    },
+    async text(q) {
+      const answer = await p.text({
+        message: q.message,
+        ...(q.placeholder ? { placeholder: q.placeholder } : {}),
+        ...(q.initial ? { initialValue: q.initial } : {}),
+      });
+      if (p.isCancel(answer)) throw new InstallCancelled("install cancelled");
+      return answer ?? "";
     },
     task(title) {
       const s = p.spinner();
@@ -58,6 +73,7 @@ export function plainUi(log: ConsolaInstance): Ui {
       log.info(`${message} yes (--yes)`);
       return true;
     },
+    text: async (q) => q.initial ?? "",
     task(title) {
       log.start(title);
       return {

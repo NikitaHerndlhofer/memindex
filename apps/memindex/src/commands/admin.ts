@@ -5,7 +5,11 @@ import {
   type MemindexConfig,
   migrateArchive,
   openArchive,
+  probeStore,
   pullEmbedModel,
+  redactUrl,
+  type StoreProbe,
+  storeConfig,
 } from "@memindex/engine";
 import { defineCommand } from "citty";
 import { z } from "zod";
@@ -18,16 +22,25 @@ import { type SkillState, skillStates, skillTargets } from "../install/skill.ts"
 import { fromArray, render } from "../render.ts";
 import { VERSION } from "../version.ts";
 
-const storeLabel = (cfg: MemindexConfig) => (cfg.store.backend === "sqlite" ? cfg.store.path : cfg.store.url);
+const storeLabel = (store: MemindexConfig["store"]) => (store ? redactUrl(store.url) : "(none)");
+
+function serverText(p: StoreProbe): string {
+  const ext = p.extensions.map(
+    (x) => `${x.name} ${x.installed ?? "not installed"}${x.problem ? ` (${x.problem})` : ""}`,
+  );
+  return `PostgreSQL ${p.server} as ${p.user} on ${p.database}; ${ext.join(", ")}`;
+}
 
 function statusText(
   s: ArchiveStatus,
+  server: StoreProbe,
   skills: readonly { path: string; state: SkillState }[],
   watcher: boolean,
 ): string {
   const lines = [
     `memindex ${VERSION}`,
-    `store     ${s.backend} ${s.store.backend === "sqlite" ? s.store.path : s.store.url}`,
+    `store     ${storeLabel(s.store)}`,
+    `server    ${serverText(server)}`,
     `schema    ${s.schema.applied}/${s.schema.shipped} (${s.schema.state}), view contract v${s.schema.contract}`,
     `producer  ${s.producer ?? "(read-only)"}`,
     `embed     ${s.embed.ok ? `ok (${s.embed.model})` : `${s.embed.reason}: ${s.embed.detail}`}`,
@@ -56,11 +69,15 @@ function searchScopeText(scope: ArchiveStatus["search"]): string {
 }
 
 export const statusCommand = defineCommand({
-  meta: { name: "status", description: "Store, schema, sources, embed backlog, jobs, skill and watcher" },
+  meta: {
+    name: "status",
+    description: "Database, extensions, schema, sources, embed backlog, jobs, skill and watcher",
+  },
   args: { json: { type: "boolean", description: "JSON output" } },
   run: action(async ({ args }) => {
     await withArchive("write", async (archive) => {
       const status = await archive.status();
+      const server = await probeStore(storeConfig(archive.config));
       const skills = await skillStates(
         archive.skill(),
         skillTargets(archive.config.paths.home),
@@ -69,8 +86,12 @@ export const statusCommand = defineCommand({
       const watcher = launchAgentLoaded();
       out(
         args.json
-          ? `${JSON.stringify({ version: VERSION, ...status, skills, watcher }, null, 2)}\n`
-          : statusText(status, skills, watcher),
+          ? `${JSON.stringify(
+              { version: VERSION, ...status, store: storeLabel(status.store), server, skills, watcher },
+              null,
+              2,
+            )}\n`
+          : statusText(status, server, skills, watcher),
       );
     });
     return 0;
@@ -153,7 +174,7 @@ export const pathCommand = defineCommand({
     if (!target.success)
       throw new UsageError(`path: expected archive or config, got "${String(args.target)}"`);
     const cfg = await loadConfig();
-    out(`${target.data === "archive" ? storeLabel(cfg) : cfg.paths.configFile}\n`);
+    out(`${target.data === "archive" ? storeConfig(cfg).url : cfg.paths.configFile}\n`);
     return 0;
   }),
 });
@@ -214,6 +235,46 @@ export async function runDoctor(
               : "brew install ollama && brew services start ollama",
         }),
   });
+  if (!cfg.store) {
+    checks.push({
+      name: "database",
+      ok: false,
+      detail: "no database configured",
+      hint: "memindex install (or set MEMINDEX_STORE=postgres://…)",
+    });
+  } else {
+    await databaseChecks(cfg, checks);
+  }
+  const loaded = launchAgentLoaded();
+  checks.push({
+    name: "watcher (launchd)",
+    ok: loaded,
+    detail: `${PLIST_LABEL} ${loaded ? "loaded" : "not loaded"}`,
+    ...(loaded ? {} : { hint: "memindex install" }),
+  });
+  return { ok: checks.every((c) => c.ok), checks };
+}
+
+async function databaseChecks(cfg: MemindexConfig, checks: Check[]): Promise<void> {
+  const label = storeLabel(cfg.store);
+  try {
+    const server = await probeStore(storeConfig(cfg));
+    const broken = server.extensions.some((x) => x.problem !== null);
+    checks.push({
+      name: `database ${label}`,
+      ok: !broken,
+      detail: serverText(server),
+      ...(broken ? { hint: "memindex install (reports the fix for each missing extension)" } : {}),
+    });
+  } catch (e) {
+    checks.push({
+      name: `database ${label}`,
+      ok: false,
+      detail: `cannot connect: ${describeError(e)}`,
+      hint: "check the URL and that the server is up; `memindex install --url …` replaces it",
+    });
+    return;
+  }
   try {
     const archive = await openArchive({ mode: "read", config: cfg, binaryVersion: VERSION });
     try {
@@ -221,7 +282,7 @@ export async function runDoctor(
       checks.push({
         name: "archive",
         ok: schema.state !== "behind",
-        detail: `${storeLabel(cfg)} (schema ${schema.applied}/${schema.shipped}, ${schema.state})`,
+        detail: `schema ${schema.applied}/${schema.shipped} (${schema.state}), view contract v${schema.contract}`,
         ...(schema.state === "behind" ? { hint: "memindex migrate" } : {}),
       });
       const skills = await skillStates(
@@ -244,17 +305,9 @@ export async function runDoctor(
       name: "archive",
       ok: false,
       detail: describeError(e),
-      hint: "memindex install (creates and migrates the archive)",
+      hint: "memindex migrate",
     });
   }
-  const loaded = launchAgentLoaded();
-  checks.push({
-    name: "watcher (launchd)",
-    ok: loaded,
-    detail: `${PLIST_LABEL} ${loaded ? "loaded" : "not loaded"}`,
-    ...(loaded ? {} : { hint: "memindex install" }),
-  });
-  return { ok: checks.every((c) => c.ok), checks };
 }
 
 export function doctorText(checks: readonly Check[]): string {

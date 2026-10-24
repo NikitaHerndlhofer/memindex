@@ -14,11 +14,18 @@ import {
   type ReadStore,
   type Row,
   type SchemaStatus,
-  type StoreConfig,
   type StoreStats,
   type WriteStore,
 } from "@memindex/store";
-import { type Env, ensureProducerId, loadConfig, type MemindexConfig, type SearchScope } from "./config.ts";
+import {
+  type Env,
+  ensureProducerId,
+  loadConfig,
+  type MemindexConfig,
+  type SearchScope,
+  type StoreSetting,
+  storeConfig,
+} from "./config.ts";
 import {
   errorMessage,
   type IngestDeps,
@@ -52,8 +59,6 @@ export interface OpenArchiveOptions {
   /** Default: `loadConfig(env)`. */
   readonly config?: MemindexConfig;
   readonly env?: Env;
-  /** Overrides `config.store`. */
-  readonly store?: StoreConfig;
   /** Tests: an already-open store instead of `openStore`. */
   readonly storeInstance?: ReadStore | WriteStore;
   /** Tests: producer identity. Normally read from config, minted on first write-open. */
@@ -73,7 +78,7 @@ export interface OpenArchiveOptions {
 export interface ArchiveStatus {
   readonly backend: Backend;
   readonly producer: ProducerId | null;
-  readonly store: StoreConfig;
+  readonly store: StoreSetting | null;
   readonly schema: SchemaStatus;
   readonly embed: EmbedHealth;
   readonly stats: StoreStats;
@@ -135,8 +140,7 @@ const DEFAULT_JOB_BUDGET_MS = 10 * 60_000;
 
 export async function openArchive(opts: OpenArchiveOptions): Promise<Archive> {
   const env = opts.env ?? process.env;
-  const base = opts.config ?? (await loadConfig(env));
-  const config: MemindexConfig = opts.store ? { ...base, store: opts.store } : base;
+  const config = opts.config ?? (await loadConfig(env));
   const log = opts.log ?? createLog(env);
   const registry = opts.registry ?? buildRegistry();
   const defaultSources = resolveDefaultSources(config.search, registry);
@@ -159,9 +163,9 @@ export async function openArchive(opts: OpenArchiveOptions): Promise<Archive> {
     producer = opts.producer ?? (await ensureProducerId(config));
     store =
       opts.storeInstance ??
-      (await openStore(config.store, { ...storeOpts, mode: "write", producer, binaryVersion }));
+      (await openStore(storeConfig(config), { ...storeOpts, mode: "write", producer, binaryVersion }));
   } else {
-    store = opts.storeInstance ?? (await openStore(config.store, { ...storeOpts, mode: "read" }));
+    store = opts.storeInstance ?? (await openStore(storeConfig(config), { ...storeOpts, mode: "read" }));
   }
   return new ArchiveImpl({
     config,
@@ -211,7 +215,7 @@ export async function migrateArchive(
   opts: { readonly config?: MemindexConfig; readonly env?: Env } = {},
 ): Promise<SchemaStatus> {
   const config = opts.config ?? (await loadConfig(opts.env ?? process.env));
-  return migrateStore(config.store);
+  return migrateStore(storeConfig(config));
 }
 
 interface ArchiveParts {
@@ -406,7 +410,7 @@ class ArchiveImpl implements Archive {
   };
 
   migrate(): Promise<SchemaStatus> {
-    return migrateStore(this.p.config.store);
+    return migrateStore(storeConfig(this.p.config));
   }
 
   async status(): Promise<ArchiveStatus> {

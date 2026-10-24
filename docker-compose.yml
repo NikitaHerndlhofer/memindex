@@ -1,0 +1,22 @@
+# A local database for memindex: `docker compose up -d`, then paste into `memindex install`:
+#   postgresql://memindex:memindex@127.0.0.1:54329/memindex
+services:
+  postgres:
+    image: pgvector/pgvector:pg17
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: memindex
+      POSTGRES_PASSWORD: memindex
+      POSTGRES_DB: memindex
+    ports:
+      - "127.0.0.1:54329:5432"
+    volumes:
+      - memindex-db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U memindex -d memindex"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  memindex-db:

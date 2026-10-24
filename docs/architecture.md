@@ -28,9 +28,11 @@ Constraints the design honors:
 
 - **One app.** One binary, `memindex`. Sources are plugins compiled into it. The `swrag` and
   `acrag` archives are imported, never modified.
-- **Supabase Postgres is the database.** Locally through the Supabase CLI (`supabase start`),
-  remotely through a Supabase project; the same migrations run on both. The storage port stays
-  backend-neutral, but only the Postgres adapter is implemented.
+- **Postgres is the database, named by one URL.** A Supabase project or any Postgres with
+  pgvector >= 0.8; `memindex install` asks for the URL, checks the extensions and migrates it with
+  the Supabase CLI. It never runs a database: the repo's `docker-compose.yml`
+  (`pgvector/pgvector:pg17`) is the ready-made local one. The storage port stays backend-neutral,
+  but only the Postgres adapter is implemented.
 - **One universal index, scoped by plugin.** All plugins share one `chunk` table with one
   full-text index, one trigram index and one vector index per embedding space. Every search
   takes a `sources` filter; plugin scoping is a parameter, not a separate index. Configured
@@ -40,7 +42,7 @@ Constraints the design honors:
 ## Usage (caller's view)
 
 ```sh
-brew install nikitaherndlhofer/tap/memindex && memindex install   # Supabase local stack, Ollama check, watcher, hooks, skill
+brew install nikitaherndlhofer/tap/memindex && memindex install   # Postgres URL, migrations, Ollama check, watcher, hooks, skill
 memindex import swrag && memindex import acrag                     # resumable; legacy files untouched; verified
 memindex ingest                                                    # every plugin visible to this machine
 memindex status                                                    # items per source, embed backlog, jobs, schema
@@ -128,7 +130,7 @@ configures a stock chunker from `@memindex/chunkers` or implements `Chunker` its
 | Supabase CLI migrations                                | `supabase/migrations/*.sql` and the CLI's `supabase_migrations.schema_migrations` ledger are the only ledger; `memindex migrate` writes the same rows for machines without the CLI |
 | `pg_cron`                                              | Server-side maintenance (vector GC, ANALYZE) that no single producer has to own                                                                                                    |
 | Supavisor                                              | Session mode for producers; transaction mode (6543) works with prepared statements off                                                                                             |
-| Local stack (`supabase start`)                         | The default local install and the test backend                                                                                                                                     |
+| Local stack (`supabase start`)                         | The repo's test backend only; installs take a URL                                                                                                                                  |
 
 Follow-ups, not in the first cut: PGroonga as the multilingual keyword engine (evaluate on real
 dictation); Supabase Storage to preserve Super Whisper audio past its retention; pgmq if the
@@ -206,7 +208,8 @@ capture log's essential benefit was grafted in as the scoped `capture` table.
 
 ## Tradeoffs accepted
 
-- Zero-setup SQLite is gone: the local install runs the Supabase stack in Docker.
+- Zero-setup SQLite is gone: the user brings a Postgres URL (Supabase, the bundled compose file, or
+  their own server).
 - swrag's per-recording centroid vectors are dropped; recordings rank by their best chunks.
 - Old recipes don't run verbatim; `memindex install` replaces both skills.
 - Legacy archives are imported, not migrated in place.
@@ -214,8 +217,6 @@ capture log's essential benefit was grafted in as the scoped `capture` table.
 
 ## Open questions and risks
 
-- Local Supabase needs Docker. Is that acceptable for every machine that produces, or should a
-  laptop ingest into a remote Supabase project only?
 - Should Postgres-mode producers keep a local spool for offline ingest, given Super Whisper's
   retention?
 - Disk: halfvec(1024) is ~2 KB per vector (~1.3 GB for 630k) plus HNSW and the chat text. A

@@ -64,7 +64,7 @@ export async function migrateStore(cfg: StoreConfig, opts: MigrateOptions = {}):
   let out: string;
   let err: string;
   try {
-    materializeSupabaseProject(workdir, { dbPort: Number(new URL(url).port || 5432) });
+    materializeSupabaseProject(workdir, Number(new URL(url).port || 5432));
     const proc = Bun.spawn([bin, "migration", "up", "--db-url", url, "--workdir", workdir], {
       stdout: "pipe",
       stderr: "pipe",
@@ -92,11 +92,11 @@ export async function migrateStore(cfg: StoreConfig, opts: MigrateOptions = {}):
   }
 }
 
-function postgresUrl(cfg: StoreConfig): string {
+export function postgresUrl(cfg: StoreConfig): string {
   if (cfg.backend !== "postgres") {
     throw new StoreError(
       "unsupported",
-      "set the store to a postgres:// URL (local `supabase start` or a Supabase project)",
+      "set the store to a postgres:// URL (`memindex install`)",
       "only the Supabase Postgres backend is implemented; legacy SQLite archives are read by `memindex import`",
     );
   }

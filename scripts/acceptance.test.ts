@@ -7,7 +7,6 @@ import {
   type ItemRev,
   parseOptions,
   pickWord,
-  redactUrl,
   UsageError,
 } from "./acceptance.ts";
 
@@ -59,10 +58,6 @@ describe("verdicts", () => {
     expect(line.startsWith("NOT VERIFIED")).toBe(true);
     expect(line).toContain("embed");
     expect(line.endsWith("backlog 5 -> 5")).toBe(true);
-  });
-
-  test("passwords never reach the report", () => {
-    expect(redactUrl(DB)).toBe("postgres://postgres:***@127.0.0.1:54322/x");
   });
 });
 

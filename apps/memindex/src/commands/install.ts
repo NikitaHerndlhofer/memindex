@@ -1,10 +1,13 @@
 import {
   checkEmbedder,
+  ensureExtensionsSearchPath,
   loadConfig,
-  materializeSupabaseProject,
   migrateArchive,
   openArchive,
+  probeStore,
   pullEmbedModel,
+  saveStore,
+  storeConfig,
 } from "@memindex/engine";
 import { defineCommand } from "citty";
 import { action, log, out, skillTrackFile, withArchive } from "../context.ts";
@@ -39,15 +42,20 @@ export const installSkillCommand = defineCommand({
 export const installCommand = defineCommand({
   meta: {
     name: "install",
-    description: "Set up local Supabase, Ollama + bge-m3, the launchd watcher, agent hooks and the skill",
+    description:
+      "Connect and migrate a Postgres database, set up Ollama + bge-m3, the launchd watcher, agent hooks and the skill",
   },
   args: {
     yes: { type: "boolean", alias: "y", description: "Non-interactive: accept every prompt (for scripts)" },
+    url: {
+      type: "string",
+      description:
+        "Postgres URL (Supabase or any Postgres with pgvector); default: ask, or the configured one",
+    },
     bin: {
       type: "string",
       description: "Binary path to embed in launchd/hooks (default: Homebrew symlink or this binary)",
     },
-    "skip-supabase": { type: "boolean", description: "Don't check Docker or start the local Supabase stack" },
     "skip-ollama": { type: "boolean", description: "Don't start Ollama or pull the model" },
     "skip-watch": { type: "boolean", description: "Don't install the launchd watcher" },
     "skip-hooks": { type: "boolean", description: "Don't install agent hooks" },
@@ -56,9 +64,14 @@ export const installCommand = defineCommand({
     const interactive = process.stdin.isTTY === true && process.stdout.isTTY === true;
     if (!args.yes && !interactive)
       throw new UsageError("memindex install needs a terminal for its prompts; pass --yes to accept them");
-    const ui = args.yes ? plainUi(log) : clackUi();
     const env = process.env;
     const config = await loadConfig(env);
+    if (args.yes && !args.url && !config.store)
+      throw new UsageError(
+        "memindex install --yes needs --url postgresql://… (no database is configured yet)",
+      );
+    const ui = args.yes ? plainUi(log) : clackUi();
+    const withUrl = (url: string) => ({ ...config, store: { url } });
     ui.intro(`memindex ${VERSION} install`);
     const results = await runInstall(
       {
@@ -69,8 +82,14 @@ export const installCommand = defineCommand({
         sh: runAsync,
         which: (name) => Bun.which(name),
         sleep: (ms) => Bun.sleep(ms),
-        materialize: materializeSupabaseProject,
-        migrate: () => migrateArchive({ config }),
+        store: {
+          probe: (url) => probeStore(storeConfig(withUrl(url))),
+          ensureSearchPath: (url) => ensureExtensionsSearchPath(storeConfig(withUrl(url))),
+          save: async (url) => {
+            await saveStore(config, { url });
+          },
+          migrate: (url) => migrateArchive({ config: withUrl(url) }),
+        },
         ollama: {
           health: () => checkEmbedder({ config }),
           pull: (onProgress) => pullEmbedModel(onProgress, { config }),
@@ -79,11 +98,12 @@ export const installCommand = defineCommand({
           install: installLaunchAgent,
           uninstall: (label) => uninstallLaunchAgent(config.paths.home, label),
         },
-        openArchive: () => openArchive({ mode: "write", config, binaryVersion: VERSION, log }),
+        openArchive: (url) =>
+          openArchive({ mode: "write", config: withUrl(url), binaryVersion: VERSION, log }),
       },
       {
+        ...(args.url ? { url: args.url } : {}),
         skip: {
-          supabase: args["skip-supabase"] === true,
           ollama: args["skip-ollama"] === true,
           watch: args["skip-watch"] === true,
           hooks: args["skip-hooks"] === true,
