@@ -203,8 +203,33 @@ capture log's essential benefit was grafted in as the scoped `capture` table.
   `reparse`; version bumps as data updates that old binaries can't lower.
 - From the shared kernel: per-machine producer UUID; end-of-import verification; no Ollama call
   inside a transaction.
-- After the user's direction: Supabase Postgres as the only backend, search fused in SQL, Supabase
-  CLI migrations, per-kind chunkers.
+- After the user's direction: Postgres named by one URL (Supabase or any pgvector server), search
+  fused in SQL, Supabase CLI migrations, per-kind chunkers, Ollama bge-m3 kept as the only
+  embedder, agent-chat tool output embedded.
+
+## Embedding and ingest performance
+
+Measured on an M4 Pro (20-core GPU, 48 GB). Raw data and scripts are kept outside the repo.
+- **Embedding is bound by bge-m3's GPU compute in Ollama**, about 12 chunks/s (~6.8k tokens/s),
+  flat across batch size, client concurrency and server slots. A fresh archive's ~1M chunks take
+  about 23 h once; daily ingest is small. The migrated archive's backlog is ~60k chunks (~1 h).
+- **Faster paths were measured under a no-quality-loss gate** (cosine >= 0.999 to today's
+  vectors; >= 95% top-10 agreement overall, on non-English queries and on Super Whisper queries;
+  7,714 chunks, 150 queries). MLX fp16 passed at 1.34x and a Neural Engine + MLX split at 1.59x;
+  Ollama Q4, embeddinggemma and granite failed (76%, 32%, 27% agreement). Both passing paths need
+  a Python sidecar, so Ollama stays.
+- **Ingest applies up to 4 items concurrently.** A pinned 300-chat subset went from 51.7 s to
+  19.9 s (median of 5) with byte-identical stored rows; the store's index maintenance in Postgres
+  is the limit, not reading sources.
+
+## Verification
+
+`scripts/acceptance.ts` is the definition of done: it checks the migration ledger, both legacy
+imports against the legacy files, live ingest of every available plugin (a second run must change
+nothing except genuinely live chats), exact-count embedding with real Ollama, plugin-scoped search
+against direct SQL counts, and read-only enforcement. It refuses heavy clauses when the Mac or the
+Docker VM is short on disk (`scripts/disk-headroom.ts`), after a disk-full crash during this
+rewrite.
 
 ## Tradeoffs accepted
 
@@ -214,10 +239,19 @@ capture log's essential benefit was grafted in as the scoped `capture` table.
 - Old recipes don't run verbatim; `memindex install` replaces both skills.
 - Legacy archives are imported, not migrated in place.
 - Producers need the database reachable to ingest.
+- Tool output is embedded, so a fresh archive's one-time embedding catch-up is ~23 h, in exchange
+  for semantic search over tool output.
+- Ollama stays the only embedder, in exchange for a single binary with no Python sidecar.
 
 ## Open questions and risks
 
 - Should Postgres-mode producers keep a local spool for offline ingest, given Super Whisper's
   retention?
+- A full first ingest of this machine's Cursor history took 1,245 s on the compose pgvector server
+  and 399 s on the Supabase dev stack with the same code. The pinned 300-chat subset runs the same
+  on both, and the server settings match, so the gap is likely scale-dependent I/O once the indexes
+  outgrow the Docker VM's page cache. Unmeasured.
+- Concurrent ingest leaves databases 15-20% larger than sequential ingest on the subset (a full
+  history database is 15-19 GB). Unexplained.
 - Disk: halfvec(1024) is ~2 KB per vector (~1.3 GB for 630k) plus HNSW and the chat text. A
   Supabase Pro project includes 8 GB.
