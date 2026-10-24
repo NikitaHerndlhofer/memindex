@@ -15,6 +15,7 @@ import {
   type WriteOpenOptions,
   type WriteStore,
 } from "./port.ts";
+import { ensureExtensionsSearchPath } from "./probe.ts";
 import { materializeSupabaseProject } from "./project.ts";
 
 const MIGRATE_FIX = "memindex migrate";
@@ -58,6 +59,7 @@ export interface MigrateOptions {
  */
 export async function migrateStore(cfg: StoreConfig, opts: MigrateOptions = {}): Promise<SchemaStatus> {
   const url = postgresUrl(cfg);
+  await ensureExtensionsSearchPath(cfg);
   const bin = opts.supabaseBin ?? process.env.MEMINDEX_SUPABASE_BIN ?? "supabase";
   const workdir = mkdtempSync(join(tmpdir(), "memindex-migrate-"));
   let code: number;
