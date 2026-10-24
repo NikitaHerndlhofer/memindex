@@ -81,10 +81,16 @@ describe("pickWord", () => {
 
 describe("classifyRewrites", () => {
   const T = 1_000_000;
-  const rev = (revHash: string, writtenMs: number, revAt: number | null = null): ItemRev => ({
+  const rev = (
+    revHash: string,
+    writtenMs: number,
+    sourceAt: number | null = null,
+    content = "c1",
+  ): ItemRev => ({
     revHash,
-    revAt,
+    sourceAt,
     writtenMs,
+    content,
   });
 
   test("an untouched archive is idempotent", () => {
@@ -116,6 +122,22 @@ describe("classifyRewrites", () => {
     expect(r.liveActivity).toEqual(["live"]);
     expect([...r.unexplained].sort()).toEqual(["drift", "notime"]);
     expect(r.added).toEqual(["fresh"]);
+  });
+
+  test("a new revision is live when its turns changed or any location saw the item written during the run", () => {
+    const before = new Map([
+      ["edited", rev("h1", 1, T - 10, "211:aa")],
+      ["mirrored", rev("h1", 1, T - 10, "238:cc")],
+      ["drift", rev("h1", 1, T - 10, "211:aa")],
+    ]);
+    const after = new Map([
+      ["edited", rev("h2", 2, T - 10, "216:bb")],
+      ["mirrored", rev("h2", 2, T + 5, "238:cc")],
+      ["drift", rev("h2", 2, T - 10, "211:aa")],
+    ]);
+    const r = classifyRewrites(before, after, T);
+    expect([...r.liveActivity].sort()).toEqual(["edited", "mirrored"]);
+    expect(r.unexplained).toEqual(["drift"]);
   });
 
   test("an item that disappears is reported", () => {

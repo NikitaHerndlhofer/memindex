@@ -1,5 +1,12 @@
-import { mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+
+/**
+ * A lock older than this is stale even when its pid answers: pids are reused (always after a reboot),
+ * so an old lock may name an unrelated process. Well above the longest sweep seen (a 4.3 h first Cursor
+ * ingest); a sweep that outlives it only risks duplicate work.
+ */
+const MAX_LOCK_AGE_MS = 24 * 3600_000;
 
 /**
  * Best-effort per-(producer, source) lock file. Avoids duplicate work between the watcher, hooks
@@ -35,6 +42,7 @@ export function tryLock(dir: string, name: string): (() => void) | null {
 function holderAlive(path: string): boolean {
   let pid: number;
   try {
+    if (Date.now() - statSync(path).mtimeMs > MAX_LOCK_AGE_MS) return false;
     pid = Number.parseInt(readFileSync(path, "utf8"), 10);
   } catch {
     return false;

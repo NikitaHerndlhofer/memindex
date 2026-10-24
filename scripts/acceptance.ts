@@ -141,17 +141,26 @@ export function pickWord(texts: readonly string[]): string | null {
 
 export interface ItemRev {
   readonly revHash: string;
-  /** Source time of the stored revision in ms, null when the source has none. */
-  readonly revAt: number | null;
+  /**
+   * Latest source time in ms across the stored revision and every live observation of the item (e.g.
+   * Cursor's JSONL mirror next to state.vscdb), null when no location reports one.
+   */
+  readonly sourceAt: number | null;
   readonly writtenMs: number;
+  /** Fingerprint of the stored turns (keys, order, parts hashes); what the revision actually wrote. */
+  readonly content: string;
 }
 
 export interface Rewrites {
   /** Rewritten although the stored revision hash did not change: not idempotent. */
   readonly sameHash: readonly string[];
-  /** New revision whose source time is after the first ingest started: live source activity. */
+  /**
+   * New revision whose stored turns changed, or whose item some location saw written after the first
+   * ingest started: live source activity. Cursor adds bubbles without bumping lastUpdatedAt, and bubbles
+   * that yield no turn still move its hash, so neither signal alone covers it.
+   */
   readonly liveActivity: readonly string[];
-  /** New revision with no source time after the first run: a hash that changes on its own. */
+  /** New revision over identical stored turns with no source time after the first run: hash drift. */
   readonly unexplained: readonly string[];
   readonly added: readonly string[];
   readonly removed: readonly string[];
@@ -174,7 +183,8 @@ export function classifyRewrites(
     }
     if (a.writtenMs === b.writtenMs && a.revHash === b.revHash) continue;
     if (a.revHash === b.revHash) sameHash.push(key);
-    else if (a.revAt !== null && a.revAt >= firstRunStartedMs) liveActivity.push(key);
+    else if (a.content !== b.content || (a.sourceAt !== null && a.sourceAt >= firstRunStartedMs))
+      liveActivity.push(key);
     else unexplained.push(key);
   }
   const removed = [...before.keys()].filter((k) => !after.has(k));
@@ -473,20 +483,31 @@ const importAcrag: Clause = {
 
 async function snapshot(h: Harness, sources: readonly string[]): Promise<Map<string, ItemRev>> {
   const rows = (await h.sql`
-    SELECT item_key, rev_hash, rev_at, (extract(epoch FROM written_at) * 1000)::float8 AS written_ms
-    FROM memindex.item WHERE source IN ${h.sql(sources as string[])}`) as {
+    SELECT i.item_key, i.rev_hash, greatest(i.rev_at, o.source_at) AS source_at,
+      (extract(epoch FROM i.written_at) * 1000)::float8 AS written_ms, t.content
+    FROM memindex.item i
+    CROSS JOIN LATERAL (
+      SELECT count(*) || ':' || coalesce(md5(string_agg(turn_key || '=' || parts_hash, ',' ORDER BY ord)), '') AS content
+      FROM memindex.turn WHERE item_key = i.item_key
+    ) t
+    CROSS JOIN LATERAL (
+      SELECT max(rev_at) AS source_at FROM memindex.observation WHERE item_key = i.item_key AND gone_at IS NULL
+    ) o
+    WHERE i.source IN ${h.sql(sources as string[])}`) as {
     item_key: string;
     rev_hash: string;
-    rev_at: number | null;
+    source_at: number | null;
     written_ms: number;
+    content: string;
   }[];
   return new Map(
     rows.map((r) => [
       r.item_key,
       {
         revHash: r.rev_hash,
-        revAt: r.rev_at === null ? null : Number(r.rev_at),
+        sourceAt: r.source_at === null ? null : Number(r.source_at),
         writtenMs: Number(r.written_ms),
+        content: r.content,
       },
     ]),
   );
@@ -693,15 +714,17 @@ const searchScoped: Clause = {
   title: "--source scopes every hit, --all-sources finds hits",
   requires: ["schema"],
   async run(h) {
-    const words: Record<string, string | null> = {};
-    for (const source of ["superwhisper", "cursor"]) {
+    const sampleWord = async (source: string, embedded: boolean): Promise<string | null> => {
       const rows = (await h.sql`
         SELECT c.text FROM memindex.chunk c JOIN memindex.item i ON i.item_key = c.item_key
         WHERE c.source = ${source} AND i.superseded_by IS NULL
-          AND EXISTS (SELECT 1 FROM memindex.chunk_vector v WHERE v.space = ${SPACE} AND v.content_hash = c.content_hash)
+          AND (NOT ${embedded} OR EXISTS (
+            SELECT 1 FROM memindex.chunk_vector v WHERE v.space = ${SPACE} AND v.content_hash = c.content_hash))
         ORDER BY c.chunk_id LIMIT 25`) as { text: string }[];
-      words[source] = pickWord(rows.map((r) => r.text));
-    }
+      return pickWord(rows.map((r) => r.text));
+    };
+    const words: Record<string, string | null> = {};
+    for (const source of ["superwhisper", "cursor"]) words[source] = await sampleWord(source, false);
     const cases: SearchCase[] = [];
     for (const [source, word] of Object.entries(words)) {
       if (!word) continue;
@@ -718,8 +741,12 @@ const searchScoped: Clause = {
         expected: await keywordMatches(h, word, null),
       });
     }
-    const hybridWord = words.cursor ?? words.superwhisper;
-    const hybridSource = words.cursor ? "cursor" : "superwhisper";
+    let hybridSource = "cursor";
+    let hybridWord = await sampleWord(hybridSource, true);
+    if (!hybridWord) {
+      hybridSource = "superwhisper";
+      hybridWord = await sampleWord(hybridSource, true);
+    }
     const ollama = await ollamaHasModel();
     if (hybridWord && !ollama)
       cases.push({
@@ -735,10 +762,15 @@ const searchScoped: Clause = {
         parts.push({
           label: source,
           verdict: "INCONCLUSIVE",
-          detail: `no embedded ${source} chunk to sample a query from`,
+          detail: `no live ${source} chunk to sample a query from`,
         });
-    if (hybridWord && ollama)
-      parts.push({ label: "hybrid", verdict: "INCONCLUSIVE", detail: `Ollama ${ollama}` });
+    if (!hybridWord)
+      parts.push({
+        label: "hybrid",
+        verdict: "INCONCLUSIVE",
+        detail: "no embedded chunk to sample a query from",
+      });
+    else if (ollama) parts.push({ label: "hybrid", verdict: "INCONCLUSIVE", detail: `Ollama ${ollama}` });
     for (const c of cases) {
       const r = await h.cli(["q", "search", ...c.args, "--limit", "50", "--json"], { timeoutMs: 120_000 });
       const rows = parseJsonRows(r.stdout);
@@ -770,7 +802,7 @@ const searchScoped: Clause = {
       evidence: parts
         .map((p) => `${p.label}: ${p.verdict === "VERIFIED" ? "" : `${p.verdict} `}${p.detail}`)
         .join("; "),
-      data: { words, parts },
+      data: { words, hybridWord, hybridSource, parts },
     };
   },
 };
