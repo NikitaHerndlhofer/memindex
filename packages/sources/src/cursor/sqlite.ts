@@ -197,7 +197,7 @@ function spawnedComposer(
 }
 
 /** acrag's segment extraction, plus `bubble.thinking.text` (where _v 18 bubbles keep reasoning). */
-export function bubbleParts(
+function bubbleParts(
   bubble: Record<string, unknown>,
   children: ReadonlyMap<string, string> = new Map(),
 ): Part[] {

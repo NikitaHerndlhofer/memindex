@@ -60,7 +60,7 @@ function messageBlocks(obj: Record<string, unknown> | null): unknown[] {
 }
 
 /** The prompt a subagent transcript starts with: its first user message's `<user_query>`. */
-export function subagentPrompt(contents: string): string | null {
+function subagentPrompt(contents: string): string | null {
   for (const line of contents.split("\n")) {
     if (line.trim().length === 0) continue;
     const obj = asRecord(parseJson(line));
@@ -98,7 +98,7 @@ function blockParts(block: unknown, children: Map<string, string>): Part[] {
 }
 
 /** `children`: subagent prompt → child composerId. */
-export function parseTranscript(
+function parseTranscript(
   path: string,
   contents: string,
   mtimeMs: number,

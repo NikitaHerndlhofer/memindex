@@ -17,7 +17,7 @@ import { loadConfig, openArchive } from "../src/index.ts";
 import { recordingLog } from "./fakes.ts";
 import { buildAcrag, buildSwrag, DIM, longWindows } from "./legacy-fixtures.ts";
 
-const ADMIN_URL = process.env.MEMINDEX_TEST_PG ?? "postgres://postgres:postgres@127.0.0.1:54422/postgres";
+const ADMIN_URL = process.env.MEMINDEX_TEST_PG_URL ?? "postgres://postgres:postgres@127.0.0.1:54422/postgres";
 const DB_NAME = `memindex_import_verify_${process.pid}`;
 const CLI = join(import.meta.dir, "..", "..", "..", "apps", "memindex", "src", "cli.ts");
 

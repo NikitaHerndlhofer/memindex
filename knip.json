@@ -6,6 +6,10 @@
       "entry": ["scripts/*.ts", "tests/**/*.test.ts"],
       "project": ["src/**/*.ts", "scripts/**/*.ts", "tests/**/*.ts"]
     },
+    "packages/chunkers": {
+      "entry": ["scripts/*.ts", "tests/**/*.test.ts"],
+      "project": ["src/**/*.ts", "scripts/**/*.ts", "tests/**/*.ts"]
+    },
     "packages/embed": {
       "entry": ["tests/**/*.test.ts"],
       "project": ["src/**/*.ts", "tests/**/*.ts"]

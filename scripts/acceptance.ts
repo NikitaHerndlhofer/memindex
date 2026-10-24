@@ -26,7 +26,7 @@ export interface ClauseResult {
   readonly data?: Readonly<Record<string, unknown>>;
 }
 
-export const CLAUSE_IDS = [
+const CLAUSE_IDS = [
   "schema",
   "import-swrag",
   "import-acrag",
@@ -103,7 +103,7 @@ export function combine(verdicts: readonly Verdict[]): Verdict {
   return "VERIFIED";
 }
 
-export const check = (ok: boolean): Verdict => (ok ? "VERIFIED" : "NOT VERIFIED");
+const check = (ok: boolean): Verdict => (ok ? "VERIFIED" : "NOT VERIFIED");
 
 export function formatLine(id: ClauseId, r: ClauseResult): string {
   return `${r.verdict.padEnd(12)}  ${id.padEnd(13)}  ${r.evidence}`;

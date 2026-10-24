@@ -15,7 +15,7 @@ import {
 } from "@memindex/model";
 import { z } from "zod";
 
-export const CAPTURE_FORMAT = "superwhisper-row";
+const CAPTURE_FORMAT = "superwhisper-row";
 export const SWRAG_CAPTURE_FORMAT = "swrag-legacy";
 const MEETING_FALLBACK_MIN_MS = 10 * 60 * 1000;
 
@@ -82,7 +82,7 @@ const DiarizationSchema = z.object({
 
 const AudioSchema = z.object({ path: z.string(), sha1: z.string() }).nullable();
 
-export const CaptureBodySchema = z.object({
+const CaptureBodySchema = z.object({
   row: RowSchema,
   metaJson: z.unknown(),
   audio: AudioSchema,
@@ -172,7 +172,7 @@ function emptyToNull(v: string | undefined | null): string | null {
  * A segment without a speaker belongs to the speaker before it (the first known speaker, at the start).
  * Empty when no segment names a speaker.
  */
-export function speakerTurns(metaJson: unknown, startedAt: IsoTime): TurnDraft[] {
+function speakerTurns(metaJson: unknown, startedAt: IsoTime): TurnDraft[] {
   const parsed = DiarizationSchema.safeParse(metaJson ?? {});
   if (!parsed.success) return [];
   const names = new Map(parsed.data.speakers.map((s) => [s.number, emptyToNull(s.name)]));
@@ -204,7 +204,7 @@ export function speakerTurns(metaJson: unknown, startedAt: IsoTime): TurnDraft[]
  * A `recording` row of the legacy superwhisper-rag archive, snake_case, as `memindex import swrag`
  * stores it. Most of these recordings no longer exist in Super Whisper, so the row is all there is.
  */
-export const SwragRowSchema = z.looseObject({
+const SwragRowSchema = z.looseObject({
   recording_id_hex: z.string().min(1),
   folder_name: z.string(),
   datetime: z.string(),

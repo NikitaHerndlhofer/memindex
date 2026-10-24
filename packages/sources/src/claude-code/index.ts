@@ -83,7 +83,7 @@ function lastTimestampMs(contents: string): number | null {
   return Number.isNaN(ms) ? null : ms;
 }
 
-export function parseSession(path: string, contents: string, mtimeMs: number): ItemDraft<ClaudeCodeMeta> {
+function parseSession(path: string, contents: string, mtimeMs: number): ItemDraft<ClaudeCodeMeta> {
   const native = nativeFromPath(path);
   if (!native) throw new Error(`claude-code: not a session file: ${path}`);
   const turns: TurnDraft[] = [];

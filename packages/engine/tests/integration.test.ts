@@ -14,7 +14,7 @@ import { SQL } from "bun";
 import { type Archive, loadConfig, openArchive, RECIPES, type Recipe, VIEW_CONTRACT } from "../src/index.ts";
 import { fakeEmbedder, recordingLog } from "./fakes.ts";
 
-const ADMIN_URL = process.env.MEMINDEX_TEST_PG ?? "postgres://postgres:postgres@127.0.0.1:54422/postgres";
+const ADMIN_URL = process.env.MEMINDEX_TEST_PG_URL ?? "postgres://postgres:postgres@127.0.0.1:54422/postgres";
 const FIXTURES = join(import.meta.dir, "..", "..", "sources", "tests", "fixtures");
 const DB_NAME = `memindex_engine_it_${process.pid}`;
 

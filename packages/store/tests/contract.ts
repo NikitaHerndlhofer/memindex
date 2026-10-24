@@ -59,11 +59,11 @@ export interface ContractBackend {
 }
 
 export const P1 = producerId("11111111-1111-4111-8111-111111111111");
-export const P2 = producerId("22222222-2222-4222-8222-222222222222");
-export const SW = sourceId("superwhisper");
+const P2 = producerId("22222222-2222-4222-8222-222222222222");
+const SW = sourceId("superwhisper");
 export const CUR = sourceId("cursor");
 export const L1 = "loc-one" as LocationId;
-export const L2 = "loc-two" as LocationId;
+const L2 = "loc-two" as LocationId;
 export const SPACE = vectorSpace("test", 4);
 const CHUNKER = chunkerId("parts", 1);
 const NO_FACETS: ReadonlyMap<SourceId, Facets> = new Map();
@@ -142,7 +142,7 @@ export function writeOf(
   };
 }
 
-export const sightingOf = (key: ItemKey, revision: Revision): Sighting => ({
+const sightingOf = (key: ItemKey, revision: Revision): Sighting => ({
   key,
   revision,
   locator: `/tmp/${key}`,

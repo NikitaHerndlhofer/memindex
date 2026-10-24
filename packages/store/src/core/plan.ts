@@ -16,7 +16,7 @@ import {
 } from "@memindex/model";
 import type { ItemWrite } from "../port.ts";
 
-export interface TurnHead {
+interface TurnHead {
   readonly ord: number;
   readonly partsHash: string;
 }
@@ -51,7 +51,7 @@ export interface ChunkDiff {
   readonly delete: readonly string[];
 }
 
-export interface SupersedeGroup {
+interface SupersedeGroup {
   readonly source: SourceId;
   readonly key: string;
 }
@@ -74,7 +74,7 @@ export type WritePlan =
     };
 
 /** Canonical JSON form of a part as stored in turn.parts. */
-export interface StoredPart {
+interface StoredPart {
   readonly kind: Part["kind"];
   readonly text: string;
   readonly toolName?: string;
@@ -82,7 +82,7 @@ export interface StoredPart {
   readonly ref?: string;
 }
 
-export function storedParts(parts: readonly Part[]): StoredPart[] {
+function storedParts(parts: readonly Part[]): StoredPart[] {
   return parts.map((p) => ({
     kind: p.kind,
     text: p.text,

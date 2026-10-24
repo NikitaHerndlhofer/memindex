@@ -1,6 +1,16 @@
 {
   "$schema": "https://biomejs.dev/schemas/2.4.15/schema.json",
-  "files": { "includes": ["**", "!**/node_modules", "!**/dist", "!**/vendor", "!**/*.gen.ts"] },
+  "files": {
+    "includes": [
+      "**",
+      "!**/node_modules",
+      "!**/dist",
+      "!**/vendor",
+      "!**/*.gen.ts",
+      "!**/.audit",
+      "!**/supabase/.temp"
+    ]
+  },
   "formatter": { "enabled": true, "indentStyle": "space", "indentWidth": 2, "lineWidth": 110 },
   "linter": { "enabled": true, "rules": { "recommended": true } }
 }

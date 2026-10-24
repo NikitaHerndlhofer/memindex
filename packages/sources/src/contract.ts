@@ -15,7 +15,6 @@ import type {
   Capture,
   Chunker,
   Facets,
-  IsoTime,
   ItemDraft,
   ItemKind,
   LocationId,
@@ -112,5 +111,3 @@ export interface SourceDb {
   get<T>(sql: string, params?: readonly (string | number | null)[]): T | null;
   close(): void;
 }
-
-export type { IsoTime };

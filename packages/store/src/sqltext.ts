@@ -4,7 +4,7 @@
  * the leading-WITH merge in run(), and ledger tamper comparison.
  */
 
-export type SegmentKind = "code" | "string" | "ident" | "dollar" | "comment";
+type SegmentKind = "code" | "string" | "ident" | "dollar" | "comment";
 
 export interface Segment {
   readonly kind: SegmentKind;

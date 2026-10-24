@@ -63,8 +63,8 @@ import {
   vectorSpaceMatches,
 } from "./legacy-sqlite.ts";
 
-export const ACRAG_JOB_ID = "import-acrag";
-export const ACRAG_LOCATION = locationId("legacy:acrag");
+const ACRAG_JOB_ID = "import-acrag";
+const ACRAG_LOCATION = locationId("legacy:acrag");
 export const ACRAG_CHUNKER = chunkerId("acrag-legacy", 1);
 const SOURCE = "cursor";
 const CONVERSATIONS_PER_STEP = 25;
@@ -134,10 +134,10 @@ interface ChunkRow {
   readonly text: string;
 }
 
-export type Skip = "path_id" | "agent" | "superseded";
+type Skip = "path_id" | "agent" | "superseded";
 
 /** Why a conversation is not imported; null = import it as `cursor:<id>`. */
-export function skipReason(c: Pick<ConversationRow, "id" | "agent_name" | "superseded_by">): Skip | null {
+function skipReason(c: Pick<ConversationRow, "id" | "agent_name" | "superseded_by">): Skip | null {
   if (c.agent_name !== SOURCE) return "agent";
   if (c.superseded_by !== null) return "superseded";
   try {
@@ -174,14 +174,14 @@ interface ConversationRows {
   readonly tags: readonly string[];
 }
 
-export interface AcragBuild {
+interface AcragBuild {
   readonly draft: ItemDraft;
   readonly chunks: readonly ChunkDraft[];
   readonly revision: Revision;
 }
 
 /** Pure: one acrag conversation (its rows) → draft + chunks + revision. */
-export function buildAcragItem(rows: ConversationRows, tally: Tally): AcragBuild {
+function buildAcragItem(rows: ConversationRows, tally: Tally): AcragBuild {
   const c = rows.conversation;
   const key = itemKey(SOURCE, c.id);
   const turns: TurnDraft[] = [];

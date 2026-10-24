@@ -3,11 +3,11 @@ import { drizzle, type PostgresJsDatabase, type PostgresJsQueryResultHKT } from 
 import postgres from "postgres";
 import * as schema from "../schema.ts";
 
-export type Schema = typeof schema;
-export type Db = PostgresJsDatabase<Schema>;
+type Schema = typeof schema;
+type Db = PostgresJsDatabase<Schema>;
 /** Common shape of the database handle and a transaction handle. */
 export type Exec = PgDatabase<PostgresJsQueryResultHKT, Schema>;
-export type Client = postgres.Sql<{ bigint: bigint }>;
+type Client = postgres.Sql<{ bigint: bigint }>;
 
 export interface Connection {
   readonly client: Client;

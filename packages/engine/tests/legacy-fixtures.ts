@@ -18,7 +18,7 @@ export function vector(seed: number): Float32Array {
 }
 
 /** sqlite-vec v0.1.x shadow tables for `table`, `chunkSize` slots per chunk. */
-export function writeVec0(
+function writeVec0(
   db: Database,
   table: string,
   keyColumn: "id" | "rowid",
@@ -65,15 +65,13 @@ export function writeVec0(
   }
 }
 
-export const words = (n: number, tag: string) =>
+const words = (n: number, tag: string) =>
   Array.from({ length: n }, (_, i) => (i % 12 === 11 ? `${tag}${i}.` : `${tag}${i}`)).join(" ");
 
 export const SHORT = "Hello world, this is a short dictation about the import.";
-export const LONG = words(700, "w");
+const LONG = words(700, "w");
 
-export function swragRow(
-  over: Partial<SwragRow> & Pick<SwragRow, "folder_name" | "recording_id_hex">,
-): SwragRow {
+function swragRow(over: Partial<SwragRow> & Pick<SwragRow, "folder_name" | "recording_id_hex">): SwragRow {
   return {
     datetime: "2026-05-01 10:00:00.000",
     duration_ms: 30_000,

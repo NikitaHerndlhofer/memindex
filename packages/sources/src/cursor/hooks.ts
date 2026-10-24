@@ -9,7 +9,7 @@ import { dirname, join } from "node:path";
 import type { HookRoute, HookSpec, SourceKit } from "../contract.ts";
 import { asRecord, asString } from "../util.ts";
 
-export const CURSOR_HOOK_EVENTS = ["stop", "subagentStop", "workspaceOpen"] as const;
+const CURSOR_HOOK_EVENTS = ["stop", "subagentStop", "workspaceOpen"] as const;
 
 function hooksPath(kit: SourceKit): string {
   return kit.env.MEMINDEX_CURSOR_HOOKS_FILE ?? join(kit.home, ".cursor", "hooks.json");
@@ -44,7 +44,7 @@ function entries(v: unknown): unknown[] {
   return Array.isArray(v) ? v : [];
 }
 
-export function normalizeEvent(event: string): string {
+function normalizeEvent(event: string): string {
   return event.charAt(0).toLowerCase() + event.slice(1);
 }
 

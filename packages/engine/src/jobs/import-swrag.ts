@@ -60,8 +60,8 @@ import {
   vectorSpaceMatches,
 } from "./legacy-sqlite.ts";
 
-export const SWRAG_JOB_ID = "import-swrag";
-export const SWRAG_LOCATION = locationId("legacy:swrag");
+const SWRAG_JOB_ID = "import-swrag";
+const SWRAG_LOCATION = locationId("legacy:swrag");
 const SOURCE = "superwhisper";
 const BATCH = 200;
 const SUPPORTED_USER_VERSIONS = new Set([9]);
