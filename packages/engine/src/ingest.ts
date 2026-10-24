@@ -6,6 +6,11 @@ import type { Log } from "./log.ts";
 import type { Registry } from "./registry.ts";
 
 const TRIAGE_BATCH = 500;
+/**
+ * Items read and applied at once. Apply is bound by Postgres CPU (GIN maintenance per chunk), so this
+ * spreads it over backends; it stays below the store's 5-connection pool so triage and cursors never wait.
+ */
+const APPLY_CONCURRENCY = 4;
 /** Applied keys remembered per run so the post-ingest embed serves them first. */
 const PREFER_CAP = 1_000;
 
@@ -104,17 +109,7 @@ export async function ingestLocation(
   const scan = await plugin.scan(loc, kit);
   if (scan.kind === "unchanged") return;
   const errorsBefore = tally.errors.length;
-  const seen = new Set<ItemKey>();
-  let batch: Sighting[] = [];
-  for await (const s of scan.sightings) {
-    seen.add(s.key);
-    batch.push(s);
-    if (batch.length >= TRIAGE_BATCH) {
-      await processBatch(deps, plugin, loc, kit, batch, tally);
-      batch = [];
-    }
-  }
-  if (batch.length > 0) await processBatch(deps, plugin, loc, kit, batch, tally);
+  const seen = await ingestSightings(deps, plugin, loc, kit, scan.sightings, tally);
 
   if (scan.complete) {
     tally.gone += (await deps.store.reconcileGone(plugin.id, loc.id, seen)).markedGone;
@@ -137,7 +132,7 @@ async function ingestOne(
   const sighting = plugin.sight
     ? await plugin.sight(native, loc, kit)
     : await sightByScan(plugin, loc, kit, native);
-  if (sighting) await processBatch(deps, plugin, loc, kit, [sighting], tally);
+  if (sighting) await ingestSightings(deps, plugin, loc, kit, [sighting], tally);
 }
 
 async function sightByScan(
@@ -153,49 +148,96 @@ async function sightByScan(
   return null;
 }
 
-async function processBatch(
+/**
+ * Triage in batches; each newer key is read, chunked and applied with up to APPLY_CONCURRENCY in
+ * flight across batches, so one huge item never idles the rest. Outcomes are tallied in sighting order.
+ */
+async function ingestSightings(
   deps: IngestDeps,
   plugin: SourcePlugin,
   loc: Location,
   kit: SourceKit,
-  batch: readonly Sighting[],
+  sightings: AsyncIterable<Sighting> | Iterable<Sighting>,
   tally: IngestTally,
-): Promise<void> {
-  const toRead = new Set(await deps.store.triage(plugin.id, loc.id, batch));
-  if (toRead.size === 0) return;
-  for (const sighting of batch) {
-    if (!toRead.has(sighting.key)) continue;
-    try {
-      const res = await plugin.read(sighting, loc, kit);
-      if (!res) {
-        tally.count(sighting.key, "vanished");
-        continue;
+): Promise<Set<ItemKey>> {
+  const seen = new Set<ItemKey>();
+  const run = bounded(APPLY_CONCURRENCY);
+  const items: { key: ItemKey; result: Promise<ItemOutcome | Error> }[] = [];
+  const triage = async (batch: readonly Sighting[]) => {
+    const toRead = new Set(await deps.store.triage(plugin.id, loc.id, batch));
+    for (const s of batch) {
+      if (!toRead.has(s.key)) continue;
+      const result = run(() => ingestItem(deps, plugin, loc, kit, s)).catch((e: unknown) =>
+        e instanceof Error ? e : new Error(String(e)),
+      );
+      items.push({ key: s.key, result });
+    }
+  };
+  try {
+    let batch: Sighting[] = [];
+    for await (const s of sightings) {
+      seen.add(s.key);
+      batch.push(s);
+      if (batch.length >= TRIAGE_BATCH) {
+        await triage(batch);
+        batch = [];
       }
-      const meta = plugin.meta.safeParse(res.draft.meta);
-      if (!meta.success || res.draft.key !== sighting.key) {
-        const why = meta.success ? `draft key ${res.draft.key} ≠ sighting key` : meta.error.message;
-        deps.log.warn(`skipping invalid item ${sighting.key}`, { source: plugin.id, error: why });
-        tally.count(sighting.key, "invalid");
-        continue;
-      }
-      const draft = { ...res.draft, meta: meta.data };
-      const chunker = deps.registry.chunkerFor(plugin.id, draft.kind);
-      const outcome = await deps.store.apply({
-        source: plugin.id,
-        location: loc.id,
-        draft,
-        revision: sighting.revision,
-        sighting,
-        chunker: chunker.id,
-        chunks: chunker.chunk(draft),
-        parserVersion: plugin.parserVersion,
-        ...(res.capture ? { capture: res.capture } : {}),
-      });
-      tally.count(sighting.key, outcome.kind);
-    } catch (e) {
-      tally.errors.push({ source: plugin.id, key: sighting.key, message: errorMessage(e) });
+    }
+    if (batch.length > 0) await triage(batch);
+  } finally {
+    for (const { key, result } of items) {
+      const r = await result;
+      if (r instanceof Error) tally.errors.push({ source: plugin.id, key, message: r.message });
+      else tally.count(key, r);
     }
   }
+  return seen;
+}
+
+function bounded(limit: number): <T>(task: () => Promise<T>) => Promise<T> {
+  let active = 0;
+  const waiting: (() => void)[] = [];
+  return async (task) => {
+    while (active >= limit) await new Promise<void>((resolve) => waiting.push(resolve));
+    active++;
+    try {
+      return await task();
+    } finally {
+      active--;
+      waiting.shift()?.();
+    }
+  };
+}
+
+async function ingestItem(
+  deps: IngestDeps,
+  plugin: SourcePlugin,
+  loc: Location,
+  kit: SourceKit,
+  sighting: Sighting,
+): Promise<ItemOutcome> {
+  const res = await plugin.read(sighting, loc, kit);
+  if (!res) return "vanished";
+  const meta = plugin.meta.safeParse(res.draft.meta);
+  if (!meta.success || res.draft.key !== sighting.key) {
+    const why = meta.success ? `draft key ${res.draft.key} ≠ sighting key` : meta.error.message;
+    deps.log.warn(`skipping invalid item ${sighting.key}`, { source: plugin.id, error: why });
+    return "invalid";
+  }
+  const draft = { ...res.draft, meta: meta.data };
+  const chunker = deps.registry.chunkerFor(plugin.id, draft.kind);
+  const outcome = await deps.store.apply({
+    source: plugin.id,
+    location: loc.id,
+    draft,
+    revision: sighting.revision,
+    sighting,
+    chunker: chunker.id,
+    chunks: chunker.chunk(draft),
+    parserVersion: plugin.parserVersion,
+    ...(res.capture ? { capture: res.capture } : {}),
+  });
+  return outcome.kind;
 }
 
 export function errorMessage(e: unknown): string {

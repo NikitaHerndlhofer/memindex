@@ -6,4 +6,5 @@ dist/
 .tmp-*
 .DS_Store
 .audit/*.json
+.bench/
 supabase/.temp/

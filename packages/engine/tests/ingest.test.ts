@@ -50,6 +50,8 @@ const entries = () => [
   { native: "a", hash: "h1", text: "alpha" },
   { native: "b", hash: "h1", text: "beta" },
 ];
+const many = (n: number) =>
+  Array.from({ length: n }, (_, i) => ({ native: `n${i}`, hash: `h${i}`, text: `text ${i}` }));
 
 describe("ingest loop", () => {
   test("applies new items, reconciles gone with the full listing, then commits cursors", async () => {
@@ -114,6 +116,30 @@ describe("ingest loop", () => {
     expect(await store.ledger.getCursor(SRC, LOC, "mtime")).toBeNull();
   });
 
+  test("a slow write does not hold back the rest; at most 4 in flight; errors keep listing order", async () => {
+    let inFlight = 0;
+    let peak = 0;
+    const finished: string[] = [];
+    class SlowFirstStore extends FakeStore {
+      override async apply(w: Parameters<FakeStore["apply"]>[0]) {
+        inFlight++;
+        peak = Math.max(peak, inFlight);
+        await Bun.sleep(w.draft.key === key("n0") ? 50 : 1);
+        inFlight--;
+        finished.push(w.draft.key);
+        return super.apply(w);
+      }
+    }
+    const store = new SlowFirstStore();
+    store.failApplyFor.add(key("n7"));
+    store.failApplyFor.add(key("n3"));
+    const r = await (await open(fakePlugin({ entries: many(20) }), store)).archive.ingest();
+    expect(r.outcomes.applied).toBe(18);
+    expect(r.errors.map((e) => e.key)).toEqual([key("n3"), key("n7")]);
+    expect(finished.at(-1)).toBe(key("n0"));
+    expect(peak).toBe(4);
+  });
+
   test("items that vanish between scan and read are reported, not written", async () => {
     const list = entries();
     const plugin = fakePlugin({ entries: list });
@@ -147,18 +173,39 @@ describe("ingest loop", () => {
   });
 
   test("the embed job with an item limit embeds exactly that many chunks, across batches", async () => {
-    const many = Array.from({ length: 150 }, (_, i) => ({
-      native: `n${i}`,
-      hash: `h${i}`,
-      text: `text ${i}`,
-    }));
-    const { archive, store } = await open(fakePlugin({ entries: many }));
+    const { archive, store } = await open(fakePlugin({ entries: many(150) }));
     await archive.ingest();
     const before = await store.vectors.backlogSize();
     expect(before).toBe(150);
     const [r] = await archive.jobs.run({ only: ["embed"], limit: 70 });
     expect(r).toMatchObject({ id: "embed", done: 70, remaining: 80, error: null });
     expect(await store.vectors.backlogSize()).toBe(before - 70);
+  });
+
+  test("the embed job drains a backlog spanning several backlog pages", async () => {
+    const { archive, store } = await open(fakePlugin({ entries: many(1100) }));
+    await archive.ingest();
+    const [r] = await archive.jobs.run({ only: ["embed"] });
+    expect(r).toEqual({ id: "embed", done: 1100, remaining: 0, error: null });
+    expect(store.vecs.size).toBe(1100);
+  });
+
+  test("an embed failure mid-run keeps the vectors already written", async () => {
+    const base = fakeEmbedder();
+    const embedder = {
+      ...base,
+      embed: async (texts: readonly string[]) => {
+        if (base.calls.length === 2) throw new Error("ollama went away");
+        return base.embed(texts);
+      },
+    };
+    const { archive, store } = await open(fakePlugin({ entries: many(300) }), new FakeStore(), { embedder });
+    await archive.ingest();
+    const [r] = await archive.jobs.run({ only: ["embed"] });
+    expect(r?.error).toContain("ollama went away");
+    expect(r?.done).toBe(store.vecs.size);
+    expect(r?.done).toBeGreaterThan(0);
+    expect(r?.remaining).toBe(300 - store.vecs.size);
   });
 
   test("embed failures are reported and leave the backlog intact", async () => {

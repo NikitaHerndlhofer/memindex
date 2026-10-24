@@ -17,6 +17,7 @@ import { join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { SQL } from "bun";
 import { MIGRATIONS } from "../packages/store/src/migrations.gen.ts";
+import { measureFreeSpace, shortfalls } from "./disk-headroom.ts";
 
 export type Verdict = "VERIFIED" | "NOT VERIFIED" | "INCONCLUSIVE";
 
@@ -350,6 +351,8 @@ interface Clause {
   readonly title: string;
   /** Clauses that must be VERIFIED first; otherwise this one is INCONCLUSIVE. */
   readonly requires: readonly ClauseId[];
+  /** Writes gigabytes into the store; refused without disk headroom on the Mac and in the Colima VM. */
+  readonly heavy?: true;
   run(h: Harness): Promise<ClauseResult>;
 }
 
@@ -530,6 +533,7 @@ const liveIngest: Clause = {
   id: "live-ingest",
   title: "ingest writes every available source and a second run changes nothing",
   requires: ["schema"],
+  heavy: true,
   async run(h) {
     const paths = h.sourcePaths();
     const available = LIVE_SOURCES.filter((s) =>
@@ -869,9 +873,17 @@ async function main(): Promise<number> {
       const blocked = clause.requires.filter(
         (id) => (h.results.get(id)?.verdict ?? "VERIFIED") !== "VERIFIED",
       );
+      const free = clause.heavy ? measureFreeSpace() : null;
+      const short = free ? shortfalls(free) : [];
       let result: ClauseResult;
       if (blocked.length) {
         result = { verdict: "INCONCLUSIVE", evidence: `skipped: ${blocked.join(", ")} not verified` };
+      } else if (short.length) {
+        result = {
+          verdict: "INCONCLUSIVE",
+          evidence: `refused, not enough disk headroom for a heavy write: ${short.join("; ")}`,
+          data: { free },
+        };
       } else {
         try {
           result = await clause.run(h);
