@@ -98,6 +98,7 @@ function context(store: ImportStore, args: Record<string, string>) {
     embedder: bge,
     registry: buildRegistry(),
     log: { debug: rec, info: rec, warn: rec, error: rec },
+    lockDir: null,
     args,
   };
   return { ctx, logs };

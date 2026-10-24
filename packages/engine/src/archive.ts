@@ -26,6 +26,7 @@ import {
   type StoreSetting,
   storeConfig,
 } from "./config.ts";
+import { type EmbedderStatus, readEmbedRuntime, runEmbedDuty } from "./embed-duty.ts";
 import {
   errorMessage,
   type IngestDeps,
@@ -35,6 +36,7 @@ import {
   ingestSource,
   type SourceRoute,
 } from "./ingest.ts";
+import { claimEmbed } from "./jobs/embed.ts";
 import {
   budget,
   embedBacklog,
@@ -48,6 +50,7 @@ import {
   selectJobs,
 } from "./jobs/index.ts";
 import { createLog, type Log } from "./log.ts";
+import { createPowerProbe, type PowerProbe } from "./power.ts";
 import { type Query, type QueryOptions, runQuery } from "./query.ts";
 import { RECIPES } from "./recipes.ts";
 import { findPlugin, type KitFactory, type Registry } from "./registry.ts";
@@ -73,6 +76,8 @@ export interface OpenArchiveOptions {
   readonly log?: Log;
   /** Directory for duplicate-work lock files; null disables them. Default `<config>/locks`. */
   readonly lockDir?: string | null;
+  /** Default: pmset, cached for a minute. */
+  readonly power?: PowerProbe;
 }
 
 export interface ArchiveStatus {
@@ -87,6 +92,8 @@ export interface ArchiveStatus {
   readonly sources: readonly { readonly id: SourceId; readonly enabled: boolean }[];
   /** Default search scope; `defaultSources: null` searches every source. */
   readonly search: SearchScope;
+  /** What the watcher's embedder last published; null when none has run with this lock dir. */
+  readonly embedder: EmbedderStatus | null;
 }
 
 export interface HookResult {
@@ -105,12 +112,11 @@ export interface Archive {
    * run concurrently from hooks, the watcher and a manual run.
    */
   ingest(req?: IngestRequest): Promise<IngestReport>;
-  /** Long-running FSEvents watcher; resolves when `signal` aborts (or on SIGTERM/SIGINT). */
-  watch(opts: {
-    readonly debounceMs: number;
-    readonly embedBudgetMs?: number;
-    readonly signal?: AbortSignal;
-  }): Promise<void>;
+  /**
+   * Long-running watcher: ingests on file events and polls, and drains the embed backlog on the duty
+   * cycle of `config.embed`. Resolves when `signal` aborts (or on SIGTERM/SIGINT).
+   */
+  watch(opts: { readonly debounceMs: number; readonly signal?: AbortSignal }): Promise<void>;
   /** The one read path for recipes, custom SQL and search. */
   query(q: Query, opts?: QueryOptions): AsyncIterable<Row>;
   readonly jobs: {
@@ -137,6 +143,8 @@ export interface Archive {
 
 const DEFAULT_BINARY_VERSION = "0.0.0-dev";
 const DEFAULT_JOB_BUDGET_MS = 10 * 60_000;
+/** How long shutdown waits for an embed batch in flight before abandoning it. */
+const EMBED_STOP_GRACE_MS = 3_000;
 
 export async function openArchive(opts: OpenArchiveOptions): Promise<Archive> {
   const env = opts.env ?? process.env;
@@ -178,6 +186,7 @@ export async function openArchive(opts: OpenArchiveOptions): Promise<Archive> {
     defaultSources,
     jobs: [...JOBS, ...(opts.jobs ?? [])],
     lockDir: opts.lockDir === undefined ? config.paths.lockDir : opts.lockDir,
+    power: opts.power ?? createPowerProbe(),
   });
 }
 
@@ -229,6 +238,7 @@ interface ArchiveParts {
   readonly defaultSources: readonly SourceId[] | null;
   readonly jobs: readonly JobDef[];
   readonly lockDir: string | null;
+  readonly power: PowerProbe;
 }
 
 type DisposableKit = SourceKit & { dispose?: () => void };
@@ -299,13 +309,22 @@ class ArchiveImpl implements Archive {
     let embedded = 0;
     let backlog: number | null = null;
     const budgetMs = req.embed?.budgetMs ?? 0;
-    if (budgetMs > 0) {
-      const r = await embedBacklog(store, this.p.embedder, budget(budgetMs), tally.applied);
-      embedded = r.done;
-      backlog = r.remaining;
-      if (r.error) tally.errors.push({ source: "embed", message: r.error });
-      for (const s of r.skipped ?? []) {
-        tally.errors.push({ source: "embed", message: `embed skipped chunk ${s.unit}: ${s.reason}` });
+    const claim =
+      budgetMs > 0
+        ? await claimEmbed(this.p.lockDir, { onBattery: this.p.config.embed.onBattery, probe: this.p.power })
+        : null;
+    if (claim && "skip" in claim) tally.skipped.push({ source: "embed", reason: claim.skip });
+    else if (claim) {
+      try {
+        const r = await embedBacklog(store, this.p.embedder, budget(budgetMs), tally.applied);
+        embedded = r.done;
+        backlog = r.remaining;
+        if (r.error) tally.errors.push({ source: "embed", message: r.error });
+        for (const s of r.skipped ?? []) {
+          tally.errors.push({ source: "embed", message: `embed skipped chunk ${s.unit}: ${s.reason}` });
+        }
+      } finally {
+        claim.release();
       }
     }
     return {
@@ -318,12 +337,8 @@ class ArchiveImpl implements Archive {
     };
   }
 
-  async watch(opts: {
-    readonly debounceMs: number;
-    readonly embedBudgetMs?: number;
-    readonly signal?: AbortSignal;
-  }): Promise<void> {
-    this.writeStore();
+  async watch(opts: { readonly debounceMs: number; readonly signal?: AbortSignal }): Promise<void> {
+    const store = this.writeStore();
     const targets = this.enabled().map((plugin) => {
       const kit: DisposableKit = this.p.kitFactory(plugin.id, async () => null);
       try {
@@ -337,21 +352,38 @@ class ArchiveImpl implements Archive {
         kit.dispose?.();
       }
     });
-    const embedBudgetMs = opts.embedBudgetMs ?? 60_000;
-    await watchSources(
-      targets,
-      async (source) => {
-        const r = await this.ingest({ only: { source }, embed: { budgetMs: embedBudgetMs } });
-        this.p.log.info(`watch: ${source}`, {
-          ...r.outcomes,
-          gone: r.gone,
-          embedded: r.embedded,
-          errors: r.errors.length,
-        });
+    const stopEmbedding = new AbortController();
+    const duty = runEmbedDuty(
+      {
+        store,
+        embedder: this.p.embedder,
+        policy: this.p.config.embed,
+        lockDir: this.p.lockDir,
+        power: this.p.power,
+        log: this.p.log,
       },
-      { debounceMs: opts.debounceMs, ...(opts.signal ? { signal: opts.signal } : {}) },
-      this.p.log,
+      stopEmbedding.signal,
     );
+    try {
+      await watchSources(
+        targets,
+        async (source) => {
+          const r = await this.ingest({ only: { source } });
+          if (r.outcomes.applied > 0) duty.nudge();
+          this.p.log.info(`watch: ${source}`, { ...r.outcomes, gone: r.gone, errors: r.errors.length });
+        },
+        { debounceMs: opts.debounceMs, ...(opts.signal ? { signal: opts.signal } : {}) },
+        this.p.log,
+      );
+    } finally {
+      stopEmbedding.abort();
+      let grace: ReturnType<typeof setTimeout> | undefined;
+      await Promise.race([
+        duty.done,
+        new Promise((resolve) => (grace = setTimeout(resolve, EMBED_STOP_GRACE_MS))),
+      ]);
+      clearTimeout(grace);
+    }
   }
 
   query(q: Query, opts?: QueryOptions): AsyncIterable<Row> {
@@ -373,6 +405,7 @@ class ArchiveImpl implements Archive {
       embedder: this.p.embedder,
       registry: this.p.registry,
       log: this.p.log,
+      lockDir: this.p.lockDir,
       args,
     };
   }
@@ -438,6 +471,7 @@ class ArchiveImpl implements Archive {
       jobs,
       sources: this.p.registry.all.map((s) => ({ id: s.id, enabled: !disabled.has(s.id) })),
       search: this.p.config.search,
+      embedder: this.p.lockDir === null ? null : readEmbedRuntime(this.p.lockDir),
     };
   }
 

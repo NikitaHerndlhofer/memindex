@@ -5,6 +5,8 @@ import {
   exitCode,
   formatLine,
   type ItemRev,
+  idleCpuVerdict,
+  parseCputime,
   parseOptions,
   pickWord,
   UsageError,
@@ -58,6 +60,46 @@ describe("verdicts", () => {
     expect(line.startsWith("NOT VERIFIED")).toBe(true);
     expect(line).toContain("embed");
     expect(line.endsWith("backlog 5 -> 5")).toBe(true);
+  });
+});
+
+describe("idle-cpu", () => {
+  test("ps cputime parses as seconds", () => {
+    expect(parseCputime("0:00.52")).toBe(0.52);
+    expect(parseCputime("1:02.50")).toBe(62.5);
+    expect(parseCputime("1:02:03.45")).toBeCloseTo(3723.45, 6);
+    expect(parseCputime(" 0:01.00 ")).toBe(1);
+    expect(parseCputime("garbage")).toBeNull();
+  });
+
+  const idle = (n: number, pcpu: number, cpuStep: number) =>
+    Array.from({ length: n }, (_, i) => ({ tMs: i * 5_000, pcpu, cputimeS: 1.2 + i * cpuStep }));
+
+  test("VERIFIED at or under 1% average and 0.6 s of cputime over the window", () => {
+    expect(idleCpuVerdict(idle(13, 0.0, 0)).verdict).toBe("VERIFIED");
+    expect(idleCpuVerdict(idle(13, 1.0, 0.05)).verdict).toBe("VERIFIED");
+  });
+
+  test("NOT VERIFIED when either the average or the cputime growth is over", () => {
+    expect(idleCpuVerdict(idle(13, 1.1, 0)).verdict).toBe("NOT VERIFIED");
+    expect(idleCpuVerdict(idle(13, 0.2, 0.06)).verdict).toBe("NOT VERIFIED");
+    const spin = idleCpuVerdict(idle(13, 99, 5));
+    expect(spin.verdict).toBe("NOT VERIFIED");
+    expect(spin.evidence).toContain("avg 99.0%");
+    expect(spin.evidence).toContain("cputime +60.00 s");
+  });
+
+  test("the baseline sample's pcpu is startup, not the window; a burst inside the window still fails", () => {
+    const startup = idle(13, 0, 0.005).map((s, i) => (i === 0 ? { ...s, pcpu: 48 } : s));
+    expect(idleCpuVerdict(startup).verdict).toBe("VERIFIED");
+    const burst = idle(13, 0, 0.005).map((s, i) => (i === 6 ? { ...s, pcpu: 30 } : s));
+    expect(idleCpuVerdict(burst).verdict).toBe("NOT VERIFIED");
+  });
+
+  test("too short a window or a vanished process is not a pass", () => {
+    expect(idleCpuVerdict(idle(1, 0, 0)).verdict).toBe("INCONCLUSIVE");
+    expect(idleCpuVerdict(idle(5, 0, 0)).verdict).toBe("INCONCLUSIVE");
+    expect(idleCpuVerdict([]).verdict).toBe("INCONCLUSIVE");
   });
 });
 

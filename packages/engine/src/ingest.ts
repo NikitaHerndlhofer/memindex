@@ -31,7 +31,8 @@ export interface IngestReport {
   readonly gone: number;
   readonly embedded: number;
   readonly backlog: number | null;
-  readonly skipped: readonly { readonly source: SourceId; readonly reason: string }[];
+  /** Sources another process was ingesting, and embedding that was deferred or left to another process. */
+  readonly skipped: readonly { readonly source: SourceId | "embed"; readonly reason: string }[];
   readonly errors: readonly {
     readonly source: SourceId | "embed";
     readonly key?: ItemKey;
@@ -53,7 +54,7 @@ export class IngestTally {
   readonly outcomes: Record<ItemOutcome, number> = { applied: 0, same: 0, stale: 0, invalid: 0, vanished: 0 };
   gone = 0;
   readonly applied: ItemKey[] = [];
-  readonly skipped: { source: SourceId; reason: string }[] = [];
+  readonly skipped: { source: SourceId | "embed"; reason: string }[] = [];
   readonly errors: { source: SourceId | "embed"; key?: ItemKey; message: string }[] = [];
 
   count(key: ItemKey, outcome: ItemOutcome): void {

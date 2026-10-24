@@ -23,6 +23,8 @@ export {
   pullEmbedModel,
 } from "./archive.ts";
 export {
+  EMBED_DEFAULTS,
+  type EmbedPolicy,
   type Env,
   ensureProducerId,
   loadConfig,
@@ -38,6 +40,15 @@ export {
   saveStore,
   storeConfig,
 } from "./config.ts";
+export {
+  type Clock,
+  type EmbedActivity,
+  type EmbedderStatus,
+  type EmbedRuntime,
+  type EmbedSlice,
+  readEmbedRuntime,
+  runEmbedDuty,
+} from "./embed-duty.ts";
 export {
   type IngestDeps,
   type IngestReport,
@@ -63,6 +74,7 @@ export {
   REPARSE_LOCATION,
 } from "./jobs/index.ts";
 export { createLog, type Log } from "./log.ts";
+export { createPowerProbe, deferReason, type PowerProbe, type PowerState, parsePower } from "./power.ts";
 export {
   bindRecipe,
   DEFAULT_HIT_LIMIT,

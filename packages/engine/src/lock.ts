@@ -27,7 +27,7 @@ function unlinkQuiet(path: string): void {
  */
 export function tryLock(dir: string, name: string): (() => void) | null {
   mkdirSync(dir, { recursive: true });
-  const path = join(dir, `${name.replace(/[^a-zA-Z0-9._-]/g, "_")}.lock`);
+  const path = lockPath(dir, name);
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
       writeFileSync(path, String(process.pid), { flag: "wx" });
@@ -55,6 +55,20 @@ export function tryLock(dir: string, name: string): (() => void) | null {
   return null;
 }
 
+function lockPath(dir: string, name: string): string {
+  return join(dir, `${name.replace(/[^a-zA-Z0-9._-]/g, "_")}.lock`);
+}
+
+/** The pid named in a lock file, or null when there is none or it is unreadable. */
+export function lockHolder(dir: string, name: string): number | null {
+  try {
+    const pid = Number.parseInt(readFileSync(lockPath(dir, name), "utf8"), 10);
+    return Number.isInteger(pid) && pid > 0 ? pid : null;
+  } catch {
+    return null;
+  }
+}
+
 function holderAlive(path: string): boolean {
   let pid: number;
   try {
@@ -63,7 +77,10 @@ function holderAlive(path: string): boolean {
   } catch {
     return false;
   }
-  if (!Number.isInteger(pid) || pid <= 0) return false;
+  return Number.isInteger(pid) && pid > 0 && pidAlive(pid);
+}
+
+export function pidAlive(pid: number): boolean {
   try {
     process.kill(pid, 0);
     return true;

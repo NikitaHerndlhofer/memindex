@@ -218,6 +218,13 @@ Measured on an M4 Pro (20-core GPU, 48 GB). Raw data and scripts are kept outsid
   7,714 chunks, 150 queries). MLX fp16 passed at 1.34x and a Neural Engine + MLX split at 1.59x;
   Ollama Q4, embeddinggemma and granite failed (76%, 32%, 27% agreement). Both passing paths need
   a Python sidecar, so Ollama stays.
+- **One embedder per machine, on a duty cycle.** The watcher drains the backlog in slices of at
+  most `embed.busyMs` (30 s), then rests `embed.restMs` (30 s) while holding the `embed` lock, so
+  the GPU is never pinned and hooks or manual runs skip embedding instead of competing. A slice
+  ends early on an empty backlog. Then the watcher sleeps until it writes new chunks or
+  `embed.idleRecheckMs` (5 min) passes. On battery or in Low Power Mode embedding is deferred
+  (`embed.onBattery: "defer"`); ingest still runs. `memindex status` shows the embedder's state
+  and the last slice's rate.
 - **Ingest applies up to 4 items concurrently.** A pinned 300-chat subset went from 51.7 s to
   19.9 s (median of 5) with byte-identical stored rows; the store's index maintenance in Postgres
   is the limit, not reading sources.
@@ -227,7 +234,8 @@ Measured on an M4 Pro (20-core GPU, 48 GB). Raw data and scripts are kept outsid
 `scripts/acceptance.ts` is the definition of done: it checks the migration ledger, both legacy
 imports against the legacy files, live ingest of every available plugin (a second run must change
 nothing except genuinely live chats), exact-count embedding with real Ollama, plugin-scoped search
-against direct SQL counts, and read-only enforcement. It refuses heavy clauses when the Mac or the
+against direct SQL counts, read-only enforcement, and that a settled watcher uses at most 1% CPU
+and 0.6 s of cputime over 60 s (`idle-cpu`). It refuses heavy clauses when the Mac or the
 Docker VM is short on disk (`scripts/disk-headroom.ts`), after a disk-full crash during this
 rewrite.
 

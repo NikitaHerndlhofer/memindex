@@ -85,6 +85,27 @@ describe("config", () => {
     expect(redactUrl("postgres://u@db/x")).toBe("postgres://u@db/x");
   });
 
+  test("embed policy: defaults, partial overrides from the file, invalid values fail loudly", async () => {
+    const env = { HOME: dir, MEMINDEX_CONFIG_DIR: dir };
+    expect((await loadConfig(env)).embed).toEqual({
+      busyMs: 30_000,
+      restMs: 30_000,
+      idleRecheckMs: 300_000,
+      onBattery: "defer",
+    });
+    writeFileSync(join(dir, "config.json"), JSON.stringify({ embed: { restMs: 90_000, onBattery: "run" } }));
+    expect((await loadConfig(env)).embed).toEqual({
+      busyMs: 30_000,
+      restMs: 90_000,
+      idleRecheckMs: 300_000,
+      onBattery: "run",
+    });
+    writeFileSync(join(dir, "config.json"), JSON.stringify({ embed: { onBattery: "sometimes" } }));
+    await expect(loadConfig(env)).rejects.toThrow(/config\.json is invalid/);
+    writeFileSync(join(dir, "config.json"), JSON.stringify({ embed: { busyMs: 0 } }));
+    await expect(loadConfig(env)).rejects.toThrow(/config\.json is invalid/);
+  });
+
   test("invalid config files fail loudly with the path", async () => {
     writeFileSync(join(dir, "config.json"), JSON.stringify({ ollama: { dim: -1 } }));
     await expect(loadConfig({ HOME: dir, MEMINDEX_CONFIG_DIR: dir })).rejects.toThrow(

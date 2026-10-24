@@ -7,6 +7,7 @@ const ctx = (store: FakeStore): JobContext => ({
   embedder: fakeEmbedder(),
   registry: fakeRegistry([]),
   log: recordingLog(),
+  lockDir: null,
   args: {},
 });
 

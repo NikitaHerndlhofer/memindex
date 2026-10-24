@@ -12,6 +12,7 @@ import {
   fakePlugin,
   fakeRegistry,
   noopKit,
+  onAc,
   PRODUCER,
   recordingLog,
   SRC,
@@ -42,6 +43,7 @@ async function open(
     kit: noopKit,
     lockDir: extra.lockDir === undefined ? null : extra.lockDir,
     log: recordingLog(extra.logs),
+    power: onAc,
   });
   return { archive, store };
 }

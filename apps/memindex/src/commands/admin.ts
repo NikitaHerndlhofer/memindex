@@ -1,6 +1,9 @@
 import {
   type ArchiveStatus,
   checkEmbedder,
+  type EmbedActivity,
+  type EmbedderStatus,
+  type EmbedSlice,
   loadConfig,
   type MemindexConfig,
   migrateArchive,
@@ -44,6 +47,7 @@ function statusText(
     `schema    ${s.schema.applied}/${s.schema.shipped} (${s.schema.state}), view contract v${s.schema.contract}`,
     `producer  ${s.producer ?? "(read-only)"}`,
     `embed     ${s.embed.ok ? `ok (${s.embed.model})` : `${s.embed.reason}: ${s.embed.detail}`}`,
+    `embedder  ${embedderText(s.embedder, Date.now())}`,
     `sources   ${s.sources.map((x) => `${x.id}${x.enabled ? "" : " (disabled)"}`).join(", ")}`,
     `search    ${searchScopeText(s.search)}`,
   ];
@@ -60,6 +64,39 @@ function statusText(
   for (const k of skills) lines.push(`skill     ${k.state.padEnd(8)} ${k.path}`);
   lines.push(`watcher   ${PLIST_LABEL} ${watcher ? "loaded" : "not loaded"}`);
   return `${lines.join("\n")}\n`;
+}
+
+const clockTime = (ms: number) => new Date(ms).toTimeString().slice(0, 8);
+
+function activityText(a: EmbedActivity, now: number): string {
+  switch (a.state) {
+    case "running":
+      return `running since ${clockTime(a.since)}`;
+    case "resting":
+      return `resting until ${clockTime(a.until)} (in ${Math.max(0, Math.round((a.until - now) / 1000))} s)`;
+    case "deferred":
+      return `deferred (${a.reason})`;
+    case "idle":
+      return "idle (backlog empty)";
+    case "skipped":
+      return `skipped (${a.holder === null ? "another process" : `pid ${a.holder}`} holds the embed lock)`;
+  }
+}
+
+function sliceText(s: EmbedSlice): string {
+  const rate = s.ms > 0 ? (s.chunks / s.ms) * 1000 : 0;
+  const left = s.remaining === null ? "" : `, ${s.remaining} left`;
+  return `${s.chunks} chunks in ${(s.ms / 1000).toFixed(1)} s (${rate.toFixed(1)} chunks/s)${left}${s.error ? `, error: ${s.error}` : ""}`;
+}
+
+/** The watcher's embed state as published in its lock dir. */
+export function embedderText(e: EmbedderStatus | null, now: number): string {
+  if (!e) return "no watcher has embedded here yet";
+  const r = e.runtime;
+  const slice = r.lastSlice ? `; last slice ${sliceText(r.lastSlice)}` : "";
+  if (!e.live)
+    return `watcher not running (pid ${r.pid} was ${r.activity.state} at ${clockTime(r.at)})${slice}`;
+  return `${activityText(r.activity, now)}; pid ${r.pid}${slice}`;
 }
 
 function searchScopeText(scope: ArchiveStatus["search"]): string {

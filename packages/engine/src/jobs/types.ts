@@ -8,6 +8,8 @@ export interface JobContext {
   readonly embedder: Embedder;
   readonly registry: Registry;
   readonly log: Log;
+  /** Directory for duplicate-work lock files; null disables them. */
+  readonly lockDir: string | null;
   /** Job-specific arguments, e.g. `{ path }` for an import. Validated by the job. */
   readonly args: Readonly<Record<string, string>>;
 }

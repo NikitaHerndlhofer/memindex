@@ -1,10 +1,39 @@
 import type { Embedder } from "@memindex/embed";
 import type { ContentHash, ItemKey } from "@memindex/model";
 import type { WriteStore } from "@memindex/store";
+import type { EmbedPolicy } from "../config.ts";
 import { errorMessage } from "../ingest.ts";
+import { lockHolder, tryLock } from "../lock.ts";
+import { deferReason, type PowerProbe } from "../power.ts";
 import type { Budget, JobDef, JobReport } from "./types.ts";
 
 const EMBED_BATCH = 64;
+
+/** One embedder per machine: embedding is bound by the one GPU, so a second embedder only competes for it. */
+export const EMBED_LOCK = "embed";
+
+export type EmbedClaim = { readonly release: () => void } | { readonly skip: string };
+
+function embedBusyReason(holder: number | null): string {
+  return `another memindex process${holder === null ? "" : ` (pid ${holder})`} is embedding`;
+}
+
+/**
+ * The right to embed now: refused when the power policy defers it, or when another process holds the
+ * embed lock. `power: null` skips the power check (an explicit `jobs run`).
+ */
+export async function claimEmbed(
+  lockDir: string | null,
+  power: { readonly onBattery: EmbedPolicy["onBattery"]; readonly probe: PowerProbe } | null,
+): Promise<EmbedClaim> {
+  if (power) {
+    const why = deferReason(power.onBattery, await power.probe());
+    if (why) return { skip: `deferred: ${why}` };
+  }
+  if (lockDir === null) return { release: () => {} };
+  const release = tryLock(lockDir, EMBED_LOCK);
+  return release ? { release } : { skip: embedBusyReason(lockHolder(lockDir, EMBED_LOCK)) };
+}
 
 /**
  * backlog → embed (no transaction held) → put. The vector row is the done marker, so a crash
@@ -20,6 +49,7 @@ export async function embedBacklog(
   let done = 0;
   let previous = "";
   let error: string | null = null;
+  let drained = false;
   const skipped: { unit: ContentHash; reason: string }[] = [];
   const limit = budget.limit ?? Number.POSITIVE_INFINITY;
   while (!budget.expired() && done < limit) {
@@ -28,7 +58,10 @@ export async function embedBacklog(
       ...(prefer.length > 0 ? { prefer } : {}),
       ...(skipped.length > 0 ? { exclude: skipped.map((s) => s.unit) } : {}),
     });
-    if (pending.length === 0) break;
+    if (pending.length === 0) {
+      drained = true;
+      break;
+    }
     const fingerprint = pending.map((p) => p.hash).join(",");
     if (fingerprint === previous) {
       error = "backlog did not shrink after put; stopping to avoid a loop";
@@ -52,7 +85,7 @@ export async function embedBacklog(
   return {
     id: "embed",
     done,
-    remaining: await store.vectors.backlogSize(space),
+    remaining: drained && skipped.length === 0 ? 0 : await store.vectors.backlogSize(space),
     error,
     ...(skipped.length > 0 ? { skipped } : {}),
   };
@@ -65,7 +98,15 @@ export const embedJob: JobDef = {
   describe: "Embed chunks that have no vector in the active vector space",
   runByDefault: true,
   pending: (ctx) => ctx.store.vectors.backlogSize(ctx.embedder.space),
-  run: (ctx, budget) => embedBacklog(ctx.store, ctx.embedder, budget),
+  async run(ctx, budget) {
+    const claim = await claimEmbed(ctx.lockDir, null);
+    if ("skip" in claim) return { id: "embed", done: 0, remaining: null, error: `skipped: ${claim.skip}` };
+    try {
+      return await embedBacklog(ctx.store, ctx.embedder, budget);
+    } finally {
+      claim.release();
+    }
+  },
 };
 
 export const vecGcJob: JobDef = {

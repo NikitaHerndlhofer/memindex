@@ -11,12 +11,13 @@
  * exits 1 when any clause is NOT VERIFIED.
  */
 import { Database } from "bun:sqlite";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { SQL } from "bun";
 import { redactUrl } from "../packages/engine/src/config.ts";
+import { readEmbedRuntime } from "../packages/engine/src/embed-duty.ts";
 import { MIGRATIONS } from "../packages/store/src/migrations.gen.ts";
 import { measureFreeSpace, shortfalls } from "./disk-headroom.ts";
 
@@ -36,6 +37,7 @@ const CLAUSE_IDS = [
   "embed",
   "search-scoped",
   "read-only",
+  "idle-cpu",
 ] as const;
 export type ClauseId = (typeof CLAUSE_IDS)[number];
 
@@ -191,6 +193,50 @@ export function classifyRewrites(
   return { sameHash, liveActivity, unexplained, added, removed };
 }
 
+const IDLE_WINDOW_MS = 60_000;
+const IDLE_SAMPLE_MS = 5_000;
+const IDLE_MAX_AVG_PCPU = 1;
+const IDLE_MAX_CPUTIME_S = 0.6;
+
+export interface CpuSample {
+  readonly tMs: number;
+  /** `ps -o pcpu`: percent of one core. */
+  readonly pcpu: number;
+  readonly cputimeS: number;
+}
+
+/** `ps -o cputime`: `[[dd-]hh:]mm:ss.cc`. */
+export function parseCputime(s: string): number | null {
+  const m = /^(?:(\d+)-)?(?:(\d+):)?(\d+):(\d+(?:\.\d+)?)$/.exec(s.trim());
+  if (!m) return null;
+  return Number(m[1] ?? 0) * 86_400 + Number(m[2] ?? 0) * 3_600 + Number(m[3]) * 60 + Number(m[4]);
+}
+
+/**
+ * VERIFIED iff the samples span the window, average <= 1% CPU and cputime grew <= 0.6 s. The first
+ * sample is the baseline: its pcpu is ps's decaying average of the time before the window (for a
+ * process seconds old, its startup), so only the samples after it are averaged.
+ */
+export function idleCpuVerdict(samples: readonly CpuSample[]): ClauseResult {
+  const first = samples[0];
+  const last = samples.at(-1);
+  const spanMs = first && last ? last.tMs - first.tMs : 0;
+  const inWindow = samples.slice(1);
+  if (!first || !last || inWindow.length === 0 || spanMs < IDLE_WINDOW_MS - 2 * IDLE_SAMPLE_MS)
+    return {
+      verdict: "INCONCLUSIVE",
+      evidence: `only ${Math.round(spanMs / 1000)} s of CPU samples (${samples.length}); the window is ${IDLE_WINDOW_MS / 1000} s`,
+    };
+  const avg = inWindow.reduce((sum, s) => sum + s.pcpu, 0) / inWindow.length;
+  const grew = last.cputimeS - first.cputimeS;
+  const ok = avg <= IDLE_MAX_AVG_PCPU && Math.round(grew * 100) / 100 <= IDLE_MAX_CPUTIME_S;
+  return {
+    verdict: check(ok),
+    evidence: `avg ${avg.toFixed(1)}% CPU (limit ${IDLE_MAX_AVG_PCPU}%), cputime +${grew.toFixed(2)} s (limit ${IDLE_MAX_CPUTIME_S.toFixed(2)} s) over ${Math.round(spanMs / 1000)} s, ${inWindow.length} samples after a baseline at ${first.pcpu.toFixed(1)}%`,
+    data: { samples, avg, grew },
+  };
+}
+
 // ─── Harness context ─────────────────────────────────────────────────────────
 
 const REPO = resolve(import.meta.dir, "..");
@@ -251,6 +297,26 @@ class Harness {
     return { ...out, ...this.opts.ingestEnv };
   }
 
+  childEnv(extra: Record<string, string> = {}): Record<string, string> {
+    const env: Record<string, string> = {};
+    for (const [k, v] of Object.entries(process.env))
+      if (v !== undefined && !k.startsWith("MEMINDEX_")) env[k] = v;
+    return Object.assign(env, {
+      HOME: this.home,
+      MEMINDEX_STORE: this.opts.db,
+      MEMINDEX_CONFIG_DIR: this.configDir,
+      MEMINDEX_OLLAMA_HOST: OLLAMA,
+      ...this.sourcePaths(),
+      ...extra,
+    });
+  }
+
+  command(args: readonly string[]): string[] {
+    return this.opts.bin
+      ? [this.opts.bin, ...args]
+      : [process.execPath, join(REPO, "apps/memindex/src/cli.ts"), ...args];
+  }
+
   async cli(
     args: readonly string[],
     opts: {
@@ -259,24 +325,10 @@ class Harness {
       readonly timeoutMs?: number;
     } = {},
   ): Promise<CliRun> {
-    const env: Record<string, string> = {};
-    for (const [k, v] of Object.entries(process.env))
-      if (v !== undefined && !k.startsWith("MEMINDEX_")) env[k] = v;
-    Object.assign(env, {
-      HOME: this.home,
-      MEMINDEX_STORE: this.opts.db,
-      MEMINDEX_CONFIG_DIR: this.configDir,
-      MEMINDEX_OLLAMA_HOST: OLLAMA,
-      ...this.sourcePaths(),
-      ...opts.env,
-    });
-    const cmd = this.opts.bin
-      ? [this.opts.bin, ...args]
-      : [process.execPath, join(REPO, "apps/memindex/src/cli.ts"), ...args];
     const started = Date.now();
-    const proc = Bun.spawn(cmd, {
+    const proc = Bun.spawn(this.command(args), {
       cwd: REPO,
-      env,
+      env: this.childEnv(opts.env),
       stdin: opts.stdin === undefined ? "ignore" : new Blob([opts.stdin]),
       stdout: "pipe",
       stderr: "pipe",
@@ -351,7 +403,7 @@ interface Clause {
   /** Clauses that must be VERIFIED first; otherwise this one is INCONCLUSIVE. */
   readonly requires: readonly ClauseId[];
   /** Writes gigabytes into the store; refused without disk headroom on the Mac and in the Colima VM. */
-  readonly heavy?: true;
+  readonly heavy?: boolean;
   run(h: Harness): Promise<ClauseResult>;
 }
 
@@ -835,6 +887,106 @@ const readOnly: Clause = {
   },
 };
 
+const FIXTURES = join(REPO, "packages/sources/tests/fixtures");
+
+async function until(ok: () => boolean, timeoutMs: number): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (!ok()) {
+    if (Date.now() >= deadline) return false;
+    await Bun.sleep(250);
+  }
+  return true;
+}
+
+function psSample(pid: number, t0: number): CpuSample | null {
+  const r = Bun.spawnSync(["ps", "-o", "pcpu=,cputime=", "-p", String(pid)]);
+  const [pcpu, cputime] = r.stdout.toString().trim().split(/\s+/);
+  const cputimeS = parseCputime(cputime ?? "");
+  if (pcpu === undefined || cputimeS === null || !Number.isFinite(Number(pcpu))) return null;
+  return { tMs: Date.now() - t0, pcpu: Number(pcpu), cputimeS };
+}
+
+const idleCpu: Clause = {
+  id: "idle-cpu",
+  title: "the watcher at rest uses no CPU: <= 1% average and <= 0.6 s of cputime over 60 s",
+  requires: ["schema"],
+  heavy: false,
+  async run(h) {
+    const root = join(h.scratch, "idle-cpu");
+    const fixtures = join(root, "fixtures");
+    cpSync(FIXTURES, fixtures, { recursive: true });
+    const lockDir = join(root, "config", "locks");
+    const env = h.childEnv({
+      MEMINDEX_CONFIG_DIR: join(root, "config"),
+      MEMINDEX_SUPERWHISPER_DB: join(fixtures, "superwhisper/superwhisper.sqlite"),
+      MEMINDEX_SUPERWHISPER_DIR: join(fixtures, "superwhisper/recordings"),
+      MEMINDEX_CURSOR_DB: join(fixtures, "cursor/v1-sample.vscdb"),
+      MEMINDEX_CURSOR_TRANSCRIPTS_DIR: join(fixtures, "cursor-projects"),
+      MEMINDEX_CLAUDE_CODE_DIR: join(fixtures, "claude-projects"),
+    });
+    const proc = Bun.spawn(h.command(["watch"]), {
+      cwd: REPO,
+      env,
+      stdin: "ignore",
+      stdout: "ignore",
+      stderr: "pipe",
+    });
+    let log = "";
+    const drain = (async () => {
+      const dec = new TextDecoder();
+      for await (const chunk of proc.stderr) log += dec.decode(chunk, { stream: true });
+    })();
+    const tail = () => log.trim().split("\n").slice(-3).join(" | ").slice(0, 400);
+    const embedState = () => readEmbedRuntime(lockDir)?.runtime.activity.state ?? "none";
+    try {
+      const ready = await until(() => /watch: \d+ source\(s\)/.test(log) || proc.exitCode !== null, 120_000);
+      if (proc.exitCode !== null || !ready)
+        return {
+          verdict: "NOT VERIFIED",
+          evidence: `watcher ${proc.exitCode === null ? "not ready after 120 s" : `exited ${proc.exitCode} before ready`}: ${tail()}`,
+        };
+      const sources = Number(/watch: (\d+) source\(s\)/.exec(log)?.[1] ?? 0);
+      const caughtUp = () => new Set([...log.matchAll(/watch: ([a-z][a-z0-9-]*) \{/g)].map((m) => m[1])).size;
+      const settled = await until(
+        () => caughtUp() >= sources && ["idle", "deferred"].includes(embedState()),
+        180_000,
+      );
+      if (!settled)
+        return {
+          verdict: "INCONCLUSIVE",
+          evidence: `startup work never finished: ${caughtUp()}/${sources} catch-up runs, embedder ${embedState()}: ${tail()}`,
+        };
+      const before = embedState();
+      const t0 = Date.now();
+      const samples: CpuSample[] = [];
+      for (let i = 0; i <= IDLE_WINDOW_MS / IDLE_SAMPLE_MS && proc.exitCode === null; i++) {
+        if (i > 0) await Bun.sleep(IDLE_SAMPLE_MS);
+        const s = psSample(proc.pid, t0);
+        if (s) samples.push(s);
+      }
+      if (proc.exitCode !== null)
+        return {
+          verdict: "NOT VERIFIED",
+          evidence: `watcher exited ${proc.exitCode} while sampled: ${tail()}`,
+        };
+      const r = idleCpuVerdict(samples);
+      return {
+        ...r,
+        evidence: `${r.evidence}; embedder ${before} -> ${embedState()}; sources: fixture copies`,
+        data: { ...r.data, embedBefore: before, embedAfter: embedState() },
+      };
+    } finally {
+      proc.kill("SIGTERM");
+      const exited = await Promise.race([proc.exited.then(() => true), Bun.sleep(5_000).then(() => false)]);
+      if (!exited) {
+        proc.kill("SIGKILL");
+        await proc.exited;
+      }
+      await drain.catch(() => {});
+    }
+  },
+};
+
 const CLAUSES: readonly Clause[] = [
   schema,
   importSwrag,
@@ -843,6 +995,7 @@ const CLAUSES: readonly Clause[] = [
   embed,
   searchScoped,
   readOnly,
+  idleCpu,
 ];
 
 // ─── Main ────────────────────────────────────────────────────────────────────

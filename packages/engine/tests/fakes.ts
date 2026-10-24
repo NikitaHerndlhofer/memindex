@@ -41,6 +41,8 @@ import type { Log } from "../src/log.ts";
 import type { Registry } from "../src/registry.ts";
 
 export const PRODUCER: ProducerId = producerId("00000000-0000-4000-8000-0000000000aa");
+/** Archives under test must not defer embedding because the test machine happens to be on battery. */
+export const onAc = async () => ({ source: "ac", lowPower: false }) as const;
 export const SRC: SourceId = sourceId("fake");
 
 interface StoredRow {

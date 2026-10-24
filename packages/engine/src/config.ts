@@ -31,6 +31,25 @@ export interface SearchScope {
   readonly from: "env" | "config" | null;
 }
 
+/** How the watcher spends GPU time on the embed backlog. */
+export interface EmbedPolicy {
+  /** Longest stretch of embedding before a rest. */
+  readonly busyMs: number;
+  /** Rest after a slice that left work behind; nothing embeds meanwhile. */
+  readonly restMs: number;
+  /** With an empty backlog, how often to look again when no new chunks were written. */
+  readonly idleRecheckMs: number;
+  /** "defer" pauses embedding (never ingest) on battery or in Low Power Mode. */
+  readonly onBattery: "defer" | "run";
+}
+
+export const EMBED_DEFAULTS: EmbedPolicy = {
+  busyMs: 30_000,
+  restMs: 30_000,
+  idleRecheckMs: 5 * 60_000,
+  onBattery: "defer",
+};
+
 /** The archive's Postgres (Supabase or any Postgres with pgvector). */
 export interface StoreSetting {
   readonly url: string;
@@ -45,6 +64,7 @@ export interface MemindexConfig {
   readonly ollama: OllamaConfig;
   readonly disabledSources: readonly SourceId[];
   readonly search: SearchScope;
+  readonly embed: EmbedPolicy;
 }
 
 const PostgresUrl = z
@@ -73,6 +93,15 @@ const ConfigFile = z
     disabledSources: z.array(z.string()).optional(),
     search: z
       .object({ defaultSources: z.array(z.string().min(1)).min(1).optional() })
+      .strict()
+      .optional(),
+    embed: z
+      .object({
+        busyMs: z.number().int().min(1_000).optional(),
+        restMs: z.number().int().min(0).optional(),
+        idleRecheckMs: z.number().int().min(10_000).optional(),
+        onBattery: z.enum(["defer", "run"]).optional(),
+      })
       .strict()
       .optional(),
   })
@@ -167,6 +196,7 @@ export async function loadConfig(env: Env = process.env): Promise<MemindexConfig
       ...(env.MEMINDEX_OLLAMA_KEEP_ALIVE ? { keepAlive: env.MEMINDEX_OLLAMA_KEEP_ALIVE } : {}),
     },
     disabledSources: (file.disabledSources ?? []).map(sourceId),
+    embed: { ...EMBED_DEFAULTS, ...file.embed },
   };
 }
 
