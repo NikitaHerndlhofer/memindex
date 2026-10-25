@@ -599,7 +599,7 @@ async function main(): Promise<number> {
     process.stderr.write("a dev build runs only against a scratch database: pass --db postgres://…\n");
     return 2;
   }
-  const env: Record<string, string | undefined> = { ...process.env };
+  const env: Record<string, string | undefined> = { ...process.env, MEMINDEX_OUTPUT_CAPS: "off" };
   if (values.db) {
     env.MEMINDEX_STORE = values.db;
     env.MEMINDEX_CONFIG_DIR = mkdtempSync(join(tmpdir(), "memindex-eval-"));

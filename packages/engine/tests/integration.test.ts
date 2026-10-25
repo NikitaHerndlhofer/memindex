@@ -221,6 +221,7 @@ describe("integration: fixtures → Supabase store → recipes", () => {
       const required: Readonly<Record<string, string>> = {
         item: String(anyChunk?.item_key ?? "x:y"),
         chunk: String(anyChunk?.chunk_id ?? "0"),
+        ord: "0",
         mode: String(anyMode?.mode ?? "default"),
         repo: String(anyOrigin?.origin ?? "repo"),
         tag: "background",

@@ -992,6 +992,40 @@ export function runStoreContract(name: string, backend: () => ContractBackend): 
         expect(full?.score).toBe(1);
       });
 
+      test("a quoted phrase matches those words exactly and in order, in keyword mode and in hybrid's keyword list", async () => {
+        const w = await writer();
+        const texts = {
+          exact: "Then it said: Invalid grant, (token expired) at login.",
+          reordered: "the token grant was invalid and expired",
+          stemmed: "invalid granting of tokens expiring",
+          stop: "I think it may be the cache",
+          near: "it may well be the cache",
+        };
+        for (const [k, t] of Object.entries(texts))
+          await w.apply(writeOf(CUR, L1, draftOf(CUR, k, [turnOf("m", t)]), rev("1")));
+        const keys = async (via: "keyword" | "hybrid", text: string) =>
+          (
+            await w.search(
+              via === "keyword"
+                ? { via, text, filter: {}, k: 10 }
+                : { via, text, vector: vecNear(9), space: SPACE, filter: {}, k: 10 },
+            )
+          )
+            .map((h) => h.itemKey)
+            .sort();
+        for (const via of ["keyword", "hybrid"] as const) {
+          expect(await keys(via, '"invalid grant token expired"')).toEqual([itemKey(CUR, "exact")]);
+          expect(await keys(via, '"it may be the"')).toEqual([itemKey(CUR, "stop")]);
+          expect(await keys(via, '"invalid grants"')).toEqual([]);
+          expect(await keys(via, '"token expired" login')).toEqual([itemKey(CUR, "exact")]);
+        }
+        expect(await keys("keyword", "invalid grant token expired")).toEqual(
+          [itemKey(CUR, "exact"), itemKey(CUR, "reordered"), itemKey(CUR, "stemmed")].sort(),
+        );
+        const [hit] = await w.search({ via: "keyword", text: '"it may be the"', filter: {}, k: 10 });
+        expect(hit?.snippet).toContain("«it» «may» «be» «the»");
+      });
+
       test("semantic search skips tool payloads and fragments, which stay keyword-searchable; short titles stay in", async () => {
         const w = await writer();
         const junk = { json: '{"rejected":{}}', fragment: "go on", path: "read /src/proxy.ts" };

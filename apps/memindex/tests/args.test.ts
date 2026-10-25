@@ -125,6 +125,18 @@ describe("memindex q", () => {
     });
   });
 
+  test("a page past the default 50 hits widens the search to rank it", () => {
+    const window = (args: string[]) => {
+      const r = parseQCommand(args);
+      if (r.kind !== "run") throw new Error("expected run");
+      return r.query.search?.limit;
+    };
+    expect(window(["search", "x"])).toBeUndefined();
+    expect(window(["search", "x", "--param", "offset=20", "--limit", "20"])).toBeUndefined();
+    expect(window(["search", "x", "--param", "offset=40", "--limit", "20"])).toBe(61);
+    expect(window(["keyword", "x", "--param", "offset=60"])).toBe(81);
+  });
+
   test("search recipes need text", () => {
     expect(() => parseQCommand(["semantic"])).toThrow(/needs search text/);
   });
@@ -168,7 +180,9 @@ describe("memindex q", () => {
     );
     expect(
       sqlOf(["semantic", "token refresh", "--source", "cursor", "--limit", "5", "--sql"]).split("\n")[1],
-    ).toBe("memindex sql --search 'token refresh' --mode semantic --source cursor --param limit=5 <<'SQL'");
+    ).toBe(
+      "memindex sql --search 'token refresh' --mode semantic --source cursor --param limit=5 --param offset=0 <<'SQL'",
+    );
     expect(sqlOf(["rank-items", "--sql"]).split("\n")[1]).toBe(
       `memindex sql --search "<text>" --mode semantic --param limit=10 <<'SQL'`,
     );

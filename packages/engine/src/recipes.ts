@@ -28,19 +28,35 @@ export interface Recipe {
   readonly teach?: { readonly lesson: string };
 }
 
+/** Chars of a turn body that paged reads show; the rest is one `turn` read away. */
+export const TURN_BODY_CAP = 2000;
+
+/** Chars of one value that query output shows; agents size longer reads themselves with substr. */
+export const ROW_VALUE_CAP = 8000;
+
+/** Chars of text one query output carries before it stops and says how to get the rest. */
+export const OUTPUT_BUDGET = 60_000;
+
 const limit = (n: number): RecipeParam => ({ type: "int", summary: "max rows", default: String(n) });
 
 const SEARCH_SQL = `SELECT h.rank, h.unit, i.source, i.kind, i.started_day, i.title, i.origin, h.item_key, h.chunk_id,
-       h.snippet, h.about, h.context, h.moments
+       h.snippet, h.about, h.context, h.moments, (SELECT COUNT(*) FROM hits) AS ranked
 FROM hits h JOIN items i ON i.item_key = h.item_key
 ORDER BY h.rank
-LIMIT :limit`;
+LIMIT :limit OFFSET :offset`;
 
 const searchRecipe = (name: string, mode: SearchMode, summary: string, teach?: Recipe["teach"]): Recipe => ({
   name,
   summary,
   group: "search",
-  params: { limit: limit(20) },
+  params: {
+    limit: limit(20),
+    offset: {
+      type: "int",
+      summary: "results to skip (the next page starts at offset + limit)",
+      default: "0",
+    },
+  },
   search: { defaultMode: mode },
   sql: SEARCH_SQL,
   ...(teach ? { teach } : {}),
@@ -258,15 +274,14 @@ LIMIT :limit`,
   },
   {
     name: "thread-page",
-    summary:
-      "One page of an item's turns from ord `from`, bodies capped at 2000 chars (`chars` = full length)",
+    summary: `One page of an item's turns from ord \`from\`, bodies capped at ${TURN_BODY_CAP} chars (\`chars\` = full length)`,
     group: "read",
     params: {
       item: { type: "item_key", summary: "item key, e.g. cursor:3f1c…", required: true },
       from: { type: "int", summary: "first turn ord", default: "0" },
       limit: limit(20),
     },
-    sql: `SELECT ord, role, speaker, at, length(body) AS chars, substr(body, 1, 2000) AS body
+    sql: `SELECT ord, role, speaker, at, length(body) AS chars, substr(body, 1, ${TURN_BODY_CAP}) AS body
 FROM turns
 WHERE item_key = :item AND ord >= :from
 ORDER BY ord
@@ -275,6 +290,21 @@ LIMIT :limit`,
       lesson:
         "Read a long chat or meeting in pages: ORDER BY `ord`, start at `ord >= n`, LIMIT, and cap bodies with `substr`.",
     },
+  },
+  {
+    name: "turn",
+    summary:
+      "One turn's text from char `from`, `len` chars at a time (`chars` = full length; tool output can be MBs)",
+    group: "read",
+    params: {
+      item: { type: "item_key", summary: "item key, e.g. cursor:3f1c…", required: true },
+      ord: { type: "int", summary: "turn ord", required: true },
+      from: { type: "int", summary: "first char (0-based)", default: "0" },
+      len: { type: "int", summary: "max chars", default: "20000" },
+    },
+    sql: `SELECT ord, turn_key, role, speaker, at, length(body) AS chars, substr(body, :from + 1, :len) AS body
+FROM turns
+WHERE item_key = :item AND ord = :ord`,
   },
   {
     name: "context",

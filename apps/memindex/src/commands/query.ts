@@ -1,21 +1,74 @@
-import { RECIPES } from "@memindex/engine";
+import { type Archive, DEFAULT_HIT_LIMIT, type Query, RECIPES, resolveQuery } from "@memindex/engine";
 import { defineCommand } from "citty";
 import { parseQCommand, parseSqlCommand, Q_ARGS, SQL_ARGS } from "../args.ts";
+import { capRows, type Frame, RECIPE_FRAMES } from "../caps.ts";
 import { action, out, withArchive } from "../context.ts";
-import { fromArray, type OutputFormat, render } from "../render.ts";
+import { fromArray, type OutputFormat, type Row, render } from "../render.ts";
 import { processStdin } from "../stdin.ts";
 
-/** A plan prints as Postgres prints it, one line per row; rows render in the chosen format. */
-async function show(
-  rows: AsyncIterable<Readonly<Record<string, string | number | null>>>,
-  format: OutputFormat,
-  explain: boolean,
-): Promise<void> {
-  if (!explain || format !== "table") {
+/**
+ * Eval knob, not a user setting: MEMINDEX_OUTPUT_CAPS=off prints every row and value uncut and
+ * without notices, so an eval can compare capped and uncapped output (and search-eval scores
+ * ranking, not output size).
+ */
+const capsOff = () => process.env.MEMINDEX_OUTPUT_CAPS === "off";
+
+/**
+ * A plan prints as Postgres prints it, one line per row; rows render in the chosen format, cut to
+ * the output caps with a sentence per cut (CSV is an export and stays whole).
+ */
+async function show(archive: Archive, query: Query, format: OutputFormat, explain: boolean): Promise<void> {
+  const rows = archive.query(query, { explain });
+  if (explain && format === "table") {
+    for await (const r of rows) out(`${r["QUERY PLAN"] ?? ""}\n`);
+    return;
+  }
+  if (explain || format === "csv" || capsOff()) {
     await render(rows, format, out);
     return;
   }
-  for await (const r of rows) out(`${r["QUERY PLAN"] ?? ""}\n`);
+  const all: Row[] = [];
+  for await (const r of rows) all.push(r);
+  const capped = capRows(all, await frameOf(archive, query));
+  await render(fromArray(capped.rows), format, out, capped.notices);
+}
+
+async function frameOf(archive: Archive, query: Query): Promise<Frame> {
+  if ("sql" in query) return { kind: "rows" };
+  const { params, search } = resolveQuery(query);
+  const args = query.args ?? {};
+  switch (RECIPE_FRAMES[query.recipe]) {
+    case "results":
+      return search
+        ? {
+            kind: "results",
+            recipe: query.recipe,
+            search,
+            modeGiven: query.search?.mode !== undefined,
+            args,
+            offset: Number(params.offset ?? 0),
+            window: search.limit ?? DEFAULT_HIT_LIMIT,
+          }
+        : { kind: "rows" };
+    case "turns":
+      return {
+        kind: "turns",
+        recipe: query.recipe,
+        item:
+          typeof params.item === "string" ? params.item : await itemOfChunk(archive, String(params.chunk)),
+        pageLimit: query.recipe === "thread-page" ? Number(params.limit) : null,
+      };
+    case "turn":
+      return { kind: "turn", item: String(params.item), from: Number(params.from ?? 0), len: args.len };
+    default:
+      return { kind: "rows" };
+  }
+}
+
+async function itemOfChunk(archive: Archive, chunk: string): Promise<string | null> {
+  const sql = "SELECT item_key FROM chunks WHERE chunk_id = :chunk";
+  for await (const r of archive.query({ sql, params: { chunk } })) return String(r.item_key);
+  return null;
 }
 
 export const sqlCommand = defineCommand({
@@ -27,7 +80,7 @@ export const sqlCommand = defineCommand({
   args: SQL_ARGS,
   run: action(async ({ rawArgs }) => {
     const { query, format, explain } = await parseSqlCommand(rawArgs, processStdin);
-    await withArchive("read", (archive) => show(archive.query(query, { explain }), format, explain));
+    await withArchive("read", (archive) => show(archive, query, format, explain));
     return 0;
   }),
 });
@@ -58,9 +111,7 @@ export const qCommand = defineCommand({
       await render(fromArray(rows), parsed.format, out);
       return 0;
     }
-    await withArchive("read", (archive) =>
-      show(archive.query(parsed.query, { explain: parsed.explain }), parsed.format, parsed.explain),
-    );
+    await withArchive("read", (archive) => show(archive, parsed.query, parsed.format, parsed.explain));
     return 0;
   }),
 });

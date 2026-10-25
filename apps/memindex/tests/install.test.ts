@@ -306,4 +306,53 @@ describe("render", () => {
     ]);
     expect((await capture("table", [])).s).toBe("(no rows)\n");
   });
+
+  describe("notices", () => {
+    const notices = [
+      "Turn 4 truncated: 2,000 of 9,000 chars shown. Rest: memindex q turn a:b --json",
+      "Next: x",
+    ];
+    const withNotices = async (
+      format: "json" | "csv" | "table",
+      input: readonly Readonly<Record<string, string | number | null>>[] = rows,
+      ns = notices,
+    ) => {
+      let s = "";
+      const n = await render(
+        fromArray(input),
+        format,
+        (x) => {
+          s += x;
+        },
+        ns,
+      );
+      return { s, n };
+    };
+
+    test("json ends with one notice element holding every sentence, and stays one parseable array", async () => {
+      const { s, n } = await withNotices("json");
+      expect(n).toBe(2);
+      expect(JSON.parse(s)).toEqual([...rows, { notice: notices.join("\n") }]);
+      expect(JSON.parse((await withNotices("json", [])).s)).toEqual([{ notice: notices.join("\n") }]);
+    });
+
+    test("no notices, no notice element", async () => {
+      expect(JSON.parse((await withNotices("json", rows, [])).s)).toEqual(rows);
+    });
+
+    test("table prints each sentence under the table, and says when it cut cells for display", async () => {
+      const long = [{ a: 1, b: "w".repeat(300) }];
+      const lines = (await withNotices("table", long)).s.trimEnd().split("\n");
+      expect(lines.slice(-3)).toEqual([
+        "1 cell is cut to 120 chars for display (ends in …). Full values: rerun with --json.",
+        ...notices,
+      ]);
+      expect((await withNotices("table", rows, [])).s).toBe((await capture("table")).s);
+      expect((await withNotices("table", [])).s).toBe(`(no rows)\n${notices.join("\n")}\n`);
+    });
+
+    test("csv stays plain data", async () => {
+      expect((await withNotices("csv")).s).toBe((await capture("csv")).s);
+    });
+  });
 });

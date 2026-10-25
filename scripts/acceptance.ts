@@ -375,6 +375,8 @@ class Harness {
       MEMINDEX_STORE: this.opts.db,
       MEMINDEX_CONFIG_DIR: this.configDir,
       MEMINDEX_OLLAMA_HOST: OLLAMA,
+      // Clauses count result rows; output caps would drop rows and append a notice element.
+      MEMINDEX_OUTPUT_CAPS: "off",
       ...this.sourcePaths(),
       ...extra,
     });

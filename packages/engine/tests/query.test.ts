@@ -146,6 +146,29 @@ describe("recipes", () => {
     );
   });
 
+  test("turn reads one turn from a char offset; search recipes page with offset", () => {
+    expect(bindRecipe(findRecipe("turn"), { item: "a:b", ord: "7" })).toEqual({
+      item: "a:b",
+      ord: 7,
+      from: 0,
+      len: 20000,
+    });
+    expect(bindRecipe(findRecipe("turn"), { item: "a:b", ord: "7", from: "40000", len: "500" })).toEqual({
+      item: "a:b",
+      ord: 7,
+      from: 40000,
+      len: 500,
+    });
+    expect(() => bindRecipe(findRecipe("turn"), { item: "a:b" })).toThrow(
+      /missing required param --param ord/,
+    );
+    expect(() => bindRecipe(findRecipe("turn"), { item: "a:b", ord: "x" })).toThrow(/integer/);
+    for (const name of ["search", "keyword", "fuzzy", "semantic", "hybrid"]) {
+      expect(bindRecipe(findRecipe(name), {})).toEqual({ limit: 20, offset: 0 });
+      expect(bindRecipe(findRecipe(name), { offset: "40" }).offset).toBe(40);
+    }
+  });
+
   test("resolveQuery: search recipes need text and default their mode", () => {
     expect(() => resolveQuery({ recipe: "semantic" })).toThrow(/needs search text/);
     expect(() => resolveQuery({ recipe: "recent", search: { text: "x", filter: {} } })).toThrow(
@@ -187,6 +210,7 @@ describe("recipes", () => {
       "recency-decay",
       "hit-turns",
       "thread-page",
+      "turn",
     ];
     for (const n of intents) expect(names.has(n)).toBe(true);
     expect(RECIPES.some((r) => r.name.startsWith("stats-"))).toBe(true);
@@ -224,13 +248,15 @@ describe("recipeCommand", () => {
       "memindex sql --search 'bob'\\''s auth bug' --mode semantic --source cursor,claude-code --kind conversation --since 14d --all --param limit=3 <<'SQL'",
     );
     expect(recipeCommand(findRecipe("search")).split("\n")[0]).toBe(
-      `memindex sql --search "<text>" --mode hybrid --param limit=20 <<'SQL'`,
+      `memindex sql --search "<text>" --mode hybrid --param limit=20 --param offset=0 <<'SQL'`,
     );
     expect(
       recipeCommand(findRecipe("search"), {
         search: { mode: "keyword", filter: { allSources: true } },
       }).split("\n")[0],
-    ).toBe(`memindex sql --search "<text>" --mode keyword --all-sources --param limit=20 <<'SQL'`);
+    ).toBe(
+      `memindex sql --search "<text>" --mode keyword --all-sources --param limit=20 --param offset=0 <<'SQL'`,
+    );
     expect(recipeCommand(findRecipe("by-repo"), { args: { repo: "my repo" } }).split("\n")[0]).toBe(
       "memindex sql --param 'repo=my repo' --param limit=50 <<'SQL'",
     );
@@ -279,7 +305,7 @@ describe("Archive.query", () => {
     expect(search.k).toBe(50);
     expect(search.filter.source).toEqual([sourceId("fake")]);
     expect(search.filter.since).toBeDefined();
-    expect(store.runs[0]?.opts.params).toEqual({ limit: 2 });
+    expect(store.runs[0]?.opts.params).toEqual({ limit: 2, offset: 0 });
     expect(rows).toEqual([{ chunk_id: "b", rank: 1, via: "hybrid" }]);
   });
 

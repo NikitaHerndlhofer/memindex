@@ -141,6 +141,13 @@
       "when": 1792964090847,
       "tag": "20261025213450_memindex_text_once",
       "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1792970570121,
+      "tag": "20261025232250_memindex_exact_phrase",
+      "breakpoints": true
     }
   ]
 }

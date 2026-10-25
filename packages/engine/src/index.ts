@@ -95,7 +95,16 @@ export {
   type SearchSpec,
   sqlParams,
 } from "./query.ts";
-export { findRecipe, type ParamType, RECIPES, type Recipe, type RecipeParam } from "./recipes.ts";
+export {
+  findRecipe,
+  OUTPUT_BUDGET,
+  type ParamType,
+  RECIPES,
+  type Recipe,
+  type RecipeParam,
+  ROW_VALUE_CAP,
+  TURN_BODY_CAP,
+} from "./recipes.ts";
 export type { CursorGet, KitFactory, Registry } from "./registry.ts";
 export {
   ITEM_COLUMNS,
@@ -103,6 +112,7 @@ export {
   recipeCommand,
   renderSkill,
   type SkillScope,
+  shellQuote,
   VIEW_CONTRACT,
   type ViewDoc,
 } from "./skill.ts";

@@ -1,7 +1,7 @@
 export type OutputFormat = "table" | "json" | "csv";
 
 type Cell = string | number | null;
-type Row = Readonly<Record<string, Cell>>;
+export type Row = Readonly<Record<string, Cell>>;
 type Write = (s: string) => void;
 
 const MAX_CELL = 120;
@@ -19,22 +19,37 @@ export function formatFrom(flags: {
 /**
  * Renders a Row stream. JSON is one array (stable for agents) and streams; csv streams after the
  * first row fixes the header; table buffers to size its columns.
+ *
+ * `notices` (sentences saying what output caps cut) go where a reader of that format looks: JSON
+ * ends with one `{"notice": …}` element, a table prints them under its rows. CSV stays plain data.
+ * Without notices, a table says nothing about the cells it shortens for display.
  */
-export async function render(rows: AsyncIterable<Row>, format: OutputFormat, write: Write): Promise<number> {
+export async function render(
+  rows: AsyncIterable<Row>,
+  format: OutputFormat,
+  write: Write,
+  notices: readonly string[] | null = null,
+): Promise<number> {
   switch (format) {
     case "json":
-      return renderJson(rows, write);
+      return renderJson(rows, write, notices ?? []);
     case "csv":
       return renderCsv(rows, write);
     case "table":
-      return renderTable(rows, write);
+      return renderTable(rows, write, notices);
   }
 }
 
-async function renderJson(rows: AsyncIterable<Row>, write: Write): Promise<number> {
+async function renderJson(
+  rows: AsyncIterable<Row>,
+  write: Write,
+  notices: readonly string[],
+): Promise<number> {
   let n = 0;
-  for await (const row of rows) write(`${n++ === 0 ? "[\n" : ",\n"}${JSON.stringify(row)}`);
-  write(n === 0 ? "[]\n" : "\n]\n");
+  const item = (s: string, i: number) => write(`${i === 0 ? "[\n" : ",\n"}${s}`);
+  for await (const row of rows) item(JSON.stringify(row), n++);
+  if (notices.length > 0) item(JSON.stringify({ notice: notices.join("\n") }), n);
+  write(n === 0 && notices.length === 0 ? "[]\n" : "\n]\n");
   return n;
 }
 
@@ -58,18 +73,32 @@ async function renderCsv(rows: AsyncIterable<Row>, write: Write): Promise<number
   return n;
 }
 
+const flat = (v: Cell) => (v === null ? "" : String(v).replace(/\s+/g, " "));
+
 function tableCell(v: Cell): string {
-  if (v === null) return "";
-  const s = String(v).replace(/\s+/g, " ");
+  const s = flat(v);
   return s.length > MAX_CELL ? `${s.slice(0, MAX_CELL - 1)}…` : s;
 }
 
-async function renderTable(rows: AsyncIterable<Row>, write: Write): Promise<number> {
+async function renderTable(
+  rows: AsyncIterable<Row>,
+  write: Write,
+  notices: readonly string[] | null,
+): Promise<number> {
   const buffered: Row[] = [];
   for await (const row of rows) buffered.push(row);
   const first = buffered[0];
+  const footer = (cut: number) => {
+    if (notices === null) return;
+    if (cut > 0)
+      write(
+        `${cut} ${cut === 1 ? "cell is" : "cells are"} cut to ${MAX_CELL} chars for display (ends in …). Full values: rerun with --json.\n`,
+      );
+    for (const n of notices) write(`${n}\n`);
+  };
   if (!first) {
     write("(no rows)\n");
+    footer(0);
     return 0;
   }
   const cols = Object.keys(first);
@@ -83,6 +112,7 @@ async function renderTable(rows: AsyncIterable<Row>, write: Write): Promise<numb
   write(line(cols));
   write(line(widths.map((w) => "-".repeat(w))));
   for (const r of cells) write(line(r));
+  footer(buffered.reduce((n, r) => n + cols.filter((c) => flat(r[c] ?? null).length > MAX_CELL).length, 0));
   return buffered.length;
 }
 

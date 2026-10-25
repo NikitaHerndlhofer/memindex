@@ -1,7 +1,7 @@
 import type { SourceId } from "@memindex/model";
 import { HIT_COLUMNS } from "@memindex/store";
 import type { Params, SearchSpec } from "./query.ts";
-import { assertKnownParams, type Recipe } from "./recipes.ts";
+import { assertKnownParams, OUTPUT_BUDGET, type Recipe, ROW_VALUE_CAP, TURN_BODY_CAP } from "./recipes.ts";
 
 type ViewName =
   | "items"
@@ -198,7 +198,7 @@ function viewEntry(v: ViewDoc): string {
 }
 
 const SHELL_SAFE = /^[\w@%+=:,./-]+$/;
-const sh = (s: string) => (SHELL_SAFE.test(s) ? s : `'${s.replaceAll("'", `'\\''`)}'`);
+export const shellQuote = (s: string): string => (SHELL_SAFE.test(s) ? s : `'${s.replaceAll("'", `'\\''`)}'`);
 
 export interface RecipeRun {
   readonly args?: Params;
@@ -219,17 +219,17 @@ export function recipeCommand(recipe: Recipe, run: RecipeRun = {}): string {
   const flags: string[] = [];
   if (recipe.search) {
     const f = run.search?.filter ?? {};
-    flags.push("--search", run.search?.text ? sh(run.search.text) : '"<text>"');
+    flags.push("--search", run.search?.text ? shellQuote(run.search.text) : '"<text>"');
     flags.push("--mode", run.search?.mode ?? recipe.search.defaultMode);
-    if (f.source?.length) flags.push("--source", sh(f.source.join(",")));
+    if (f.source?.length) flags.push("--source", shellQuote(f.source.join(",")));
     if (f.allSources) flags.push("--all-sources");
     if (f.kind?.length) flags.push("--kind", f.kind.join(","));
-    if (f.since) flags.push("--since", sh(f.since));
+    if (f.since) flags.push("--since", shellQuote(f.since));
     if (f.includeSuperseded) flags.push("--all");
   }
   for (const [name, p] of Object.entries(recipe.params)) {
     const value = args[name] ?? p.default;
-    if (value !== undefined) flags.push("--param", sh(`${name}=${value}`));
+    if (value !== undefined) flags.push("--param", shellQuote(`${name}=${value}`));
     else if (p.required)
       flags.push("--param", `${name}=<${p.type === "text" || p.type === "int" ? name : p.type}>`);
     else flags.push("--param", name);
@@ -325,8 +325,11 @@ Read-only from here: \`memindex q\` and \`memindex sql\` never write. View contr
 \`\`\`sh
 memindex q recipes                                   # list recipes and params
 memindex q recent --param days=7 --param source=cursor
-memindex q search "auth token refresh bug" --source cursor --since 14d --limit 20
-memindex q thread cursor:3f1c…                       # positional fills the first required param
+memindex q search "auth token refresh bug" --source cursor --since 14d --limit 20 --json
+memindex q search "auth token refresh bug" --param offset=20 --json   # the next 20 results
+memindex q keyword '"invalid_grant"' --json          # double quotes inside: that exact phrase
+memindex q thread-page cursor:3f1c… --param from=40  # positional fills the first required param
+memindex q turn cursor:3f1c… --param ord=41 --param from=2000   # one turn, a char window at a time
 memindex q context --param chunk=<chunk_id> --param around=3
 memindex q rank-items "auth bug" --sql              # print the recipe as a runnable \`memindex sql\` command
 \`\`\`
@@ -337,8 +340,11 @@ below, or \`memindex q <recipe> --sql\`) and adapt it.
 
 Search flags (\`q\` and \`sql\`): \`--search <text>\` (sql only; for \`q\` the positional is the text),
 \`--mode keyword|fuzzy|semantic|hybrid\`, \`--source a,b\`, \`--kind dictation|meeting|conversation\`,
-\`--since 7d|<ISO>\`, \`--limit n\`, \`--all\` (include superseded), \`--all-sources\`. Output: \`--json\`
-(one array, best for agents), \`--csv\`, \`--table\` (default).
+\`--since 7d|<ISO>\`, \`--limit n\`, \`--all\` (include superseded), \`--all-sources\`; search recipes page
+with \`--param offset=n\`. Output: \`--json\` (one array, best for agents), \`--csv\`, \`--table\` (default).
+A query with a "quoted phrase" matches those words exactly, in that order (case, punctuation and
+spacing aside; no stemming), in \`keyword\` mode and in hybrid's keyword list: wrap it in single quotes
+for the shell. Use it instead of \`ILIKE\` when ranked search misses an exact phrase.
 
 ${scopeSection(scope)}
 ## View contract
@@ -348,6 +354,8 @@ ${views}
 Rules: use \`age_days\`, \`started_day\`, \`duration_s\` and \`source_gone\` instead of date functions; no
 FTS \`MATCH\`, no vector functions or literals (use \`--search\`); \`:name\` placeholders bind \`--param name=value\`
 (\`--param name\` alone binds NULL). Always add a \`LIMIT\` — full transcripts and tool outputs fill the context window.
+The SQL is Postgres: find a substring's position with \`strpos(body, 'needle')\` (there is no \`instr\`) and read a window
+with \`substr(body, start, n)\`.
 Find text with \`--search … --mode keyword|fuzzy\` (indexed), never \`text ILIKE '%…%'\`: that scans every chunk and
 hits the statement timeout on a large archive. Join \`hits\` to the views and aggregate in SQL instead.Chat search covers messages, thinking and what the agent did (terminal commands, \`edited <path>\`, \`read <path>\`),
 not bulk tool output: terminal output, file contents, page snapshots and search listings live only in
@@ -372,15 +380,29 @@ words. Pulling raw chunks into the main context fills the window and loses the s
 2. The subagent runs \`memindex q search "<question>" --json\`. Each row is an \`item\` (the whole chat
    or recording is the answer: read \`about\` and its \`moments\`) or a \`moment\` (one exchange: read
    \`snippet\` and \`context\`, the prompt that led in and the next prose reply). It expands what it
-   needs with \`context\` (turns around \`chunk_id\`), \`thread-page\` (a long item from an \`ord\`) or
-   \`thread\`, and **summarizes** a focused answer with citations (\`item_key\`, turn \`ord\` ranges,
-   \`origin\`, \`started_day\`).
+   needs with \`context\` (turns around \`chunk_id\`), \`thread-page\` (a long item from an \`ord\`),
+   \`turn\` (one long turn) or \`thread\`, and **summarizes** a focused answer with citations
+   (\`item_key\`, turn \`ord\` ranges, \`origin\`, \`started_day\`).
 3. The main agent uses the summary; for more detail it dispatches another subagent with a narrower query.
 
 \`hybrid\` (the \`search\` default) covers both exact tokens and conceptual recall; \`keyword\` / \`fuzzy\`
 narrow to exact tokens (function names, error strings, file paths, typos), \`semantic\` to paraphrases
 and other languages. Combine filters freely: \`--source\`,
 \`--kind meeting\`, \`--since 30d\`.
+
+## Reading notices
+
+Output is capped: a turn body in \`context\`, \`thread\` and \`thread-page\` at ${TURN_BODY_CAP.toLocaleString("en-US")} chars, any other value at
+${ROW_VALUE_CAP.toLocaleString("en-US")}, one output at ${OUTPUT_BUDGET.toLocaleString("en-US")} chars of text. Every cut, and every page with more after it, is
+reported in a plain sentence with the exact command or SQL for the rest. With \`--json\` the sentences are
+the array's last element, \`{"notice": "…"}\`, one per line; a table prints them under its rows (and cuts
+cells to 120 chars for display: use \`--json\`). Run the command as printed when the missing part matters.
+
+\`\`\`text
+Turn 41 truncated: 2,000 of 51,234 chars shown. Rest: memindex q turn cursor:3f1c… --param ord=41 --param from=2000 --json
+Showing results 1-20 of 50+. Next: memindex q search 'auth refresh' --param offset=20 --json
+Row 3 column body truncated: 8,000 of 20,112 chars shown. Rest: select substr(body, 8001, 8000)
+\`\`\`
 
 ## Reading results
 

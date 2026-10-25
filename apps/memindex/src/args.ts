@@ -1,4 +1,5 @@
 import {
+  DEFAULT_HIT_LIMIT,
   findRecipe,
   ITEM_KINDS,
   parseSince,
@@ -271,11 +272,14 @@ export function parseQCommand(rawArgs: readonly string[]): ParsedQ {
       return { kind: "sql", text: sqlText(recipe, { args: params, search: { text, ...mode, filter } }) };
     if (!text)
       throw new UsageError(`recipe ${recipe.name} needs search text: memindex q ${recipe.name} "<text>"`);
+    // A window past the default fetches a bigger candidate pool, so deep pages may rank slightly differently.
+    const end = Number(params.offset ?? 0) + Number(params.limit ?? recipe.params.limit?.default);
+    const window = end >= DEFAULT_HIT_LIMIT ? { limit: end + 1 } : {};
     return {
       kind: "run",
       format,
       explain,
-      query: { recipe: recipe.name, args: params, search: { text, ...mode, filter } },
+      query: { recipe: recipe.name, args: params, search: { text, ...mode, filter, ...window } },
     };
   }
 
