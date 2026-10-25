@@ -155,13 +155,16 @@ export interface ItemDraft<Meta = unknown> {
   readonly turns: readonly TurnDraft[];
 }
 
+/** A part's kind, or `title`: the item's title, indexed on its first turn (see `titleChunk`). */
+export type ChunkKind = PartKind | "title";
+
 /** Output of a pure chunker. `text` is shown and keyword-indexed; `embedText` is embedded. */
 export interface ChunkDraft {
   readonly id: ChunkId;
   readonly turnKey: TurnKey;
   readonly partIdx: number;
   readonly sub: number;
-  readonly kind: PartKind;
+  readonly kind: ChunkKind;
   readonly toolName: string | null;
   readonly text: string;
   /** Invariant: contentHash === sha256(embedText). Construct with `chunkDraft`. */
@@ -188,6 +191,48 @@ export function chunkDraft(
 export interface Chunker {
   readonly id: ChunkerId;
   chunk(item: ItemDraft): readonly ChunkDraft[];
+}
+
+/** The title chunk's part index: before every real part of the first turn. */
+export const TITLE_PART_IDX = -1;
+
+const COPY_COUNTER = /^\(\d+\)\s+/;
+
+/**
+ * The item's title as a chunk on its first turn, so search finds an item by its name (an AI meeting title,
+ * a chat's name) and lands on where it starts. None when the title only repeats the first turn's opening
+ * words (Super Whisper titles a recording without one by its first 80 characters). A copy's "(n) " counter
+ * (Cursor names a duplicated chat "(2) <title>") is shown but not embedded, so a chat and its copies share
+ * one content hash and search collapses them. Mirrored in SQL by the `memindex_title_chunks` backfill.
+ */
+export function titleChunk(item: ItemDraft): ChunkDraft | null {
+  const title = item.title?.trim();
+  const first = item.turns[0];
+  if (!title || !first) return null;
+  if (
+    first.parts
+      .map((p) => p.text)
+      .join("\n\n")
+      .trimStart()
+      .startsWith(title)
+  )
+    return null;
+  return chunkDraft(item.key, {
+    turnKey: first.key,
+    partIdx: TITLE_PART_IDX,
+    sub: 0,
+    kind: "title",
+    toolName: null,
+    text: title,
+    embedText: title.replace(COPY_COUNTER, ""),
+    embed: true,
+  });
+}
+
+/** Every chunk an item is stored with: its title chunk, then the chunker's. */
+export function chunkItem(chunker: Chunker, item: ItemDraft): ChunkDraft[] {
+  const title = titleChunk(item);
+  return title ? [title, ...chunker.chunk(item)] : [...chunker.chunk(item)];
 }
 
 /** Per-source fields promoted into the generated `<source>_items` view. */

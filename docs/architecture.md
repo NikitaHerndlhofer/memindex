@@ -112,6 +112,8 @@ configures a stock chunker from `@memindex/chunkers` or implements `Chunker` its
   tokenizer's id and the budget, so changing an option, the tokenizer or a stock algorithm
   re-chunks exactly the items it affects. Custom chunkers choose their own versioned id with
   `chunkerId(...)`.
+- Every item is also stored with a `title` chunk (`model.titleChunk`): its title on its first turn,
+  embedded without a copy's "(n) " counter, unless the title only repeats the opening words.
 - The engine asks `registry.chunkerFor(source, kind)`; stored items whose chunker id is unknown or
   outdated are stale, and the `rechunk` job converts them. Archived chats are stored under
   `archive.chunks@1`, which no plugin declares, so `rechunk` moves them to `agent-chat.parts@2`.
@@ -141,16 +143,16 @@ configures a stock chunker from `@memindex/chunkers` or implements `Chunker` its
 
 ## What Supabase provides, and how memindex uses it
 
-| Supabase capability                                    | Used for                                                                                                                                                                           |
-| ------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Postgres 17 + `vector` (halfvec, HNSW, iterative scan) | One vector index per embedding space; halfvec halves storage; iterative scan keeps narrow plugin filters returning k results                                                       |
-| `pg_trgm`, `unaccent`, `btree_gin`, tsvector           | Fuzzy and keyword search (`english` weighted plus `simple` for multilingual dictation)                                                                                             |
-| SQL functions callable as RPC                          | `memindex.search(...)`: keyword, fuzzy, vector and hybrid (RRF k=60) fused once, in SQL; the CLI, psql, PostgREST and Edge Functions all get the same ranking                      |
-| Custom schema, roles, RLS                              | Everything in schema `memindex` (not exposed via the Data API); RLS on with no policies; `memindex_writer` for producers, read-only `memindex_reader` for agents                   |
-| Supabase CLI migrations                                | `supabase/migrations/*.sql` and the CLI's `supabase_migrations.schema_migrations` ledger are the only ledger; `memindex migrate` writes the same rows for machines without the CLI |
-| `pg_cron`                                              | Server-side maintenance (vector GC, ANALYZE) that no single producer has to own                                                                                                    |
-| Supavisor                                              | Session mode for producers; transaction mode (6543) works with prepared statements off                                                                                             |
-| Local stack (`supabase start`)                         | The repo's test backend only; installs take a URL                                                                                                                                  |
+| Supabase capability                                    | Used for                                                                                                                                                                                                         |
+| ------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Postgres 17 + `vector` (halfvec, HNSW, iterative scan) | One vector index per embedding space; halfvec halves storage; iterative scan keeps narrow plugin filters returning k results                                                                                     |
+| `pg_trgm`, `unaccent`, `btree_gin`, tsvector           | Fuzzy and keyword search (`english` weighted plus `simple` for multilingual dictation)                                                                                                                           |
+| SQL functions callable as RPC                          | `memindex.search(...)`: keyword, fuzzy, vector and hybrid (RRF k=60 over keyword, semantic and the closest item titles) fused once, in SQL; the CLI, psql, PostgREST and Edge Functions all get the same ranking |
+| Custom schema, roles, RLS                              | Everything in schema `memindex` (not exposed via the Data API); RLS on with no policies; `memindex_writer` for producers, read-only `memindex_reader` for agents                                                 |
+| Supabase CLI migrations                                | `supabase/migrations/*.sql` and the CLI's `supabase_migrations.schema_migrations` ledger are the only ledger; `memindex migrate` writes the same rows for machines without the CLI                               |
+| `pg_cron`                                              | Server-side maintenance (vector GC, ANALYZE) that no single producer has to own                                                                                                                                  |
+| Supavisor                                              | Session mode for producers; transaction mode (6543) works with prepared statements off                                                                                                                           |
+| Local stack (`supabase start`)                         | The repo's test backend only; installs take a URL                                                                                                                                                                |
 
 Follow-ups, not in the first cut: PGroonga as the multilingual keyword engine (evaluate on real
 dictation); Supabase Storage to preserve Super Whisper audio past its retention; pgmq if the

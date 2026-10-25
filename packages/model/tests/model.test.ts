@@ -1,15 +1,21 @@
 import { describe, expect, test } from "bun:test";
 import {
+  type Chunker,
+  type ContentHash,
   chunkDraft,
   chunkerId,
   chunkId,
+  chunkItem,
   compareRevision,
   contentHash,
+  type ItemDraft,
+  isoTime,
   itemKey,
   parseItemKey,
   producerId,
   type StampedRevision,
   stockChunkerId,
+  titleChunk,
   turnKey,
 } from "@memindex/model";
 
@@ -99,5 +105,77 @@ describe("compareRevision", () => {
     const y = rev({ producer: B, hash: "2" });
     expect(compareRevision(x, y)).toBe("older");
     expect(compareRevision(y, x)).toBe("newer");
+  });
+});
+
+describe("title chunks", () => {
+  const draft = (title: string | null, opening = "so what do we ship this quarter"): ItemDraft => ({
+    key: itemKey("superwhisper", "m1"),
+    kind: "meeting",
+    title,
+    startedAt: isoTime("2026-10-21T00:00:00Z"),
+    endedAt: null,
+    origin: null,
+    parentKey: null,
+    tags: [],
+    supersedeKey: null,
+    meta: {},
+    turns: [
+      {
+        key: turnKey("u"),
+        role: "speaker",
+        at: null,
+        speaker: null,
+        parts: [{ kind: "transcript", text: opening }],
+      },
+      {
+        key: turnKey("s1"),
+        role: "speaker",
+        at: null,
+        speaker: "Kim",
+        parts: [{ kind: "transcript", text: "hi" }],
+      },
+    ],
+  });
+  const chunker: Chunker = {
+    id: chunkerId("test", 1),
+    chunk: (item) =>
+      item.turns.map((t) =>
+        chunkDraft(item.key, {
+          turnKey: t.key,
+          partIdx: 0,
+          sub: 0,
+          kind: "transcript",
+          toolName: null,
+          text: "x",
+          embed: true,
+        }),
+      ),
+  };
+
+  test("an item is stored with its title as an embedded chunk ahead of its first turn's parts", () => {
+    const chunks = chunkItem(chunker, draft("  Ana and Ben: Garden Plans "));
+    expect(chunks.map((c) => [String(c.turnKey), c.partIdx, c.kind])).toEqual([
+      ["u", -1, "title"],
+      ["u", 0, "transcript"],
+      ["s1", 0, "transcript"],
+    ]);
+    expect(chunks[0]?.text).toBe("Ana and Ben: Garden Plans");
+    expect(chunks[0]?.embed).toBe(true);
+  });
+
+  test("no title chunk without a title or turns, or when the title only repeats the opening words", () => {
+    expect(titleChunk(draft(null))).toBeNull();
+    expect(titleChunk(draft("   "))).toBeNull();
+    expect(titleChunk({ ...draft("Weekly sync"), turns: [] })).toBeNull();
+    expect(titleChunk(draft("so what do we ship", "  so what do we ship this quarter"))).toBeNull();
+    expect(chunkItem(chunker, draft(null)).map((c) => c.kind)).toEqual(["transcript", "transcript"]);
+  });
+
+  test("a copy's '(n) ' counter is shown but not embedded, so a chat and its copies share a content hash", () => {
+    const copy = titleChunk(draft("(2) Self serve pods milestone"));
+    const original = titleChunk(draft("Self serve pods milestone"));
+    expect(copy?.text).toBe("(2) Self serve pods milestone");
+    expect(copy?.contentHash).toBe(original?.contentHash as ContentHash);
   });
 });

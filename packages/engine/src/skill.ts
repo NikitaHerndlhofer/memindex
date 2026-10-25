@@ -375,8 +375,11 @@ typos); \`semantic\` is the default for conceptual recall. Combine filters freel
 
 ## Reading results
 
-- \`hits.score\` is mode-specific (bm25-like for keyword, trigram similarity for fuzzy, 1 − cosine
-  distance for semantic, fused RRF for hybrid). Compare ranks, not raw scores, across modes.
+- \`hits.score\` is mode-specific (for keyword the share of the query's words the chunk holds, 1 when
+  all of them; trigram similarity for fuzzy; 1 − cosine distance for semantic; fused RRF for hybrid).
+  Compare ranks, not raw scores, across modes.
+- A chunk of kind \`title\` is the item's name (a meeting's AI title, a chat's name) on its first turn:
+  a hit on it means the whole item is about the query.
 - For semantic hits, score < ~0.45 is usually noise: say "weak match" and try other phrasing or keyword.
 - A meeting's \`transcript\` chunks are the LLM summary when the mode ran an LLM; \`transcript_raw\`
   chunks hold the verbatim words. Quote verbatim text for exact wording.

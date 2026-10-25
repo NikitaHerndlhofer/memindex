@@ -71,6 +71,41 @@
       "when": 1792937393747,
       "tag": "20261025140953_memindex_view_order_indexes",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1792944451572,
+      "tag": "20261025160731_memindex_title_chunks",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1792945194448,
+      "tag": "20261025161954_memindex_keyword_words",
+      "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1792945345026,
+      "tag": "20261025162225_memindex_semantic_prose",
+      "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1792945518234,
+      "tag": "20261025162518_memindex_collapse_copies",
+      "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1792946265283,
+      "tag": "20261025163745_memindex_title_leg",
+      "breakpoints": true
     }
   ]
 }

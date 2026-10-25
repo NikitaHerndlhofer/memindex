@@ -1,4 +1,4 @@
-import type { ItemKey, Sighting, SourceId } from "@memindex/model";
+import { chunkItem, type ItemKey, type Sighting, type SourceId } from "@memindex/model";
 import type { Location, SourceKit, SourcePlugin } from "@memindex/sources";
 import type { WriteStore } from "@memindex/store";
 import { tryLock } from "./lock.ts";
@@ -234,7 +234,7 @@ async function ingestItem(
     revision: sighting.revision,
     sighting,
     chunker: chunker.id,
-    chunks: chunker.chunk(draft),
+    chunks: chunkItem(chunker, draft),
     parserVersion: plugin.parserVersion,
     ...(res.capture ? { capture: res.capture } : {}),
   });

@@ -103,7 +103,10 @@ export interface RankedChunk {
   readonly turnKey: string;
   /** 1-based within this result list. */
   readonly rank: number;
-  /** ts_rank_cd / trigram word similarity / (1 - cosine distance) / RRF sum. Higher is better. */
+  /**
+   * keyword: idf-weighted share of the query's words the chunk holds (1 = all; ties by ts_rank_cd) /
+   * trigram word similarity / (1 - cosine distance) / RRF sum. Higher is better.
+   */
   readonly score: number;
   readonly snippet: string;
 }

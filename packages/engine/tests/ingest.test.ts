@@ -345,6 +345,21 @@ describe("jobs", () => {
     expect(store.items.get(key("a"))?.item.chunker).toBe(chunkerId("fake", 2));
   });
 
+  test("a titled item is stored with its title chunk first, on ingest and on rechunk", async () => {
+    const store = new FakeStore();
+    const titled = [{ native: "t", hash: "h1", text: "alpha", title: "Garden plans" }];
+    await (await open(fakePlugin({ entries: titled }), store)).archive.ingest();
+    const stored = () => store.items.get(key("t"))?.chunks.map((c) => [c.kind, c.text]);
+    expect(stored()).toEqual([
+      ["title", "Garden plans"],
+      ["text", "alpha"],
+    ]);
+    const { archive } = await open(fakePlugin({ entries: titled, chunker: chunkerId("fake", 2) }), store);
+    await archive.jobs.run({ only: ["rechunk"] });
+    expect(store.items.get(key("t"))?.item.chunker).toBe(chunkerId("fake", 2));
+    expect(stored()?.[0]).toEqual(["title", "Garden plans"]);
+  });
+
   test("ingest picks the chunker per item kind", async () => {
     const store = new FakeStore();
     const plugin = fakePlugin({

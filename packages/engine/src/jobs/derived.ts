@@ -1,4 +1,4 @@
-import { type Chunker, type ChunkerId, type ItemKey, locationId } from "@memindex/model";
+import { type Chunker, type ChunkerId, chunkItem, type ItemKey, locationId } from "@memindex/model";
 import type { SourcePlugin } from "@memindex/sources";
 import type { StoredItem, StreamFilter, WriteStore } from "@memindex/store";
 import { errorMessage } from "../ingest.ts";
@@ -92,7 +92,7 @@ export const rechunkJob: JobDef = {
             item.draft.key,
             item.revision.hash,
             chunker.id,
-            chunker.chunk(item.draft),
+            chunkItem(chunker, item.draft),
           );
           if (res === "replaced") done++;
         } catch (e) {
@@ -155,7 +155,7 @@ async function reparseSource(
         revision: item.revision,
         sighting: { key: item.draft.key, revision: item.revision, locator: "memindex:reparse" },
         chunker: chunker.id,
-        chunks: chunker.chunk(draft),
+        chunks: chunkItem(chunker, draft),
         parserVersion: plugin.parserVersion,
       });
       if (outcome.kind === "applied") done++;

@@ -3,14 +3,18 @@
  * Search-quality eval: runs every golden query through the CLI's `hits` relation and scores the ranked
  * rows against graded expected answers, so every search change is measured the same way.
  *
- *   bun scripts/search-eval.ts [--bin memindex] [--golden scripts/search-eval/golden.json]
+ *   bun scripts/search-eval.ts [--bin memindex] [--db postgres://…] [--golden scripts/search-eval/golden.json]
  *     [--mode hybrid] [--limit 10] [--runs 1] [--only id,id] [--json] [--save-baseline]
+ *
+ * `--bin` may be a command line (`--bin "bun apps/memindex/src/cli.ts"` runs the dev build). `--db` points
+ * the CLI at that database with a throwaway config directory, so a dev build never reads the user's config.
  *
  * Scores rows by item_key/turn_key only, so it works for chunk-level hits and for any later result
  * shape that still exposes those per row. `--json` writes `.audit/search-eval-<timestamp>.json`;
  * `--save-baseline` writes the summary to `scripts/search-eval/baseline.json`.
  */
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 
@@ -510,10 +514,15 @@ function formatTable(report: Report): string {
 
 // ─── Main ────────────────────────────────────────────────────────────────────
 
-function cliRunner(bin: string): Runner {
+function cliRunner(cmd: readonly string[], env: Record<string, string | undefined>): Runner {
   return async (args, stdin) => {
     const started = Date.now();
-    const proc = Bun.spawn([bin, ...args], { stdin: new Blob([stdin]), stdout: "pipe", stderr: "pipe" });
+    const proc = Bun.spawn([...cmd, ...args], {
+      stdin: new Blob([stdin]),
+      stdout: "pipe",
+      stderr: "pipe",
+      env,
+    });
     const [code, stdout, stderr] = await Promise.all([
       proc.exited,
       new Response(proc.stdout).text(),
@@ -528,6 +537,7 @@ async function main(): Promise<number> {
     args: Bun.argv.slice(2),
     options: {
       bin: { type: "string", default: "memindex" },
+      db: { type: "string" },
       golden: { type: "string", default: GOLDEN_PATH },
       mode: { type: "string", default: "hybrid" },
       limit: { type: "string", default: "10" },
@@ -551,7 +561,17 @@ async function main(): Promise<number> {
     process.stderr.write(`--only: unknown query ${unknown.join(", ")}\n`);
     return 2;
   }
-  const run = cliRunner(values.bin);
+  const cmd = values.bin.split(/\s+/).filter(Boolean);
+  if (cmd.some((a) => a.endsWith(".ts")) && !values.db) {
+    process.stderr.write("a dev build runs only against a scratch database: pass --db postgres://…\n");
+    return 2;
+  }
+  const env: Record<string, string | undefined> = { ...process.env };
+  if (values.db) {
+    env.MEMINDEX_STORE = values.db;
+    env.MEMINDEX_CONFIG_DIR = mkdtempSync(join(tmpdir(), "memindex-eval-"));
+  }
+  const run = cliRunner(cmd, env);
   const version = (await run(["--version"], "")).stdout.trim();
   const report = await runEval(golden, run, { mode: values.mode, limit, runs, only });
   process.stdout.write(`${formatTable(report)}\n\n${formatSummary(report.summary)}\n`);

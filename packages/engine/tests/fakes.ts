@@ -205,6 +205,7 @@ export interface FakeEntry {
   readonly native: string;
   readonly hash: string;
   readonly text: string;
+  readonly title?: string;
   readonly meta?: unknown;
 }
 
@@ -227,7 +228,7 @@ export function fakePlugin(opts: {
   const draftOf = (e: FakeEntry): ItemDraft => ({
     key: itemKey(SRC, e.native),
     kind: opts.kind?.(e) ?? "conversation",
-    title: e.native,
+    title: e.title ?? null,
     startedAt: isoTime("2026-10-01T00:00:00Z"),
     endedAt: null,
     origin: null,

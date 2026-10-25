@@ -24,6 +24,7 @@ import {
   type SourceId,
   sourceId,
   type TurnDraft,
+  titleChunk,
   turnKey,
   type VectorSpace,
   vectorSpace,
@@ -39,6 +40,7 @@ import {
   StoreError,
   type WriteStore,
 } from "../src/index.ts";
+import { MIGRATIONS } from "../src/migrations.gen.ts";
 
 export type LedgerBreak = "tampered" | "gap" | "behind" | "ahead";
 
@@ -555,7 +557,7 @@ export function runStoreContract(name: string, backend: () => ContractBackend): 
       test("bulkPut drops and rebuilds the vector index; a crash mid-load is repaired on the next open", async () => {
         const w = await writer();
         const ds = Array.from({ length: 60 }, (_, i) =>
-          draftOf(CUR, `bulk${i}`, [turnOf("m", `bulk text ${i}`)]),
+          draftOf(CUR, `bulk${i}`, [turnOf("m", `bulk text ${i} loaded before the index rebuild`)]),
         );
         for (const d of ds) await w.apply(writeOf(CUR, L1, d, rev("1")));
         const pending = await w.vectors.backlog(SPACE, { limit: 100 });
@@ -748,6 +750,207 @@ export function runStoreContract(name: string, backend: () => ContractBackend): 
         });
         expect(hits.length).toBe(5);
         expect(hits.every((h) => h.itemKey.startsWith("superwhisper:"))).toBe(true);
+      });
+    });
+
+    describe("retrieval", () => {
+      const withTitle = (w: ItemWrite): ItemWrite => {
+        const title = titleChunk(w.draft);
+        return title ? { ...w, chunks: [title, ...w.chunks] } : w;
+      };
+      const withSetting = (cfg: StoreConfig, name: string, value: string): StoreConfig => {
+        const u = new URL(cfg.url);
+        u.searchParams.set(name, value);
+        return { ...cfg, url: u.toString() };
+      };
+      /** Embeds every pending chunk with the vector its embed text maps to. */
+      const embedAll = async (w: WriteStore, vectorOf: (embedText: string) => Float32Array) => {
+        const pending = await w.vectors.backlog(SPACE, { limit: 1000 });
+        await w.vectors.put(
+          SPACE,
+          pending.map((p) => ({ hash: p.hash, vector: vectorOf(p.embedText) })),
+        );
+      };
+      const kindOf = async (w: WriteStore, chunkId: string) =>
+        (await rows(w.run("SELECT kind FROM chunks WHERE chunk_id = :id", { params: { id: chunkId } })))[0]
+          ?.kind;
+
+      test("the archive backfill writes the title chunk ingest writes, so re-ingesting a migrated item changes nothing", async () => {
+        const w = await writer();
+        const named = draftOf(CUR, "named", [turnOf("a", "can you check the deploy"), turnOf("b", "sure")], {
+          title: "(2) Deploy checklist",
+        });
+        const echo = draftOf(SW, "echo", [turnOf("u", "so what do we ship this quarter")], {
+          title: "so what do we ship",
+        });
+        await w.apply(writeOf(CUR, L1, named, rev("1", 1, 1)));
+        await w.apply(writeOf(SW, L1, echo, rev("1")));
+        const backfill = MIGRATIONS.find((m) => m.name === "memindex_title_chunks");
+        expect(backfill).toBeDefined();
+        await b.admin(backfill?.sql ?? "");
+        await b.admin(backfill?.sql ?? "");
+        const titles = await rows(
+          w.run("SELECT item_key, turn_key, text FROM chunks WHERE kind = 'title'", {}),
+        );
+        expect(titles).toEqual([{ item_key: named.key, turn_key: "a", text: "(2) Deploy checklist" }]);
+        const again = await w.apply(withTitle(writeOf(CUR, L1, named, rev("2", 1, 2))));
+        expect(again).toEqual({ kind: "applied", turnsChanged: 0, chunksAdded: 0, chunksRemoved: 0 });
+      });
+
+      test("an item is found by its title in every mode and lands on its first turn", async () => {
+        const w = await writer();
+        const meeting = draftOf(
+          SW,
+          "kim",
+          [turnOf("u", "on-call rotations and the merge queue"), turnOf("s1", "yeah")],
+          {
+            kind: "meeting",
+            title: "Ana and Ben: Garden Plans",
+          },
+        );
+        await w.apply(withTitle(writeOf(SW, L1, meeting, rev("1"))));
+        await embedAll(w, (t) => (t.startsWith("Ana and Ben") ? vecNear(2) : vecNear(0, t.length)));
+        const searches = [
+          { via: "keyword", text: "garden plans" },
+          { via: "fuzzy", text: "garden plans" },
+          { via: "vector", vector: vecNear(2, 1), space: SPACE },
+          { via: "hybrid", text: "garden plans", vector: vecNear(2, 1), space: SPACE },
+        ] as const;
+        for (const s of searches) {
+          const [top] = await w.search({ ...s, filter: {}, k: 5 });
+          expect([s.via, top?.itemKey, top?.turnKey]).toEqual([s.via, meeting.key, "u"]);
+          expect(await kindOf(w, top?.chunkId ?? "")).toBe("title");
+        }
+      });
+
+      test("keyword search ranks every-word matches first, then rare-word matches, never a common word alone", async () => {
+        const w = await writer();
+        const texts = {
+          every: "the useSession hook has a problem",
+          rare: "Да, это проблема с useSession",
+          common1: "another hook problem in the build",
+          common2: "a hook problem again",
+          common3: "the hook problem keeps coming back",
+        };
+        for (const [k, t] of Object.entries(texts))
+          await w.apply(writeOf(CUR, L1, draftOf(CUR, k, [turnOf("m", t)]), rev("1")));
+        const r = await reader(withSetting(b.config, "memindex.rare_word_max", "2"));
+        const keys = async (text: string) =>
+          (await r.search({ via: "keyword", text, filter: {}, k: 10 })).map((h) => h.itemKey);
+        expect(await keys("useSession hook problem")).toEqual([itemKey(CUR, "every"), itemKey(CUR, "rare")]);
+        expect(await keys("useSession pelican problem")).toEqual([
+          itemKey(CUR, "every"),
+          itemKey(CUR, "rare"),
+        ]);
+        expect((await keys("hook problem")).length).toBe(4);
+        const [full] = await r.search({ via: "keyword", text: "useSession hook problem", filter: {}, k: 10 });
+        expect(full?.score).toBe(1);
+      });
+
+      test("semantic search skips tool payloads and fragments, which stay keyword-searchable; short titles stay in", async () => {
+        const w = await writer();
+        const junk = { json: '{"rejected":{}}', fragment: "go on", path: "read /src/proxy.ts" };
+        for (const [k, t] of Object.entries(junk))
+          await w.apply(writeOf(CUR, L1, draftOf(CUR, k, [turnOf("m", t)]), rev("1")));
+        const prose = draftOf(CUR, "prose", [
+          turnOf("m", "the proxy refused the connection on port 5432 again"),
+        ]);
+        await w.apply(writeOf(CUR, L1, prose, rev("1")));
+        const titled = draftOf(
+          CUR,
+          "titled",
+          [turnOf("m", "notes from the weekly sync meeting with the team")],
+          {
+            title: "Weekly sync",
+          },
+        );
+        await w.apply(withTitle(writeOf(CUR, L1, titled, rev("1"))));
+        await embedAll(w, (t) => (Object.values(junk).includes(t) ? vecNear(3) : vecNear(3, t.length)));
+        const vec = await w.search({ via: "vector", vector: vecNear(3), space: SPACE, filter: {}, k: 10 });
+        expect(new Set(vec.map((h) => h.itemKey))).toEqual(new Set([prose.key, titled.key]));
+        const kw = await w.search({ via: "keyword", text: "rejected", filter: {}, k: 5 });
+        expect(kw.map((h) => h.itemKey)).toEqual([itemKey(CUR, "json")]);
+      });
+
+      test("content shared by a chat and its copies ranks once, as the original's chunk, in every mode", async () => {
+        const w = await writer();
+        const shared = turnOf("t1", "milestone five reopens the pods review");
+        const original = draftOf(CUR, "orig", [shared], { startedAt: isoTime("2026-01-01T00:00:00Z") });
+        const fork = draftOf(CUR, "fork", [shared, turnOf("t2", "the fork's own pods follow-up")], {
+          startedAt: isoTime("2026-01-05T00:00:00Z"),
+        });
+        await w.apply(writeOf(CUR, L1, fork, rev("1")));
+        await w.apply(writeOf(CUR, L1, original, rev("1")));
+        await embedAll(w, (t) => vecNear(1, t.length));
+        const searches = [
+          { via: "keyword", text: "milestone pods" },
+          { via: "fuzzy", text: "milestone five" },
+          { via: "vector", vector: vecNear(1, shared.parts[0]?.text.length ?? 0), space: SPACE },
+          {
+            via: "hybrid",
+            text: "milestone pods",
+            vector: vecNear(1, shared.parts[0]?.text.length ?? 0),
+            space: SPACE,
+          },
+        ] as const;
+        for (const s of searches) {
+          const hits = await w.search({ ...s, filter: {}, k: 10 });
+          const sharedHits = hits.filter((h) => h.turnKey === "t1");
+          expect([s.via, sharedHits.map((h) => h.itemKey)]).toEqual([s.via, [original.key]]);
+        }
+        const own = await w.search({ via: "keyword", text: "follow-up", filter: {}, k: 5 });
+        expect(own.map((h) => h.itemKey)).toEqual([fork.key]);
+        const forkOnly = await w.search({
+          via: "keyword",
+          text: "milestone pods",
+          filter: { items: [fork.key] },
+          k: 5,
+        });
+        expect(forkOnly.filter((h) => h.turnKey === "t1").map((h) => h.itemKey)).toEqual([fork.key]);
+      });
+
+      test("hybrid search fuses the titles closest to the query, so an item named for it ranks above closer chunks", async () => {
+        const w = await writer();
+        const close = Array.from({ length: 6 }, (_, i) =>
+          draftOf(CUR, `close${i}`, [turnOf("m", `a chunk about something near the query, number ${i}`)]),
+        );
+        for (const d of close) await w.apply(writeOf(CUR, L1, d, rev("1")));
+        const named = draftOf(CUR, "named", [turnOf("m", "unrelated opening request about lunch plans")], {
+          title: "Quarterly planning",
+        });
+        const far = draftOf(CUR, "far", [turnOf("m", "another unrelated opening about the weather")], {
+          title: "Pricing call",
+        });
+        for (const d of [named, far]) await w.apply(withTitle(writeOf(CUR, L1, d, rev("1"))));
+        const query = vecNear(2, 5);
+        await embedAll(w, (t) =>
+          t === "Quarterly planning"
+            ? vecNear(2, 9)
+            : t.startsWith("a chunk about")
+              ? query
+              : vecNear(0, t.length),
+        );
+        const sem = await w.search({ via: "vector", vector: query, space: SPACE, filter: {}, k: 6 });
+        expect(sem.some((h) => h.itemKey === named.key)).toBe(false);
+        const hy = await w.search({
+          via: "hybrid",
+          text: "zzzz",
+          vector: query,
+          space: SPACE,
+          filter: {},
+          k: 3,
+        });
+        expect(hy.map((h) => h.itemKey)).toContain(named.key);
+        expect(hy.some((h) => h.itemKey === far.key)).toBe(false);
+        const scoped = await w.search({
+          via: "hybrid",
+          text: "zzzz",
+          vector: query,
+          space: SPACE,
+          filter: { source: [SW] },
+          k: 3,
+        });
+        expect(scoped).toEqual([]);
       });
     });
 
