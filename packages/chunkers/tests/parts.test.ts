@@ -37,7 +37,7 @@ function item(...turns: TurnDraft[]): ItemDraft {
 
 const lines = (n: number, f: (i: number) => string) => Array.from({ length: n }, (_, i) => f(i)).join("\n");
 
-test("small parts stay whole, one chunk each, text = embedText (acrag's hash for an unsplit part)", () => {
+test("small parts stay whole, one chunk each, text = embedText", () => {
   const chunks = chat.chunk(
     item(
       turn("b1", [

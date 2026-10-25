@@ -1,7 +1,7 @@
 /**
  * A small PostgreSQL lexer: enough to tell code from string literals, quoted identifiers,
- * dollar-quoted bodies and comments. Used for `:name` → `$n` rewriting, legacy-table detection,
- * the leading-WITH merge in run(), and ledger tamper comparison.
+ * dollar-quoted bodies and comments. Used for `:name` → `$n` rewriting, the leading-WITH merge
+ * in run(), and ledger tamper comparison.
  */
 
 type SegmentKind = "code" | "string" | "ident" | "dollar" | "comment";
@@ -146,30 +146,6 @@ export function bindNamedParams(
     });
   }
   return { text, values };
-}
-
-/** Lower-cased identifiers that follow FROM / JOIN / INTO / UPDATE (schema-qualified: last part). */
-export function referencedRelations(sql: string): string[] {
-  const words: string[] = [];
-  for (const seg of scan(sql)) {
-    if (seg.kind === "code") {
-      for (const m of seg.text.matchAll(/[A-Za-z_][A-Za-z0-9_$]*|\./g)) words.push(m[0].toLowerCase());
-    } else if (seg.kind === "ident") words.push(seg.text.slice(1, -1).replaceAll('""', '"').toLowerCase());
-    else if (seg.kind !== "comment") words.push("\u0000");
-  }
-  const rels: string[] = [];
-  for (let i = 0; i < words.length; i++) {
-    const w = words[i];
-    if (w !== "from" && w !== "join" && w !== "into" && w !== "update") continue;
-    let j = i + 1;
-    let name = words[j];
-    while (words[j + 1] === "." && words[j + 2] !== undefined) {
-      j += 2;
-      name = words[j];
-    }
-    if (name && name !== "\u0000") rels.push(name);
-  }
-  return rels;
 }
 
 /** Splits off a leading `WITH [RECURSIVE]` so a `hits` CTE can be merged into the user's list. */

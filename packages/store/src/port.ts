@@ -27,12 +27,13 @@ import type {
   VectorSpace,
 } from "@memindex/model";
 
-export type Backend = "sqlite" | "postgres";
+export type Backend = "postgres";
 
 /** Parsed once from config / MEMINDEX_STORE. Never a raw string past this point. */
-export type StoreConfig =
-  | { readonly backend: "sqlite"; readonly path: string }
-  | { readonly backend: "postgres"; readonly url: string };
+export interface StoreConfig {
+  readonly backend: Backend;
+  readonly url: string;
+}
 
 export interface OpenStoreOptions {
   /** Per-source facet declarations → generated `<source>_items` views. */
@@ -216,7 +217,7 @@ export interface VectorRepo {
     vectors: readonly { readonly hash: ContentHash; readonly vector: Float32Array }[],
   ): Promise<number>;
   /**
-   * put() for imports: drops the space's vector index, puts every batch, then rebuilds the index
+   * put() for large loads: drops the space's vector index, puts every batch, then rebuilds the index
    * once, serially (`maintenanceWorkMem` of backend memory, default 1GB). Searches stay correct but scan exactly while it
    * runs; if the process dies, the next write-mode open rebuilds the index. Returns rows inserted.
    */
@@ -311,7 +312,6 @@ export class StoreError extends Error {
       | "busy"
       | "readonly"
       | "missing"
-      | "legacy_sql"
       | "unsupported",
     readonly fix: string,
     detail?: string,

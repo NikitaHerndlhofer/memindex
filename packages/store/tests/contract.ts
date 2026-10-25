@@ -760,7 +760,7 @@ export function runStoreContract(name: string, backend: () => ContractBackend): 
         expect(typeof typed[0]?.age_days).toBe("number");
       });
 
-      test("read-only, timeout, maxRows marker, legacy names", async () => {
+      test("read-only, timeout, maxRows marker", async () => {
         const w = await writer();
         await w.apply(writeOf(SW, L1, draftOf(SW, "ro", [turnOf("u", "x")]), rev("1")));
         await expectStoreError(
@@ -783,11 +783,6 @@ export function runStoreContract(name: string, backend: () => ContractBackend): 
         const many = await rows(w.run("SELECT g FROM generate_series(1, 50) g", { maxRows: 10 }));
         expect(many.length).toBe(11);
         expect(many.at(-1)).toEqual({ __truncated: 1, __max_rows: 10 });
-        await expectStoreError(rows(w.run("SELECT * FROM recording_chunks", {})), "legacy_sql");
-        await expectStoreError(rows(w.run("SELECT m.* FROM main.message m", {})), "legacy_sql");
-        expect(await rows(w.run("SELECT 'recording' AS message, 'from message' AS x", {}))).toEqual([
-          { message: "recording", x: "from message" },
-        ]);
         await expect(rows(w.run("SELECT 1; SELECT 2", {}))).rejects.toThrow(/one statement/);
       });
     });
@@ -927,14 +922,14 @@ export function runStoreContract(name: string, backend: () => ContractBackend): 
         expect(texts).toEqual([{ text: "hi (v2)" }]);
       });
 
-      test("legacy import: bulk-seeded vectors, a chunker this binary doesn't know, then rechunk", async () => {
+      test("pre-seeded vectors, a chunker this binary doesn't know, then rechunk", async () => {
         const w = await writer();
-        const legacy = chunkerId("acrag-legacy", 1);
+        const retired = chunkerId("retired", 1);
         const drafts = Array.from({ length: 30 }, (_, i) =>
           draftOf(
             CUR,
-            `legacy${i}`,
-            Array.from({ length: 40 }, (_, t) => turnOf(`m${t}`, `legacy conversation ${i} message ${t}`)),
+            `old${i}`,
+            Array.from({ length: 40 }, (_, t) => turnOf(`m${t}`, `old conversation ${i} message ${t}`)),
           ),
         );
         const hashes = drafts.flatMap((d) => chunksOf(d).map((c) => c.contentHash));
@@ -947,17 +942,19 @@ export function runStoreContract(name: string, backend: () => ContractBackend): 
         expect(await w.vectors.put(SPACE, seed.slice(0, 1100))).toBe(0);
 
         for (const d of drafts) {
-          expect((await w.apply({ ...writeOf(CUR, L1, d, rev("h")), chunker: legacy })).kind).toBe("applied");
+          expect((await w.apply({ ...writeOf(CUR, L1, d, rev("h")), chunker: retired })).kind).toBe(
+            "applied",
+          );
         }
         expect(await w.vectors.backlogSize(SPACE)).toBe(0);
         const stale = await collect(w.streamItems({ limit: 100, staleChunker: CHUNKER }));
         expect(stale.length).toBe(30);
-        expect(stale.every((s) => s.chunker === legacy)).toBe(true);
+        expect(stale.every((s) => s.chunker === retired)).toBe(true);
         expect(
           (await rows(w.run("SELECT DISTINCT chunker FROM items WHERE source = 'cursor'", {}))).map(
             (r) => r.chunker,
           ),
-        ).toEqual([legacy]);
+        ).toEqual([retired]);
 
         for (const s of stale) {
           expect(await w.replaceChunks(s.draft.key, s.revision.hash, CHUNKER, chunksOf(s.draft))).toBe(
@@ -977,7 +974,7 @@ export function runStoreContract(name: string, backend: () => ContractBackend): 
         expect(await w1.ledger.getCursor(SW, L1, "rowid")).toBe("11");
         expect(await w2.ledger.getCursor(SW, L1, "rowid")).toBeNull();
         const job = {
-          jobId: "import-swrag",
+          jobId: "backfill",
           codeVersion: 1,
           state: "running" as const,
           cursor: "abc",
@@ -988,8 +985,8 @@ export function runStoreContract(name: string, backend: () => ContractBackend): 
         };
         await w1.ledger.saveJob(job);
         await w1.ledger.saveJob({ ...job, state: "done", done: 9, total: 9 });
-        expect(await w1.ledger.loadJob("import-swrag")).toEqual({ ...job, state: "done", done: 9, total: 9 });
-        expect(await w2.ledger.loadJob("import-swrag")).toBeNull();
+        expect(await w1.ledger.loadJob("backfill")).toEqual({ ...job, state: "done", done: 9, total: 9 });
+        expect(await w2.ledger.loadJob("backfill")).toBeNull();
         const stats = await w1.stats();
         expect(stats.producers.map((p) => p.id).sort()).toEqual([P1, P2]);
       });

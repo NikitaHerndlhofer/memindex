@@ -5,29 +5,24 @@ memindex is a universal search archive with plugins. Each plugin reads one kind 
 one content model. Everything lands in one Supabase Postgres database with one search index,
 one migration chain, one embed pipeline and one agent skill.
 
-## Problem
+## Constraints
 
-`swrag`, `acrag` and `agent-archive-core` are the same machine built twice. Each copies another
-app's data, indexes it three ways (FTS5 porter, trigram, sqlite-vec with bge-m3), and serves
-read-only SQL to agents through installed skill recipes. The shared core drifted within one
-release, and every API takes a `bun:sqlite` `Database`.
-
-Constraints the design honors:
-- **The archive is the only copy.** Super Whisper's retention already deleted 2,234 of 2,263
-  archived recordings. Items are append-only, and the raw source record of every Super Whisper
-  revision is kept so a parser fix can replay history.
-- **Today's done-markers lie.** acrag commits `file_hash` before embedding; ~207k of 630k chunks
-  have no vector. `data_version` records "the updater ran", not "derived state is correct".
-- **Identity is machine-local.** Rowids, one global bookmark row, "not in my snapshot means
-  deleted", and Super Whisper's `folder_name` (a unix-seconds timestamp, not unique across
-  machines; `recording_id_hex` is the UUID).
+The design honors these:
+- **The archive is the only copy.** Super Whisper's retention deletes recordings, and for 2,236 of
+  them the archive holds the only record. Items are append-only, and the raw source record of every
+  Super Whisper revision is kept so a parser fix can replay history.
+- **Completion is derived from data, never from markers.** A "done" flag written before the work
+  it marks lies after a crash. memindex has no such flags: the existence of a vector row is the
+  embed marker, and every backlog is a query.
+- **Identity is never machine-local.** No rowids, no global bookmark row, no "not in my snapshot
+  means deleted". Super Whisper's `folder_name` is a unix-seconds timestamp that is not unique
+  across machines; `recording_id_hex` is the UUID.
 - **Recipes are a public API**, and installed skills outlive binaries.
 - Many producers (machines, hooks, watchers) write, and many agents read, the same database.
 
 ## Decisions
 
-- **One app.** One binary, `memindex`. Sources are plugins compiled into it. The `swrag` and
-  `acrag` archives are imported, never modified.
+- **One app.** One binary, `memindex`. Sources are plugins compiled into it.
 - **Postgres is the database, named by one URL.** A Supabase project or any Postgres with
   pgvector >= 0.8; `memindex install` asks for the URL, checks the extensions and migrates it with
   the Supabase CLI. It never runs a database: the repo's `docker-compose.yml`
@@ -38,12 +33,21 @@ Constraints the design honors:
   takes a `sources` filter; plugin scoping is a parameter, not a separate index. Configured
   default scopes (for a skill, an agent, or a shell) are the same parameter preset.
 - **Structured and unstructured inputs share one model; chunking is per plugin and per kind.**
+- **Raw captures are kept and replayable.** Super Whisper identity is `recording_id_hex`; every
+  revision's raw record is a capture, and the `reparse` job replays captures when the plugin's
+  parser changes. Version bumps are data updates that an older binary can't lower.
+- **Each machine is a producer** with a UUID minted once and kept in its config. No Ollama call
+  happens inside a database transaction.
+- **Ollama bge-m3 is the only embedder**, and agent-chat tool output is embedded.
+- **Install is check-and-fix.** Each `memindex install` step is idempotent and reports ok, skipped
+  or failed; a failed step doesn't stop the rest. Steps the user turns off (`--skip-ollama`,
+  `--skip-watch`, `--skip-hooks`) are saved in the config, and `memindex doctor` reports them as
+  SKIPPED instead of FAIL.
 
 ## Usage (caller's view)
 
 ```sh
 brew install nikitaherndlhofer/tap/memindex && memindex install   # Postgres URL, migrations, Ollama check, watcher, hooks, skill
-memindex import swrag && memindex import acrag                     # resumable; legacy files untouched; verified
 memindex ingest                                                    # every plugin visible to this machine
 memindex status                                                    # items per source, embed backlog, jobs, schema
 memindex q search "auth token refresh bug" --source cursor --since 14d
@@ -74,14 +78,18 @@ SELECT * FROM memindex.search('rate limiter', :query_embedding, 'bge-m3@1024', '
 | Super Whisper meeting (semi-structured) | one recording    | one per speaker segment when present, else `u`           | transcript                                                   |
 - `ItemKey = "<source>:<native>"`: `superwhisper:<recording_id_hex>`, `cursor:<composerId>`.
 - `TurnKey` is source-native, never a position, so inserting a message mid-chat changes nothing
-  else.
-- `ChunkId = h(item, turn, part, sub)`. `ContentHash = sha256(embedText)`, which equals swrag's
-  `embed_text_hash`, so legacy vectors import byte for byte wherever the chunk is unchanged.
+  else. Archived Cursor chats whose source had no message ids use `archive:<n>`; a live read of the
+  same chat replaces the item with real bubble ids.
+- `ChunkId = h(item, turn, part, sub)`. `ContentHash = sha256(embedText)`, so a chunk whose embed
+  text is unchanged keeps its vector.
 - Items carry promoted cross-source columns (`kind`, `title`, `origin`, `started_at`,
   `parent_key`, `supersede_key`); everything else is per-plugin `meta` (jsonb, zod-typed),
   exposed through generated `<source>_items` facet views. Adding a plugin needs no migration.
 - `capture`: insert-only raw source record per revision, for plugins with `capture: "always"`
   (Super Whisper). The `reparse` job replays captures when a plugin's `parserVersion` is bumped.
+  Super Whisper has two capture formats: `superwhisper-row` (a live read: row, meta.json, audio
+  facts) and `superwhisper-archive` (a snake_case copy of the row for recordings Super Whisper has
+  since deleted). Both parse to the same draft shape.
 
 ### Chunking
 
@@ -89,8 +97,8 @@ Each plugin declares its chunkers per item kind (`chunkers: { default, ...perKin
 configures a stock chunker from `@memindex/chunkers` or implements `Chunker` itself.
 - **Stock chunkers** (`@memindex/chunkers`, depends only on `model`): `partsChunker` (structured
   turns and parts), `transcriptChunker`, `speakerTurnChunker`, `recursiveTextChunker`, plus the
-  primitives they're built from (a synchronous port of `@langchain/textsplitters` checked against
-  the library, `fitPieces`, `[kind i/n]` headers) for custom chunkers.
+  building blocks they're made from (a synchronous port of `@langchain/textsplitters` checked
+  against the library, `fitPieces`, `[kind i/n]` headers) for custom chunkers.
 - **Sizes are bge-m3 tokens.** No embedded chunk's embed text (embed prefix and `[kind i/n]`
   header included) exceeds `maxTokens` (default 512): bge-m3 retrieves best on passages of that
   length, and one vector over more averages its topics away. Chunkers get the tokenizer injected
@@ -103,11 +111,9 @@ configures a stock chunker from `@memindex/chunkers` or implements `Chunker` its
   tokenizer's id and the budget, so changing an option, the tokenizer or a stock algorithm
   re-chunks exactly the items it affects. Custom chunkers choose their own versioned id with
   `chunkerId(...)`.
-- **Super Whisper chunks are no longer byte-identical to swrag.** Imported swrag vectors are
-  reused only where the chunk is unchanged (dictations whose `[mode] body` fits the budget); the
-  rest re-embed.
 - The engine asks `registry.chunkerFor(source, kind)`; stored items whose chunker id is unknown or
-  outdated are stale, and the `rechunk` job converts them.
+  outdated are stale, and the `rechunk` job converts them. Archived chats are stored under
+  `archive.chunks@1`, which no plugin declares, so `rechunk` moves them to `agent-chat.parts@2`.
 
 | In-tree chunker                              | Stock factory        | Behavior                                                                                                                                                                                                     |
 | -------------------------------------------- | -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -121,10 +127,12 @@ configures a stock chunker from `@memindex/chunkers` or implements `Chunker` its
   `cursor (producer_id, source, location_id, name)`. Nothing global.
 - Deletion is producer- and location-scoped: `reconcileGone` only marks this producer's
   observations after a complete listing. `items.source_gone` is derived as "no live observation".
+  Archived recordings and chats are observed at the locations `archive:superwhisper` and
+  `archive:cursor`, which no live scan lists, so their gone state never changes.
 - One total order decides whether a write replaces stored content: `compareRevision` is
   fidelity, then source time (when both have one), then equal hash means same, then same producer
   means incoming wins, then `(producer_id, hash)` lexical order. Cursor's "state.vscdb beats
-  JSONL" is fidelity 2 vs 1.
+  JSONL" is fidelity 2 vs 1; archived items have fidelity 0, so any live read wins.
 - `apply` runs one transaction per item under `SELECT … FOR UPDATE`. Concurrent writers
   serialize; stale writes are no-ops.
 - The vector row's existence is the embed marker; the backlog is a query. Producers embed locally
@@ -188,43 +196,29 @@ list that everything else derives from.
 - View contract: `items`, `items_all`, `turns`, `chunks`, `observations`, `<source>_items`, with
   precomputed `started_day`, `age_days`, `duration_s`, `source_gone`.
 - `hits` is `memindex.search(...)` called with bound parameters. Recipes are compiled into the
-  binary; the skill lists recipe names and the view contract. Old swrag/acrag table names fail
-  with a hint naming the replacement recipe.
+  binary; the skill lists recipe names and the view contract.
 
 ## Migrations and data updates
 
 - **Schema:** Supabase CLI migrations, one ledger. Opening refuses gaps, edited migrations
-  (stored statements compared to the embedded file) and databases newer than the binary.
-  Migrations apply under an advisory lock.
+  (stored statements compared to the embedded file, ignoring comments and whitespace) and
+  databases newer than the binary. Migrations apply under an advisory lock.
 - **Derived objects** (per-space vector indexes, facet views) are owned by the store and recorded
   in `derived_object` with a checksum.
 - **Data updates are jobs.** Convergent jobs are predicates over data: `embed`, `rechunk`,
   `reparse`, `vec-gc`. A fresh archive has nothing pending; a crash resumes. Stored versions are
-  never lowered by an older binary. One-shot jobs (`import-swrag`, `import-acrag`) keep a resumable
-  cursor in `job_run` and end with verification: every legacy key appended and vector counts
-  reconciled against the legacy tables.
-
-## Synthesis decision
-
-Three candidates were sketched: one app with a unified model (the base), a shared kernel with
-separate products, and an immutable capture log with derived projections. The cross-judge
-preferred the capture log for keeping irreplaceable raw bytes. The base was chosen because it
-reaches the same correctness with a smaller port and a build one developer can finish; the
-capture log's essential benefit was grafted in as the scoped `capture` table.
-- From the capture log: Super Whisper identity is `recording_id_hex`; raw captures plus
-  `reparse`; version bumps as data updates that old binaries can't lower.
-- From the shared kernel: per-machine producer UUID; end-of-import verification; no Ollama call
-  inside a transaction.
-- After the user's direction: Postgres named by one URL (Supabase or any pgvector server), search
-  fused in SQL, Supabase CLI migrations, per-kind chunkers, Ollama bge-m3 kept as the only
-  embedder, agent-chat tool output embedded.
+  never lowered by an older binary. A job that can't be a predicate keeps a resumable cursor in
+  `job_run` (`oneShotJob`); none ships today.
+- **Renames of stored labels are SQL migrations.** They match only the old values, so a rerun
+  changes nothing, and they recompute every derived id (`locationId`, `chunkId`, the chunk hash)
+  in SQL exactly as `@memindex/model` and the store compute them.
 
 ## Embedding and ingest performance
 
 Measured on an M4 Pro (20-core GPU, 48 GB). Raw data and scripts are kept outside the repo.
 - **Embedding is bound by bge-m3's GPU compute in Ollama**, about 12 chunks/s (~6.8k tokens/s),
   flat across batch size, client concurrency and server slots. A fresh archive's ~1M chunks take
-  about 23 h once; daily ingest is small. The migrated archive's backlog is ~60k chunks (~1 h).
+  about 23 h once; daily ingest is small.
 - **Faster paths were measured under a no-quality-loss gate** (cosine >= 0.999 to today's
   vectors; >= 95% top-10 agreement overall, on non-English queries and on Super Whisper queries;
   7,714 chunks, 150 queries). MLX fp16 passed at 1.34x and a Neural Engine + MLX split at 1.59x;
@@ -243,21 +237,18 @@ Measured on an M4 Pro (20-core GPU, 48 GB). Raw data and scripts are kept outsid
 
 ## Verification
 
-`scripts/acceptance.ts` is the definition of done: it checks the migration ledger, both legacy
-imports against the legacy files, live ingest of every available plugin (a second run must change
-nothing except genuinely live chats), exact-count embedding with real Ollama, plugin-scoped search
-against direct SQL counts, read-only enforcement, and that a settled watcher uses at most 1% CPU
-and 0.6 s of cputime over 60 s (`idle-cpu`). It refuses heavy clauses when the Mac or the
-Docker VM is short on disk (`scripts/disk-headroom.ts`), after a disk-full crash during this
-rewrite.
+`scripts/acceptance.ts` is the definition of done: it checks the migration ledger, live ingest of
+every available plugin (a second run must change nothing except genuinely live chats),
+exact-count embedding with real Ollama, plugin-scoped search against direct SQL counts, read-only
+enforcement, and that a settled watcher uses at most 1% CPU and 0.6 s of cputime over 60 s
+(`idle-cpu`). It refuses heavy clauses when the Mac or the Docker VM is short on disk
+(`scripts/disk-headroom.ts`), after a disk-full crash.
 
 ## Tradeoffs accepted
 
-- Zero-setup SQLite is gone: the user brings a Postgres URL (Supabase, the bundled compose file, or
-  their own server).
-- swrag's per-recording centroid vectors are dropped; recordings rank by their best chunks.
-- Old recipes don't run verbatim; `memindex install` replaces both skills.
-- Legacy archives are imported, not migrated in place.
+- There is no embedded database: the user brings a Postgres URL (Supabase, the bundled compose
+  file, or their own server).
+- Recordings rank by their best chunks; there is no per-recording summary vector.
 - Producers need the database reachable to ingest.
 - Tool output is embedded, so a fresh archive's one-time embedding catch-up is ~23 h, in exchange
   for semantic search over tool output.

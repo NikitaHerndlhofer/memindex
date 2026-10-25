@@ -19,3 +19,5 @@ memindex install --url postgresql://memindex:memindex@127.0.0.1:54329/memindex
 ```
 
 `memindex doctor` and `memindex status` show the database, its extension versions and the schema.
+Steps you turn off with `memindex install --skip-ollama`, `--skip-watch` or `--skip-hooks` show as
+SKIPPED in `memindex doctor`, which then still exits 0.

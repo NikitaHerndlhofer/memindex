@@ -2,7 +2,6 @@
 import { defineCommand, runMain } from "citty";
 import { LogLevels } from "consola";
 import { doctorCommand, jobsCommand, migrateCommand, pathCommand, statusCommand } from "./commands/admin.ts";
-import { importCommand } from "./commands/import.ts";
 import { hookCommand, ingestCommand, watchCommand } from "./commands/ingest.ts";
 import { installCommand, installSkillCommand } from "./commands/install.ts";
 import { qCommand, sqlCommand } from "./commands/query.ts";
@@ -12,7 +11,6 @@ import { VERSION } from "./version.ts";
 /** THE command list. Each command parses flags into domain types and calls one Archive method. */
 export const COMMANDS = {
   ingest: ingestCommand,
-  import: importCommand,
   hook: hookCommand,
   sql: sqlCommand,
   q: qCommand,

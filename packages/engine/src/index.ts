@@ -36,7 +36,9 @@ export {
   redactUrl,
   resolvePaths,
   type SearchScope,
+  type SkippableStep,
   type StoreSetting,
+  saveSkippedSteps,
   saveStore,
   storeConfig,
 } from "./config.ts";
@@ -58,7 +60,6 @@ export {
   ingestLocation,
   ingestSource,
 } from "./ingest.ts";
-export { type LegacyArchive, verifyLegacyImport } from "./jobs/import-verify.ts";
 export {
   type Budget,
   budget,

@@ -48,8 +48,7 @@ const PLACEHOLDER = /\{([^{}]*)\}/g;
 
 /**
  * A declarative embed prefix. Placeholders: `{meta.<key>}` (the item's meta field) and `{speaker}` (the
- * turn's speaker). The prefix renders only when every placeholder resolves to a string, else it is "";
- * `"[{meta.mode}] "` is swrag's `[${mode_name}] `.
+ * turn's speaker). The prefix renders only when every placeholder resolves to a string, else it is "".
  */
 export function prefixTemplate(template: string): (item: ItemDraft, turn: TurnDraft) => string {
   const fields = [...template.matchAll(PLACEHOLDER)].map((m) => m[1] ?? "");

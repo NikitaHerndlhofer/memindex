@@ -5,7 +5,7 @@
  * Sized in bge-m3 tokens: no embedded chunk exceeds 512, the passage length bge-m3's retrieval tuning mostly
  * saw (one vector over a longer passage averages its topics away, though the model accepts 8192). 64 tokens
  * (≈12%) of overlap carries the line or sentence that straddles a cut into both pieces. Unsplit parts embed
- * their text as-is, which is acrag's content hash.
+ * their text as-is.
  */
 
 import { partsChunker as stockParts } from "@memindex/chunkers";

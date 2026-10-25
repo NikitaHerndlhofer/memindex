@@ -357,7 +357,7 @@ describe("jobs", () => {
     expect(store.items.get(key("b"))?.item.chunker).toBe(chunkerId("fake", 2));
   });
 
-  test("rechunk staleness is per kind, and unknown (legacy) chunker ids are stale", async () => {
+  test("rechunk staleness is per kind, and unknown chunker ids are stale", async () => {
     const store = new FakeStore();
     const kinded = (chunkers: Parameters<typeof fakePlugin>[0]["chunkers"]) =>
       fakePlugin({
@@ -367,8 +367,7 @@ describe("jobs", () => {
       });
     await (await open(kinded(undefined), store)).archive.ingest();
     const row = store.items.get(key("c"));
-    if (row)
-      store.items.set(key("c"), { ...row, item: { ...row.item, chunker: chunkerId("legacy-swrag", 1) } });
+    if (row) store.items.set(key("c"), { ...row, item: { ...row.item, chunker: chunkerId("retired", 1) } });
 
     const { archive } = await open(kinded({ meeting: chunkerId("fake", 2) }), store);
     const pending = async () => (await archive.jobs.status()).find((j) => j.id === "rechunk")?.pending;

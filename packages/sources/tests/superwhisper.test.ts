@@ -241,8 +241,8 @@ describe("superwhisper read", () => {
     ] as never);
     expect(superwhisper.parseCapture?.(JSON.parse(JSON.stringify(r.capture)))).toEqual(d);
 
-    const legacySummary = dictationChunker.chunk(v1).filter((c) => c.embed);
-    expect(speakerChunker.chunk(d).filter((c) => c.turnKey === "u")).toEqual(legacySummary);
+    const dictationSummary = dictationChunker.chunk(v1).filter((c) => c.embed);
+    expect(speakerChunker.chunk(d).filter((c) => c.turnKey === "u")).toEqual(dictationSummary);
   });
 
   test("a meeting without speaker segments keeps the single `u` turn and chunks like a dictation", async () => {
@@ -275,7 +275,76 @@ describe("superwhisper read", () => {
   });
 });
 
-test("datetime normalization matches swrag's datetime_iso", () => {
+test("archived recording captures parse into a dictation draft", () => {
+  const text = "Hello world, this is a short dictation.";
+  const row = {
+    folder_name: "1700000001",
+    recording_id_hex: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAA01",
+    datetime: "2026-05-01 10:00:00.000",
+    duration_ms: 30_000,
+    mode_name: "Default",
+    model_key: "m",
+    model_name: "Model",
+    language_model_key: null,
+    language_model_name: null,
+    recording_device: "Mic",
+    language: "en",
+    app_name: "Cursor",
+    app_category: "dev",
+    raw_word_count: 9,
+    llm_word_count: 7,
+    result: text,
+    llm_result: text,
+    raw_result: `${text} raw`,
+    audio_path: "/r/1/output.wav",
+    audio_hash: "h1",
+    source_deleted_at: null,
+  };
+  expect(superwhisper.parseCapture?.({ format: "superwhisper-archive", body: row })).toEqual({
+    key: "superwhisper:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAA01",
+    kind: "dictation",
+    title: text,
+    startedAt: "2026-05-01T10:00:00.000Z",
+    endedAt: "2026-05-01T10:00:30.000Z",
+    origin: "Cursor",
+    parentKey: null,
+    tags: [],
+    supersedeKey: "h1",
+    meta: {
+      folderName: "1700000001",
+      mode: "Default",
+      modelKey: "m",
+      modelName: "Model",
+      languageModelName: null,
+      device: "Mic",
+      language: "en",
+      appName: "Cursor",
+      appCategory: "dev",
+      durationMs: 30_000,
+      rawWordCount: 9,
+      llmWordCount: 7,
+      audioPath: "/r/1/output.wav",
+      bodyWordCount: 7,
+    },
+    turns: [
+      {
+        key: "u",
+        role: "speaker",
+        at: "2026-05-01T10:00:00.000Z",
+        speaker: null,
+        parts: [
+          { kind: "transcript", text },
+          { kind: "transcript_raw", text: `${text} raw` },
+        ],
+      },
+    ],
+  } as never);
+  expect(() => superwhisper.parseCapture?.({ format: "unknown-format", body: row })).toThrow(
+    /unknown capture format/,
+  );
+});
+
+test("datetime normalization: zone-less UTC and Z forms", () => {
   expect(normalizeDatetime("2026-05-27 18:39:33.470") as string).toBe("2026-05-27T18:39:33.470Z");
   expect(normalizeDatetime("2026-05-27T18:39:33.470Z") as string).toBe("2026-05-27T18:39:33.470Z");
   expect(normalizeDatetime("2026-05-18T08:30:00") as string).toBe("2026-05-18T08:30:00.000Z");

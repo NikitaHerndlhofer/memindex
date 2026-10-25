@@ -1,11 +1,11 @@
 #!/usr/bin/env bun
 /**
- * Acceptance harness for the memindex rewrite. Each clause of the definition of done is checked by
- * observing a real database, real legacy archives and a real CLI run, never by trusting a report
- * from the code under test.
+ * Acceptance harness for memindex. Each clause of the definition of done is checked by observing a
+ * real database, the real source apps and a real CLI run, never by trusting a report from the code
+ * under test.
  *
  *   bun scripts/acceptance.ts --db <postgres url> [--bin <memindex binary>] [--embed-sample 200]
- *     [--swrag <swrag.sqlite>] [--acrag <acrag.sqlite>] [--ingest-env KEY=VALUE]… [--only a,b]
+ *     [--ingest-env KEY=VALUE]… [--only a,b]
  *
  * Prints `VERDICT  clause  evidence` per clause, writes `.audit/acceptance-<timestamp>.json`, and
  * exits 1 when any clause is NOT VERIFIED.
@@ -29,24 +29,13 @@ export interface ClauseResult {
   readonly data?: Readonly<Record<string, unknown>>;
 }
 
-const CLAUSE_IDS = [
-  "schema",
-  "import-swrag",
-  "import-acrag",
-  "live-ingest",
-  "embed",
-  "search-scoped",
-  "read-only",
-  "idle-cpu",
-] as const;
+const CLAUSE_IDS = ["schema", "live-ingest", "embed", "search-scoped", "read-only", "idle-cpu"] as const;
 export type ClauseId = (typeof CLAUSE_IDS)[number];
 
 export interface Options {
   readonly db: string;
   readonly bin: string | null;
   readonly embedSample: number;
-  readonly swrag: string | null;
-  readonly acrag: string | null;
   /** Extra env for the `ingest` runs only (e.g. narrowing a source path); recorded as scope in the evidence. */
   readonly ingestEnv: Readonly<Record<string, string>>;
   readonly only: readonly ClauseId[] | null;
@@ -61,8 +50,6 @@ export function parseOptions(argv: readonly string[]): Options {
       db: { type: "string" },
       bin: { type: "string" },
       "embed-sample": { type: "string", default: "200" },
-      swrag: { type: "string" },
-      acrag: { type: "string" },
       "ingest-env": { type: "string", multiple: true },
       only: { type: "string" },
     },
@@ -93,8 +80,6 @@ export function parseOptions(argv: readonly string[]): Options {
     db: values.db,
     bin: values.bin ? resolve(values.bin) : null,
     embedSample,
-    swrag: values.swrag ? resolve(values.swrag) : null,
-    acrag: values.acrag ? resolve(values.acrag) : null,
     ingestEnv,
     only,
   };
@@ -372,23 +357,13 @@ function parseJsonRows(stdout: string): Record<string, unknown>[] | null {
 }
 
 let customSqlite = false;
-function openLegacy(path: string): Database {
+/** Read-only handle on a source app's SQLite (Super Whisper's), with Homebrew's SQLite when present. */
+function openSourceDb(path: string): Database {
   if (!customSqlite && existsSync(HOMEBREW_SQLITE)) {
     Database.setCustomSQLite(HOMEBREW_SQLITE);
     customSqlite = true;
   }
   return new Database(`file:${encodeURI(path)}?mode=ro`, { readonly: true });
-}
-
-const legacyCount = (db: Database, q: string): number => (db.query(q).get() as { n: number }).n;
-
-async function storeKeys(h: Harness, source: string): Promise<Map<string, { gone: boolean }>> {
-  const rows =
-    (await h.sql`SELECT item_key, source_gone FROM memindex.items_all WHERE source = ${source}`) as {
-      item_key: string;
-      source_gone: number;
-    }[];
-  return new Map(rows.map((r) => [r.item_key, { gone: Number(r.source_gone) === 1 }]));
 }
 
 function sample(keys: readonly string[]): string {
@@ -431,106 +406,6 @@ const schema: Clause = {
       verdict,
       evidence: `ledger ${have.length}/${want.length} of ${tree} (missing ${missing.length}${sample(missing)}, unknown ${unknown.length}${sample(unknown)}); read-open gate exit ${gate.code}${gate.code === 0 ? `, view contract v${String(contract)}` : `: ${firstLine(gate.stderr)}`}`,
       data: { ledger: have, shipped: want, gateExit: gate.code, contract },
-    };
-  },
-};
-
-const importSwrag: Clause = {
-  id: "import-swrag",
-  title: "every legacy swrag recording, capture and deletion is in the store",
-  requires: ["schema"],
-  async run(h) {
-    if (!h.opts.swrag) return { verdict: "INCONCLUSIVE", evidence: "skipped: pass --swrag <swrag.sqlite>" };
-    const db = openLegacy(h.opts.swrag);
-    let rows: { id: string; deleted: string | null }[];
-    try {
-      rows = db
-        .query("SELECT recording_id_hex AS id, source_deleted_at AS deleted FROM recording")
-        .all() as typeof rows;
-    } finally {
-      db.close();
-    }
-    const legacy = new Set(rows.map((r) => `superwhisper:${r.id}`));
-    const legacyDeleted = new Set(rows.filter((r) => r.deleted !== null).map((r) => `superwhisper:${r.id}`));
-    const store = await storeKeys(h, "superwhisper");
-    const missing = [...legacy].filter((k) => !store.has(k));
-    const storeGone = new Set([...legacy].filter((k) => store.get(k)?.gone));
-    const goneNotDeleted = [...storeGone].filter((k) => !legacyDeleted.has(k));
-    const deletedNotGone = [...legacyDeleted].filter((k) => !storeGone.has(k));
-    const captured = (
-      (await h.sql`SELECT DISTINCT item_key FROM memindex.capture WHERE item_key LIKE 'superwhisper:%'`) as {
-        item_key: string;
-      }[]
-    ).filter((r) => legacy.has(r.item_key)).length;
-    const verdict = check(
-      legacy.size > 0 &&
-        missing.length === 0 &&
-        captured === legacy.size &&
-        goneNotDeleted.length === 0 &&
-        deletedNotGone.length === 0,
-    );
-    return {
-      verdict,
-      evidence: `legacy recordings ${legacy.size}, missing in store ${missing.length}${sample(missing)} (store superwhisper items ${store.size}); captures ${captured}/${legacy.size}; legacy deleted ${legacyDeleted.size} vs store source_gone ${storeGone.size} (gone-not-deleted ${goneNotDeleted.length}, deleted-not-gone ${deletedNotGone.length})`,
-      data: {
-        legacy: legacy.size,
-        storeItems: store.size,
-        missing: missing.slice(0, 50),
-        captured,
-        legacyDeleted: legacyDeleted.size,
-        storeGone: storeGone.size,
-        goneNotDeleted: goneNotDeleted.slice(0, 50),
-        deletedNotGone: deletedNotGone.slice(0, 50),
-      },
-    };
-  },
-};
-
-const importAcrag: Clause = {
-  id: "import-acrag",
-  title: "every importable legacy acrag conversation is a cursor item",
-  requires: ["schema"],
-  async run(h) {
-    if (!h.opts.acrag) return { verdict: "INCONCLUSIVE", evidence: "skipped: pass --acrag <acrag.sqlite>" };
-    const db = openLegacy(h.opts.acrag);
-    let convs: { id: string; agent: string; sup: string | null }[];
-    let legacyVectors: number | null;
-    try {
-      convs = db
-        .query("SELECT id, agent_name AS agent, superseded_by AS sup FROM conversation")
-        .all() as typeof convs;
-      legacyVectors = db.query("SELECT 1 FROM sqlite_master WHERE name = 'chunk_vec_rowids'").get()
-        ? legacyCount(db, "SELECT count(*) AS n FROM chunk_vec_rowids")
-        : null;
-    } finally {
-      db.close();
-    }
-    const skipped = { agent: 0, superseded: 0, path_id: 0 };
-    const legacy = new Set<string>();
-    for (const c of convs) {
-      if (c.agent !== "cursor") skipped.agent++;
-      else if (c.sup !== null) skipped.superseded++;
-      else if (c.id.startsWith("/") || c.id.includes("/Users/") || c.id === "") skipped.path_id++;
-      else legacy.add(`cursor:${c.id}`);
-    }
-    const store = await storeKeys(h, "cursor");
-    const missing = [...legacy].filter((k) => !store.has(k));
-    const storeVectors = await h.count(
-      "SELECT count(*) AS n FROM memindex.chunk_vector WHERE space = $1",
-      SPACE,
-    );
-    return {
-      verdict: check(legacy.size > 0 && missing.length === 0),
-      evidence: `legacy conversations ${convs.length} (importable ${legacy.size}, skipped ${JSON.stringify(skipped)}), missing in store ${missing.length}${sample(missing)} (store cursor items ${store.size}); vectors legacy chunk_vec ${legacyVectors ?? "n/a"} vs store ${SPACE} ${storeVectors} (informational)`,
-      data: {
-        conversations: convs.length,
-        importable: legacy.size,
-        skipped,
-        missing: missing.slice(0, 50),
-        storeItems: store.size,
-        legacyVectors,
-        storeVectors,
-      },
     };
   },
 };
@@ -623,9 +498,9 @@ const liveIngest: Clause = {
     const swDb = paths.MEMINDEX_SUPERWHISPER_DB;
     const sw = perSource.superwhisper;
     if (sw && swDb && existsSync(swDb)) {
-      const db = openLegacy(swDb);
+      const db = openSourceDb(swDb);
       try {
-        sw.expected = legacyCount(db, "SELECT count(*) AS n FROM recording");
+        sw.expected = (db.query("SELECT count(*) AS n FROM recording").get() as { n: number }).n;
       } finally {
         db.close();
       }
@@ -987,16 +862,7 @@ const idleCpu: Clause = {
   },
 };
 
-const CLAUSES: readonly Clause[] = [
-  schema,
-  importSwrag,
-  importAcrag,
-  liveIngest,
-  embed,
-  searchScoped,
-  readOnly,
-  idleCpu,
-];
+const CLAUSES: readonly Clause[] = [schema, liveIngest, embed, searchScoped, readOnly, idleCpu];
 
 // ─── Main ────────────────────────────────────────────────────────────────────
 

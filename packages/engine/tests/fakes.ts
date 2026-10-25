@@ -52,7 +52,7 @@ interface StoredRow {
 
 /** In-memory WriteStore with just enough behavior to drive the engine. Records every call. */
 export class FakeStore implements WriteStore {
-  readonly backend = "sqlite" as const;
+  readonly backend = "postgres" as const;
   readonly schema = { applied: 1, shipped: 1, contract: 2, state: "current" as const };
   readonly producer = PRODUCER;
   readonly items = new Map<ItemKey, StoredRow>();
@@ -316,7 +316,6 @@ export function fakeRegistry(plugins: SourcePlugin[], chunkers = [fakeChunker()]
   };
   return {
     all: plugins,
-    chunker,
     chunkerFor: (source, kind) => {
       const p = plugins.find((x) => x.id === source);
       if (!p) throw new Error(`no source ${source}`);

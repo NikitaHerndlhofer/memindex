@@ -6,6 +6,7 @@ import {
   ensureProducerId,
   loadConfig,
   redactUrl,
+  saveSkippedSteps,
   saveStore,
   storeConfig,
   watchSources,
@@ -54,19 +55,19 @@ describe("config", () => {
     expect(storeConfig(cfg)).toEqual({ backend: "postgres", url: "postgres://u@nas/memindex" });
     expect(cfg.ollama.host).toBe("http://10.0.0.2:11434");
     await expect(
-      loadConfig({ HOME: dir, MEMINDEX_CONFIG_DIR: dir, MEMINDEX_STORE: "~/x.sqlite" }),
+      loadConfig({ HOME: dir, MEMINDEX_CONFIG_DIR: dir, MEMINDEX_STORE: "~/archive.db" }),
     ).rejects.toThrow(/MEMINDEX_STORE: expected a postgres:\/\/ or postgresql:\/\/ URL/);
   });
 
-  test("store: saved as { url }, legacy bare-URL configs still load, the env var wins", async () => {
+  test("store: saved as { url }, older bare-URL configs still load, the env var wins", async () => {
     const env = { HOME: dir, MEMINDEX_CONFIG_DIR: dir };
     writeFileSync(
       join(dir, "config.json"),
       JSON.stringify({ store: "postgresql://u:pw@db:5432/x", disabledSources: [] }),
     );
-    const legacy = await loadConfig(env);
-    expect(legacy.store).toEqual({ url: "postgresql://u:pw@db:5432/x" });
-    await saveStore(legacy, { url: "postgresql://memindex:s3cret@127.0.0.1:54329/memindex" });
+    const older = await loadConfig(env);
+    expect(older.store).toEqual({ url: "postgresql://u:pw@db:5432/x" });
+    await saveStore(older, { url: "postgresql://memindex:s3cret@127.0.0.1:54329/memindex" });
     expect(JSON.parse(readFileSync(join(dir, "config.json"), "utf8"))).toEqual({
       store: { url: "postgresql://memindex:s3cret@127.0.0.1:54329/memindex" },
       disabledSources: [],
@@ -74,8 +75,23 @@ describe("config", () => {
     expect((await loadConfig({ ...env, MEMINDEX_STORE: "postgres://other/db" })).store).toEqual({
       url: "postgres://other/db",
     });
-    writeFileSync(join(dir, "config.json"), JSON.stringify({ store: "/tmp/archive.sqlite" }));
+    writeFileSync(join(dir, "config.json"), JSON.stringify({ store: "/tmp/archive.db" }));
     await expect(loadConfig(env)).rejects.toThrow(/config\.json is invalid/);
+  });
+
+  test("skipped install steps: saved, replaced by the next install, cleared when none", async () => {
+    const env = { HOME: dir, MEMINDEX_CONFIG_DIR: dir };
+    writeFileSync(join(dir, "config.json"), JSON.stringify({ disabledSources: ["cursor"] }));
+    const cfg = await loadConfig(env);
+    expect(cfg.skippedSteps).toEqual([]);
+    await saveSkippedSteps(cfg, ["watcher", "hooks"]);
+    expect((await loadConfig(env)).skippedSteps).toEqual(["watcher", "hooks"]);
+    await saveSkippedSteps(cfg, ["ollama"]);
+    expect((await loadConfig(env)).skippedSteps).toEqual(["ollama"]);
+    await saveSkippedSteps(cfg, []);
+    expect(JSON.parse(readFileSync(join(dir, "config.json"), "utf8"))).toEqual({
+      disabledSources: ["cursor"],
+    });
   });
 
   test("redactUrl hides only the password", () => {

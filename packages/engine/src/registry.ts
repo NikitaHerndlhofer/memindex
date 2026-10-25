@@ -1,4 +1,4 @@
-import type { Chunker, ChunkerId, Facets, ItemKind, LocationId, SourceId } from "@memindex/model";
+import type { Chunker, Facets, ItemKind, LocationId, SourceId } from "@memindex/model";
 import type { SourceKit, SourcePlugin } from "@memindex/sources";
 
 /** The slice of `@memindex/sources`' registry the engine relies on. */
@@ -6,8 +6,6 @@ export interface Registry {
   readonly all: readonly SourcePlugin[];
   /** The plugin's chunker for this item kind (`chunkers[kind] ?? chunkers.default`). */
   chunkerFor(source: SourceId, kind: ItemKind): Chunker;
-  /** By id, for imports that must reproduce a legacy chunking exactly. */
-  chunker(id: ChunkerId): Chunker;
   facets(): ReadonlyMap<SourceId, Facets>;
 }
 

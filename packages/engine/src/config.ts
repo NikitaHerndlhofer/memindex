@@ -50,6 +50,10 @@ export const EMBED_DEFAULTS: EmbedPolicy = {
   onBattery: "defer",
 };
 
+/** `memindex install` steps the user turned off (`--skip-ollama`, `--skip-watch`, `--skip-hooks`). */
+const SKIPPABLE_STEPS = ["ollama", "watcher", "hooks"] as const;
+export type SkippableStep = (typeof SKIPPABLE_STEPS)[number];
+
 /** The archive's Postgres (Supabase or any Postgres with pgvector). */
 export interface StoreSetting {
   readonly url: string;
@@ -65,6 +69,8 @@ export interface MemindexConfig {
   readonly disabledSources: readonly SourceId[];
   readonly search: SearchScope;
   readonly embed: EmbedPolicy;
+  /** Saved by the last `memindex install`; doctor reports these steps as skipped instead of failed. */
+  readonly skippedSteps: readonly SkippableStep[];
 }
 
 const PostgresUrl = z
@@ -104,6 +110,7 @@ const ConfigFile = z
       })
       .strict()
       .optional(),
+    skippedSteps: z.array(z.enum(SKIPPABLE_STEPS)).optional(),
   })
   .strict();
 type ConfigFile = z.infer<typeof ConfigFile>;
@@ -132,9 +139,7 @@ export function parseStoreUrl(url: string, where: string): StoreSetting {
 }
 
 /** The store port's view of the configured database; fails with the install hint when none is set. */
-export function storeConfig(
-  cfg: Pick<MemindexConfig, "store">,
-): Extract<StoreConfig, { backend: "postgres" }> {
+export function storeConfig(cfg: Pick<MemindexConfig, "store">): StoreConfig {
   if (!cfg.store) {
     throw new StoreError(
       "missing",
@@ -197,6 +202,7 @@ export async function loadConfig(env: Env = process.env): Promise<MemindexConfig
     },
     disabledSources: (file.disabledSources ?? []).map(sourceId),
     embed: { ...EMBED_DEFAULTS, ...file.embed },
+    skippedSteps: file.skippedSteps ?? [],
   };
 }
 
@@ -215,6 +221,15 @@ export async function saveStore(cfg: MemindexConfig, store: StoreSetting): Promi
   const file = await readConfigFile(cfg.paths.configFile);
   await writeConfigFile(cfg.paths.configFile, { ...file, store });
   return { ...cfg, store };
+}
+
+/** Persists the steps this install skipped, replacing the last install's list. Other file fields are preserved. */
+export async function saveSkippedSteps(cfg: MemindexConfig, steps: readonly SkippableStep[]): Promise<void> {
+  const { skippedSteps: _, ...file } = await readConfigFile(cfg.paths.configFile);
+  await writeConfigFile(
+    cfg.paths.configFile,
+    steps.length > 0 ? { ...file, skippedSteps: [...steps] } : file,
+  );
 }
 
 async function writeConfigFile(path: string, data: ConfigFile): Promise<void> {

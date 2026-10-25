@@ -1,7 +1,7 @@
 /**
  * `partsChunker`: structured turns (agent chats). Every part is its own chunk, so a tool result never
- * shares a vector with the prose around it. A part of at most `maxTokens` stays whole with text = embedText
- * (acrag's content hash for an unsplit part). A longer part is split by its kind's strategy:
+ * shares a vector with the prose around it. A part of at most `maxTokens` stays whole with text = embedText.
+ * A longer part is split by its kind's strategy:
  *   "prose"        paragraphs → sentences → words (separators kept with the sentence they end)
  *   "lines"        blank lines → lines → words
  *   "diff"         file headers → hunks → lines

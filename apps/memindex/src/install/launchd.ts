@@ -1,11 +1,8 @@
-import { existsSync } from "node:fs";
-import { mkdir, unlink, writeFile } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { run } from "../spawn.ts";
 
 export const PLIST_LABEL = "com.memindex.watch";
-/** Labels of the apps memindex replaces; their watchers are booted out on install. */
-export const LEGACY_LABELS = ["com.superwhisper-rag.watch", "com.acrag.watch"] as const;
 
 function plistPath(home: string, label = PLIST_LABEL): string {
   return join(home, "Library", "LaunchAgents", `${label}.plist`);
@@ -93,15 +90,6 @@ export async function installLaunchAgent(t: PlistTemplate): Promise<string> {
   const r = run(["launchctl", "bootstrap", `gui/${uid()}`, path], { timeoutMs: 10_000 });
   if (r.exitCode !== 0) throw new Error(`launchctl bootstrap failed: ${r.stderr.trim()}`);
   return path;
-}
-
-/** true iff a plist existed and was removed. */
-export async function uninstallLaunchAgent(home: string, label = PLIST_LABEL): Promise<boolean> {
-  const path = plistPath(home, label);
-  bootout(label);
-  if (!existsSync(path)) return false;
-  await unlink(path);
-  return true;
 }
 
 export function launchAgentLoaded(label = PLIST_LABEL): boolean {

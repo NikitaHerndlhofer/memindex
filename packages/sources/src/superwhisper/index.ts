@@ -15,7 +15,7 @@ import {
 } from "./record.ts";
 
 const CURSOR_MTIME = "source_mtime_ns";
-/** swrag hashed only output.wav; Super Whisper 3 writes output.ogg, so later names are the fallback. */
+/** Older builds write output.wav; Super Whisper 3 writes output.ogg, so later names are the fallback. */
 const AUDIO_NAMES = ["output.wav", "output.ogg", "output.m4a", "output.mp3", "output.flac"];
 
 function dbPath(kit: SourceKit): string {

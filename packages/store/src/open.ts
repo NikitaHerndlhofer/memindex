@@ -32,7 +32,7 @@ export async function openStore(
   cfg: StoreConfig,
   opts: WriteOpenOptions | ReadOpenOptions,
 ): Promise<ReadStore | WriteStore> {
-  const url = postgresUrl(cfg);
+  const url = cfg.url;
   const conn = connect(url);
   try {
     const { verdict, status, canAssumeReader } = await inspect(conn);
@@ -58,7 +58,7 @@ export interface MigrateOptions {
  * embedded in this binary, written to a throwaway project directory. Returns the gate's view after.
  */
 export async function migrateStore(cfg: StoreConfig, opts: MigrateOptions = {}): Promise<SchemaStatus> {
-  const url = postgresUrl(cfg);
+  const url = cfg.url;
   await ensureExtensionsSearchPath(cfg);
   const bin = opts.supabaseBin ?? process.env.MEMINDEX_SUPABASE_BIN ?? "supabase";
   const workdir = mkdtempSync(join(tmpdir(), "memindex-migrate-"));
@@ -92,17 +92,6 @@ export async function migrateStore(cfg: StoreConfig, opts: MigrateOptions = {}):
   } finally {
     await conn.client.end({ timeout: 5 });
   }
-}
-
-export function postgresUrl(cfg: StoreConfig): string {
-  if (cfg.backend !== "postgres") {
-    throw new StoreError(
-      "unsupported",
-      "set the store to a postgres:// URL (`memindex install`)",
-      "only the Supabase Postgres backend is implemented; legacy SQLite archives are read by `memindex import`",
-    );
-  }
-  return cfg.url;
 }
 
 async function inspect(

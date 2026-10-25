@@ -1,4 +1,3 @@
-import { postgresUrl } from "./open.ts";
 import { connect, pgCode } from "./pg/connect.ts";
 import * as v from "./pg/rows.ts";
 import { type StoreConfig, StoreError } from "./port.ts";
@@ -34,7 +33,7 @@ export interface StoreProbe {
 
 /** Connects and reports what the migrations need from the server, without changing anything. */
 export async function probeStore(cfg: StoreConfig): Promise<StoreProbe> {
-  const conn = connect(postgresUrl(cfg), { max: 1 });
+  const conn = connect(cfg.url, { max: 1 });
   try {
     const [info] = await conn.client`
       SELECT current_setting('server_version') AS server, current_user AS "user",
@@ -74,7 +73,7 @@ export async function probeStore(cfg: StoreConfig): Promise<StoreProbe> {
 export async function ensureExtensionsSearchPath(cfg: StoreConfig): Promise<boolean> {
   const before = await probeStore(cfg);
   if (before.searchPathOk) return false;
-  const conn = connect(postgresUrl(cfg), { max: 1 });
+  const conn = connect(cfg.url, { max: 1 });
   try {
     await conn.client.unsafe(
       `ALTER DATABASE ${quoteIdent(before.database)} SET search_path = ${SEARCH_PATH}`,

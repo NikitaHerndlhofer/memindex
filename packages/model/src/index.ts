@@ -22,7 +22,7 @@ export type ItemKey = Brand<string, "ItemKey">;
 export type TurnKey = Brand<string, "TurnKey">;
 /** 24 hex chars of sha256(item_key|turn_key|part_idx|sub). */
 export type ChunkId = Brand<string, "ChunkId">;
-/** sha256 hex of the exact string sent to the embedder. Equals swrag's legacy embed_text_hash. */
+/** sha256 hex of the exact string sent to the embedder. */
 export type ContentHash = Brand<string, "ContentHash">;
 /** `<name>@<behavior version>`, e.g. "words@3". A version bump makes the rechunk job pending. */
 export type ChunkerId = Brand<string, "ChunkerId">;

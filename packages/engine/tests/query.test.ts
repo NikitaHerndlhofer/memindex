@@ -85,7 +85,6 @@ describe("parseSince", () => {
 describe("recipes", () => {
   const FORBIDDEN: readonly [RegExp, string][] = [
     [/\bMATCH\b/i, "FTS MATCH"],
-    [/\bvec_\w+/i, "sqlite-vec function"],
     [/\bjulianday\b/i, "julianday"],
     [/\b(date|datetime|strftime|now)\s*\(/i, "date function"],
     [
@@ -93,7 +92,6 @@ describe("recipes", () => {
       "dialect search function",
     ],
     [/<->|<=>|@@|::/, "postgres operator/cast"],
-    [/\b(recording|conversation|message|segment|chunk_vec|chunk_fts)\b/i, "legacy table"],
     [/\bjson_extract\b|->>/i, "JSON function (use <source>_items facet views)"],
   ];
 
@@ -160,11 +158,20 @@ describe("recipes", () => {
     expect(() => resolveQuery({ recipe: "nope" })).toThrow(/unknown recipe/);
   });
 
-  test("covers both legacy skills' recipe intents", () => {
+  test("covers the recipe intents the skill documents", () => {
     const names = new Set(RECIPES.map((r) => r.name));
-    const swrag = [
-      "modes",
+    const intents = [
+      "sources",
+      "recent",
       "today",
+      "turns",
+      "by-repo",
+      "by-tag",
+      "subagents",
+      "thread",
+      "context",
+      "by-chunk-type",
+      "modes",
       "mode-recent",
       "meeting-notes",
       "keyword",
@@ -177,19 +184,7 @@ describe("recipes", () => {
       "fuzzy",
       "recency-decay",
     ];
-    const acrag = [
-      "sources",
-      "recent",
-      "today",
-      "turns",
-      "by-repo",
-      "by-tag",
-      "subagents",
-      "thread",
-      "context",
-      "by-chunk-type",
-    ];
-    for (const n of [...swrag, ...acrag]) expect(names.has(n)).toBe(true);
+    for (const n of intents) expect(names.has(n)).toBe(true);
     expect(RECIPES.some((r) => r.name.startsWith("stats-"))).toBe(true);
   });
 });

@@ -56,26 +56,11 @@ import {
   producer as producerTable,
   turn,
 } from "../schema.ts";
-import { bindNamedParams, referencedRelations, singleStatement, splitLeadingWith } from "../sqltext.ts";
+import { bindNamedParams, singleStatement, splitLeadingWith } from "../sqltext.ts";
 import { type Connection, type Exec, pgCode, withRetry } from "./connect.ts";
 import * as v from "./rows.ts";
 
 const BATCH = 500;
-
-const LEGACY: Readonly<Record<string, string>> = {
-  recording: "items (source = 'superwhisper')",
-  recording_vec: "memindex.search(..., 'semantic', ...) or the `hits` relation",
-  recording_chunk: "chunks",
-  recording_chunks: "chunks",
-  recording_chunk_vec: "the `hits` relation (--search … --mode semantic)",
-  recording_fts: "the `hits` relation (--search … --mode keyword)",
-  conversation: "items (kind = 'conversation')",
-  message: "turns",
-  segment: "turns (meetings: one turn per speaker segment)",
-  chunk_vec: "the `hits` relation (--search … --mode semantic)",
-  chunk_fts: "the `hits` relation (--search … --mode keyword)",
-  chunk_trigram: "the `hits` relation (--search … --mode fuzzy)",
-};
 
 function chunked<T>(xs: readonly T[], n = BATCH): T[][] {
   const out: T[][] = [];
@@ -163,14 +148,6 @@ export class PgReadStore implements ReadStore {
   }
 
   private async collect(text: string, opts: RunOptions): Promise<Row[]> {
-    const legacy = referencedRelations(text).find((r) => Object.hasOwn(LEGACY, r));
-    if (legacy) {
-      throw new StoreError(
-        "legacy_sql",
-        `use ${LEGACY[legacy]} (see the memindex skill's view contract)`,
-        `"${legacy}" is a swrag/acrag table; memindex exposes the view contract instead`,
-      );
-    }
     const timeoutMs = Math.max(1, Math.floor(opts.timeoutMs ?? 15_000));
     const maxRows = Math.max(1, Math.floor(opts.maxRows ?? 10_000));
     let body = singleStatement(text);

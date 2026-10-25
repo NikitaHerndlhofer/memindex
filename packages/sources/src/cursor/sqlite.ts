@@ -1,5 +1,5 @@
 /**
- * Cursor state.vscdb (fidelity 2). Ported from acrag's cursor v1 parser.
+ * Cursor state.vscdb (fidelity 2).
  *
  *   composerHeaders(composerId, createdAt, lastUpdatedAt, isSubagent, value JSON, …)
  *   cursorDiskKV `composerData:<cid>`                  conversation record, `_v` = schema version
@@ -196,7 +196,7 @@ function spawnedComposer(
   return toolCallId ? (children.get(toolCallId) ?? null) : null;
 }
 
-/** acrag's segment extraction, plus `bubble.thinking.text` (where _v 18 bubbles keep reasoning). */
+/** A bubble's text, code, tool and diff segments, plus `bubble.thinking.text` (where _v 18 bubbles keep reasoning). */
 function bubbleParts(
   bubble: Record<string, unknown>,
   children: ReadonlyMap<string, string> = new Map(),

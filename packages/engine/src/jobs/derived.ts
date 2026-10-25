@@ -43,8 +43,7 @@ async function* concat<T>(lists: readonly AsyncIterable<T>[]): AsyncIterable<T> 
 }
 
 /**
- * Items whose stored chunker is not `chunkerFor(source, kind)`, unknown ids (legacy imports)
- * included. The store filters by one chunker id per pass, so there is one pass per distinct
+ * Items whose stored chunker is not `chunkerFor(source, kind)`, unknown ids included. The store filters by one chunker id per pass, so there is one pass per distinct
  * chunker of the plugin, keeping the items whose kind maps to that chunker.
  */
 async function* staleChunked(

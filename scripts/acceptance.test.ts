@@ -25,7 +25,7 @@ describe("parseOptions", () => {
 
   test("rejects a missing or non-postgres --db, bad sample, unknown clause", () => {
     expect(() => parseOptions([])).toThrow(UsageError);
-    expect(() => parseOptions(["--db", "/tmp/x.sqlite"])).toThrow(UsageError);
+    expect(() => parseOptions(["--db", "/tmp/archive.db"])).toThrow(UsageError);
     expect(() => parseOptions(["--db", DB, "--embed-sample", "0"])).toThrow(UsageError);
     expect(() => parseOptions(["--db", DB, "--only", "schema,nope"])).toThrow(UsageError);
     expect(() => parseOptions(["--db", DB, "--ingest-env", "NOEQ"])).toThrow(UsageError);

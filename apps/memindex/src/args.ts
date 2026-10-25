@@ -139,7 +139,7 @@ function outputFormat(args: Record<string, unknown>): OutputFormat {
 
 const SEARCH_ONLY = ["mode", "source", "kind", "since", "all", "all-sources", "limit"] as const;
 
-/** `memindex sql`: SQL comes from stdin only (quoting-safe); a positional is a usage error, as in swrag/acrag. */
+/** `memindex sql`: SQL comes from stdin only (quoting-safe); a positional is a usage error. */
 export async function parseSqlCommand(rawArgs: readonly string[], stdin: StdinSource): Promise<ParsedQuery> {
   const args = parseArgs(
     rawArgs.filter((a) => a !== "--"),

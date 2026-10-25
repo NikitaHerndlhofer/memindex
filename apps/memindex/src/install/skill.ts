@@ -11,14 +11,6 @@ export function skillTargets(home: string): string[] {
   ];
 }
 
-/** Legacy skills replaced by memindex; backed up and removed on install. */
-export function legacySkillPaths(home: string): string[] {
-  return ["superwhisper-rag", "acrag"].flatMap((name) => [
-    join(home, ".cursor", "skills", name, "SKILL.md"),
-    join(home, ".claude", "skills", name, "SKILL.md"),
-  ]);
-}
-
 const sha256 = (s: string) => createHash("sha256").update(s).digest("hex");
 
 /** path → sha256 of the SKILL.md body memindex last wrote there. Lives in the config dir. */
@@ -132,12 +124,4 @@ export async function skillStates(
       return { path, state: tracked[path] === sha256(existing) ? ("stale" as const) : ("edited" as const) };
     }),
   );
-}
-
-/** Moves a legacy skill aside (never deletes user content). */
-export async function retireLegacySkill(path: string): Promise<string | null> {
-  if (!existsSync(path)) return null;
-  const backup = await backupPath(path);
-  await rename(path, backup);
-  return backup;
 }

@@ -1,9 +1,14 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
-import { type EmbedHealth, loadConfig, type PullProgress, type StoreProbe } from "@memindex/engine";
-import { removeLegacyCursorHooks } from "../src/install/hooks.ts";
+import { join } from "node:path";
+import {
+  type EmbedHealth,
+  loadConfig,
+  type PullProgress,
+  type SkippableStep,
+  type StoreProbe,
+} from "@memindex/engine";
 import type { Task, Ui } from "../src/install/ui.ts";
 import {
   type InstallDeps,
@@ -70,6 +75,7 @@ interface Harness {
   hookBins: string[];
   saved: string[];
   migrated: string[];
+  skipped: (readonly SkippableStep[])[];
   ui: ReturnType<typeof recordingUi>;
 }
 
@@ -94,13 +100,14 @@ async function harness(
   const hookBins: string[] = [];
   const saved: string[] = [];
   const migrated: string[] = [];
+  const skipped: (readonly SkippableStep[])[] = [];
   const missing: EmbedHealth = { ok: false, reason: "model_missing", detail: "not pulled" };
   // The wizard checks once before asking about the download, then ensureOllama re-checks.
   const health = over.health ?? [missing, missing];
   const ui = recordingUi(over.answer, over.texts);
   const present = { brew: true, supabase: true, ollama: true, ...over.which };
   const deps: InstallDeps = {
-    paths: installPaths(config, env),
+    paths: installPaths(config),
     config,
     bin: over.bin === undefined ? "/opt/homebrew/bin/memindex" : over.bin,
     ui,
@@ -135,7 +142,9 @@ async function harness(
         plists.push(t.binPath);
         return join(home, "Library", "LaunchAgents", "com.memindex.watch.plist");
       },
-      uninstall: async () => false,
+    },
+    saveSkipped: async (steps) => {
+      skipped.push(steps);
     },
     openArchive: async () => ({
       hooks: {
@@ -149,10 +158,10 @@ async function harness(
       close: async () => {},
     }),
   };
-  return { deps, commands, plists, hookBins, saved, migrated, ui };
+  return { deps, commands, plists, hookBins, saved, migrated, skipped, ui };
 }
 
-const WITH_URL = { url: URL_, skip: {} };
+const WITH_URL = { url: URL_, skip: [] };
 const statuses = (r: readonly StepResult[]) => Object.fromEntries(r.map((s) => [s.step, s.status]));
 const detail = (r: readonly StepResult[], step: string) => r.find((s) => s.step === step)?.detail ?? "";
 
@@ -188,7 +197,7 @@ describe("memindex install wizard", () => {
 
   test("no --url: asks, defaulting to the configured database", async () => {
     const h = await harness({ env: { MEMINDEX_STORE: "postgres://u:pw@db.example.com:5432/x" } });
-    const results = await runInstall(h.deps, { skip: { ollama: true, watch: true } });
+    const results = await runInstall(h.deps, { skip: ["ollama", "watcher"] });
     expect(h.ui.lines).toContain(
       "? Postgres URL for the archive (Supabase or any Postgres with pgvector) [postgres://u:pw@db.example.com:5432/x]",
     );
@@ -198,7 +207,7 @@ describe("memindex install wizard", () => {
 
   test("no URL at all: offers the bundled docker-compose database, never runs Docker", async () => {
     const h = await harness({ texts: ["", ""] });
-    const results = await runInstall(h.deps, { skip: { ollama: true, watch: true } });
+    const results = await runInstall(h.deps, { skip: ["ollama", "watcher"] });
     expect(statuses(results)).toEqual({
       database: "failed",
       ollama: "skipped",
@@ -215,13 +224,13 @@ describe("memindex install wizard", () => {
 
   test("a URL entered after the offer is used", async () => {
     const h = await harness({ texts: ["", URL_] });
-    await runInstall(h.deps, { skip: { ollama: true, watch: true } });
+    await runInstall(h.deps, { skip: ["ollama", "watcher"] });
     expect(h.saved).toEqual([URL_]);
   });
 
   test("not a Postgres URL: fails before connecting", async () => {
     const h = await harness();
-    const results = await runInstall(h.deps, { url: "mysql://x@y/z", skip: { ollama: true, watch: true } });
+    const results = await runInstall(h.deps, { url: "mysql://x@y/z", skip: ["ollama", "watcher"] });
     expect(detail(results, "database")).toBe("database URL: expected a postgres:// or postgresql:// URL");
     expect(h.saved).toEqual([]);
   });
@@ -262,7 +271,7 @@ describe("memindex install wizard", () => {
         ],
       }),
     });
-    const results = await runInstall(h.deps, { url, skip: { ollama: true, watch: true } });
+    const results = await runInstall(h.deps, { url, skip: ["ollama", "watcher"] });
     expect(detail(results, "database")).toContain(
       'fix: enable "vector" in the Supabase dashboard (Database → Extensions)',
     );
@@ -277,7 +286,7 @@ describe("memindex install wizard", () => {
   test("extensions schema not on the search_path: install sets it, or fails with the exact SQL", async () => {
     const off = { ...healthyProbe, searchPath: '"$user", public', searchPathOk: false };
     const fixed = await harness({ probe: async () => off });
-    const r1 = await runInstall(fixed.deps, { ...WITH_URL, skip: { ollama: true, watch: true } });
+    const r1 = await runInstall(fixed.deps, { ...WITH_URL, skip: ["ollama", "watcher"] });
     expect(detail(r1, "database")).toContain("set memindex's search_path to include extensions");
     expect(statuses(r1).migrate).toBe("ok");
 
@@ -289,7 +298,7 @@ describe("memindex install wizard", () => {
         });
       },
     });
-    const r2 = await runInstall(denied.deps, { ...WITH_URL, skip: { ollama: true, watch: true } });
+    const r2 = await runInstall(denied.deps, { ...WITH_URL, skip: ["ollama", "watcher"] });
     expect(detail(r2, "database")).toBe(
       'unsupported: may not change the database default; fix: ALTER DATABASE "memindex" SET search_path = "$user", public, extensions;',
     );
@@ -312,31 +321,6 @@ describe("memindex install wizard", () => {
     expect(detail(results, "database")).toBe("cannot connect: connect ECONNREFUSED 127.0.0.1:54329");
   });
 
-  test("replaces acrag hooks in ~/.cursor/hooks.json after backing it up", async () => {
-    const file = join(home, ".cursor", "hooks.json");
-    mkdirSync(dirname(file), { recursive: true });
-    const original = {
-      version: 1,
-      hooks: {
-        stop: [{ command: "/opt/homebrew/bin/acrag hook stop" }, { command: "my-own-hook" }],
-        afterFileEdit: [{ command: "acrag hook afterFileEdit" }],
-      },
-    };
-    writeFileSync(file, JSON.stringify(original));
-    const h = await harness();
-    const results = await runInstall(h.deps, WITH_URL);
-    const hooks = results.find((r) => r.step === "hooks");
-    expect(hooks?.status).toBe("ok");
-    expect(hooks?.detail).toContain("replaced 2 acrag hook(s)");
-    const backups = readdirSync(dirname(file)).filter((f) => f.startsWith("hooks.json.bak."));
-    expect(backups).toHaveLength(1);
-    expect(JSON.parse(readFileSync(join(dirname(file), backups[0] as string), "utf8"))).toEqual(original);
-    expect(JSON.parse(readFileSync(file, "utf8"))).toEqual({
-      version: 1,
-      hooks: { stop: [{ command: "my-own-hook" }], afterFileEdit: [] },
-    });
-  });
-
   test("missing Supabase CLI, declined: nothing is brewed or migrated, hooks and skill wait", async () => {
     const h = await harness({ which: { supabase: false }, answer: false });
     const s = statuses(await runInstall(h.deps, WITH_URL));
@@ -357,16 +341,22 @@ describe("memindex install wizard", () => {
     expect(h.migrated).toEqual([URL_]);
   });
 
-  test("development run (no stable binary): watcher and hooks skipped, hooks.json untouched", async () => {
-    const file = join(home, ".cursor", "hooks.json");
-    mkdirSync(dirname(file), { recursive: true });
-    const original = JSON.stringify({ version: 1, hooks: { stop: [{ command: "acrag hook stop" }] } });
-    writeFileSync(file, original);
+  test("development run (no stable binary): watcher and hooks skipped", async () => {
     const h = await harness({ bin: null });
     const s = statuses(await runInstall(h.deps, WITH_URL));
     expect([s.watcher, s.hooks]).toEqual(["skipped", "skipped"]);
-    expect(readFileSync(file, "utf8")).toBe(original);
-    expect(readdirSync(dirname(file)).filter((f) => f.startsWith("hooks.json.bak"))).toEqual([]);
+    expect(h.hookBins).toEqual([]);
+    expect(h.plists).toEqual([]);
+  });
+
+  test("--skip-watch --skip-hooks: both steps skipped, not failed, and remembered for doctor", async () => {
+    const h = await harness();
+    const results = await runInstall(h.deps, { ...WITH_URL, skip: ["watcher", "hooks"] });
+    expect(statuses(results)).toMatchObject({ watcher: "skipped", hooks: "skipped", skill: "ok" });
+    expect(results.filter((r) => r.status === "failed")).toEqual([]);
+    expect(h.plists).toEqual([]);
+    expect(h.hookBins).toEqual([]);
+    expect(h.skipped).toEqual([["watcher", "hooks"]]);
   });
 
   test("a failed migration skips hooks and skill instead of opening the archive", async () => {
@@ -375,7 +365,7 @@ describe("memindex install wizard", () => {
         throw new Error("supabase migration up failed (exit 1)");
       },
     });
-    const s = statuses(await runInstall(h.deps, { url: URL_, skip: { ollama: true, watch: true } }));
+    const s = statuses(await runInstall(h.deps, { url: URL_, skip: ["ollama", "watcher"] }));
     expect(s).toEqual({
       database: "ok",
       migrate: "failed",
@@ -385,24 +375,5 @@ describe("memindex install wizard", () => {
       skill: "skipped",
     });
     expect(h.hookBins).toEqual([]);
-  });
-});
-
-describe("removeLegacyCursorHooks", () => {
-  test("no file: nothing to back up", async () => {
-    expect(await removeLegacyCursorHooks(join(home, "hooks.json"))).toEqual({ backup: null, removed: [] });
-  });
-
-  test("refuses to touch invalid JSON", async () => {
-    const file = join(home, "hooks.json");
-    writeFileSync(file, "{nope");
-    await expect(removeLegacyCursorHooks(file)).rejects.toThrow(/not valid JSON/);
-    expect(readFileSync(file, "utf8")).toBe("{nope");
-  });
-
-  test("keeps commands that merely mention acrag", async () => {
-    const file = join(home, "hooks.json");
-    writeFileSync(file, JSON.stringify({ hooks: { stop: [{ command: "echo acrag-hooks-retired" }] } }));
-    expect((await removeLegacyCursorHooks(file, 1)).removed).toEqual([]);
   });
 });

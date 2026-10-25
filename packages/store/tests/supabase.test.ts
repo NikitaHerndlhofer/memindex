@@ -162,7 +162,7 @@ runStoreContract("local supabase", () => backend);
 describe("local supabase container limits", () => {
   test("vector index builds (bulkPut, repair on open) fit the container's 64 MB /dev/shm", async () => {
     await backend.reset();
-    // A legacy-sized table makes the planner give the HNSW build parallel workers; this does it for 2,000 rows.
+    // An archive-sized table makes the planner give the HNSW build parallel workers; this does it for 2,000 rows.
     const u = new URL(URL_);
     u.searchParams.set("min_parallel_table_scan_size", "0");
     const cfgParallel: StoreConfig = { backend: "postgres", url: u.toString() };

@@ -7,31 +7,26 @@ import {
   parseStoreUrl,
   redactUrl,
   type SchemaStatus,
+  type SkippableStep,
   type StoreProbe,
 } from "@memindex/engine";
 import COMPOSE from "../../../../docker-compose.yml" with { type: "text" };
 import type { RunResult } from "../spawn.ts";
-import { removeLegacyCursorHooks } from "./hooks.ts";
-import { LEGACY_LABELS, type PlistTemplate } from "./launchd.ts";
+import type { PlistTemplate } from "./launchd.ts";
 import { ensureOllama } from "./ollama.ts";
-import { installSkill, legacySkillPaths, retireLegacySkill, skillTargets } from "./skill.ts";
+import { installSkill, skillTargets } from "./skill.ts";
 import type { Task, Ui } from "./ui.ts";
 
 export interface InstallPaths {
   readonly home: string;
-  readonly cursorHooksFile: string;
   readonly watchLog: string;
   readonly skillTrackFile: string;
 }
 
-export function installPaths(
-  config: MemindexConfig,
-  env: Readonly<Record<string, string | undefined>>,
-): InstallPaths {
+export function installPaths(config: MemindexConfig): InstallPaths {
   const home = config.paths.home;
   return {
     home,
-    cursorHooksFile: env.MEMINDEX_CURSOR_HOOKS_FILE ?? join(home, ".cursor", "hooks.json"),
     watchLog: join(config.paths.logDir, "watch.log"),
     skillTrackFile: join(config.paths.configDir, "skills.json"),
   };
@@ -61,8 +56,9 @@ export interface InstallDeps {
   };
   readonly launchd: {
     install(t: PlistTemplate): Promise<string>;
-    uninstall(label: string): Promise<boolean>;
   };
+  /** Remembers which steps the user skipped, so doctor reports them as skipped rather than failed. */
+  readonly saveSkipped: (steps: readonly SkippableStep[]) => Promise<void>;
   /** Opened after migrating; write mode. */
   readonly openArchive: (url: string) => Promise<Pick<Archive, "hooks" | "skill" | "close">>;
 }
@@ -70,11 +66,8 @@ export interface InstallDeps {
 export interface InstallOptions {
   /** `--url`; otherwise asked for, defaulting to the configured one. */
   readonly url?: string;
-  readonly skip: {
-    readonly ollama?: boolean;
-    readonly watch?: boolean;
-    readonly hooks?: boolean;
-  };
+  /** Steps the user turned off with `--skip-…`. */
+  readonly skip: readonly SkippableStep[];
 }
 
 export interface StepResult {
@@ -133,20 +126,21 @@ class Steps {
 /**
  * `memindex install`: (a) a Postgres URL, checked for the extensions and search_path the migrations
  * need, then saved, (b) the schema migrated with the Supabase CLI, (c) Ollama with the embed model,
- * (d) the launchd watcher, (e) agent hooks (old acrag hooks replaced), (f) the skill. Each step is
+ * (d) the launchd watcher, (e) agent hooks, (f) the skill. Each step is
  * check-and-fix and idempotent; a failed step is reported and the rest still run where they can.
  * memindex never starts a database itself.
  */
 export async function runInstall(d: InstallDeps, opts: InstallOptions): Promise<readonly StepResult[]> {
   const s = new Steps(d);
+  await d.saveSkipped(opts.skip);
 
   const url = await database(d, s, opts.url);
   const migrated = url !== null && (await migrate(d, s, url));
 
-  if (opts.skip.ollama) s.skip("ollama", "--skip-ollama");
+  if (opts.skip.includes("ollama")) s.skip("ollama", "--skip-ollama");
   else await ollama(d, s);
 
-  if (opts.skip.watch) s.skip("watcher", "--skip-watch");
+  if (opts.skip.includes("watcher")) s.skip("watcher", "--skip-watch");
   else await watcher(d, s);
 
   if (!url || !migrated) {
@@ -163,7 +157,7 @@ export async function runInstall(d: InstallDeps, opts: InstallOptions): Promise<
     return s.results;
   }
   try {
-    if (opts.skip.hooks) s.skip("hooks", "--skip-hooks");
+    if (opts.skip.includes("hooks")) s.skip("hooks", "--skip-hooks");
     else await hooks(d, s, archive);
     await skill(d, s, archive);
   } finally {
@@ -320,9 +314,6 @@ async function ollama(d: InstallDeps, s: Steps): Promise<void> {
 async function watcher(d: InstallDeps, s: Steps): Promise<void> {
   const task = d.ui.task("Watcher (launchd)");
   try {
-    const retired: string[] = [];
-    for (const label of LEGACY_LABELS) if (await d.launchd.uninstall(label)) retired.push(label);
-    if (retired.length > 0) task.update(`removed legacy ${retired.join(", ")}`);
     if (!d.bin) {
       s.skip("watcher", "no stable memindex binary path (development run?); pass --bin", task);
       return;
@@ -341,18 +332,14 @@ async function hooks(d: InstallDeps, s: Steps, archive: Pick<Archive, "hooks">):
     return;
   }
   try {
-    const legacy = await removeLegacyCursorHooks(d.paths.cursorHooksFile);
     const results = await archive.hooks.install(d.bin);
     const failed = results.filter((r) => r.error !== null);
-    const parts = [
+    const detail =
       results.length > 0
         ? `installed for ${results.map((r) => r.source).join(", ")}`
-        : "no source declares hooks",
-      ...(legacy.removed.length > 0 ? [`replaced ${legacy.removed.length} acrag hook(s)`] : []),
-      ...(legacy.backup ? [`backup ${legacy.backup}`] : []),
-    ];
+        : "no source declares hooks";
     if (failed.length > 0) s.fail("hooks", failed.map((r) => `${r.source}: ${r.error}`).join("; "), task);
-    else s.ok("hooks", parts.join("; "), task);
+    else s.ok("hooks", detail, task);
   } catch (e) {
     s.fail("hooks", errorMessage(e), task);
   }
@@ -362,13 +349,10 @@ async function skill(d: InstallDeps, s: Steps, archive: Pick<Archive, "skill">):
   const task = d.ui.task("Agent skill");
   try {
     const outcomes = await installSkill(archive.skill(), skillTargets(d.paths.home), d.paths.skillTrackFile);
-    const retired: string[] = [];
-    for (const p of legacySkillPaths(d.paths.home)) if (await retireLegacySkill(p)) retired.push(p);
     const backups = outcomes.flatMap((o) => (o.backup ? [o.backup] : []));
     const detail = [
       outcomes.map((o) => `${o.action} ${o.path}`).join("; "),
       ...(backups.length > 0 ? [`previous content kept in ${backups.join(", ")}`] : []),
-      ...(retired.length > 0 ? [`retired ${retired.length} legacy skill(s)`] : []),
     ].join("; ");
     s.ok("skill", detail, task);
   } catch (e) {

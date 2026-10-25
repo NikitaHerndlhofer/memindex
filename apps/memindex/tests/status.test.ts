@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { EmbedActivity, EmbedRuntime } from "@memindex/engine";
-import { embedderText } from "../src/commands/admin.ts";
+import { doctorText, embedderText, settleChecks } from "../src/commands/admin.ts";
 
 const NOW = Date.parse("2026-10-24T23:00:00Z");
 const SLICE = { at: NOW - 60_000, chunks: 360, ms: 30_000, remaining: 63_000, error: null };
@@ -43,5 +43,42 @@ describe("status: embedder line", () => {
     const text = embedderText(stopped, NOW);
     expect(text).toStartWith("watcher not running");
     expect(text).toContain("12.0 chunks/s");
+  });
+});
+
+describe("doctor: deliberately skipped install steps", () => {
+  const probes = [
+    { name: "config", ok: true, detail: "/cfg/config.json" },
+    {
+      name: "watcher (launchd)",
+      step: "watcher" as const,
+      ok: false,
+      detail: "not loaded",
+      hint: "memindex install",
+    },
+    { name: "agent hooks", step: "hooks" as const, ok: false, detail: "not installed" },
+  ];
+
+  test("a failing check of a skipped step is SKIPPED, and the verdict passes", () => {
+    const checks = settleChecks(probes, ["watcher", "hooks"]);
+    expect(checks.map((c) => c.status)).toEqual(["ok", "skipped", "skipped"]);
+    expect(checks[1]).toEqual({
+      name: "watcher (launchd)",
+      status: "skipped",
+      detail: "not loaded (skipped: memindex install --skip-watch)",
+    });
+    const text = doctorText(checks);
+    expect(text).toContain("[SKIPPED] watcher (launchd)");
+    expect(text).not.toContain("FAIL");
+    expect(text).toContain("All checks passed; 2 skipped on purpose.");
+  });
+
+  test("the same check fails when the step was not skipped", () => {
+    const checks = settleChecks(probes.slice(0, 2), []);
+    expect(checks.map((c) => c.status)).toEqual(["ok", "failed"]);
+    const text = doctorText(checks);
+    expect(text).toContain("[FAIL   ] watcher (launchd) — not loaded");
+    expect(text).toContain("fix: memindex install");
+    expect(text).toContain("One or more checks failed.");
   });
 });

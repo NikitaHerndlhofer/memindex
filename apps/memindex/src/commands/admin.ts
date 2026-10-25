@@ -11,6 +11,7 @@ import {
   probeStore,
   pullEmbedModel,
   redactUrl,
+  type SkippableStep,
   type StoreProbe,
   storeConfig,
 } from "@memindex/engine";
@@ -216,18 +217,49 @@ export const pathCommand = defineCommand({
   }),
 });
 
-interface Check {
+/** One observation; `step` names the install step it verifies, if the user can skip that step. */
+interface Probe {
   readonly name: string;
   readonly ok: boolean;
   readonly detail: string;
   readonly hint?: string;
+  readonly step?: SkippableStep;
+}
+
+export interface Check {
+  readonly name: string;
+  readonly status: "ok" | "failed" | "skipped";
+  readonly detail: string;
+  readonly hint?: string;
+}
+
+const SKIP_FLAG: Readonly<Record<SkippableStep, string>> = {
+  ollama: "--skip-ollama",
+  watcher: "--skip-watch",
+  hooks: "--skip-hooks",
+};
+
+/** A failing probe of a step the last install skipped on purpose is reported as skipped, not failed. */
+export function settleChecks(probes: readonly Probe[], skipped: readonly SkippableStep[]): Check[] {
+  return probes.map(({ ok, step, detail, ...rest }) => {
+    if (ok) return { ...rest, status: "ok", detail };
+    if (step && skipped.includes(step)) {
+      const { hint: _, ...named } = rest;
+      return {
+        ...named,
+        status: "skipped",
+        detail: `${detail} (skipped: memindex install ${SKIP_FLAG[step]})`,
+      };
+    }
+    return { ...rest, status: "failed", detail };
+  });
 }
 
 /** `fix`: pull a missing embed model (streamed progress on stderr). */
 export async function runDoctor(
   opts: { readonly fix?: boolean } = {},
 ): Promise<{ ok: boolean; checks: Check[] }> {
-  const checks: Check[] = [];
+  const checks: Probe[] = [];
   let cfg: MemindexConfig;
   try {
     cfg = await loadConfig();
@@ -239,7 +271,7 @@ export async function runDoctor(
       detail: describeError(e),
       hint: "fix or delete the config file",
     });
-    return { ok: false, checks };
+    return { ok: false, checks: settleChecks(checks, []) };
   }
   let embed = await checkEmbedder({ config: cfg });
   if (opts.fix && !embed.ok && embed.reason === "model_missing") {
@@ -261,6 +293,7 @@ export async function runDoctor(
   }
   checks.push({
     name: `Ollama at ${cfg.ollama.host}`,
+    step: "ollama",
     ok: embed.ok,
     detail: embed.ok ? `${embed.model} available` : embed.detail,
     ...(embed.ok
@@ -285,14 +318,18 @@ export async function runDoctor(
   const loaded = launchAgentLoaded();
   checks.push({
     name: "watcher (launchd)",
+    step: "watcher",
     ok: loaded,
     detail: `${PLIST_LABEL} ${loaded ? "loaded" : "not loaded"}`,
     ...(loaded ? {} : { hint: "memindex install" }),
   });
-  return { ok: checks.every((c) => c.ok), checks };
+  if (cfg.skippedSteps.includes("hooks"))
+    checks.push({ name: "agent hooks", step: "hooks", ok: false, detail: "not installed" });
+  const settled = settleChecks(checks, cfg.skippedSteps);
+  return { ok: settled.every((c) => c.status !== "failed"), checks: settled };
 }
 
-async function databaseChecks(cfg: MemindexConfig, checks: Check[]): Promise<void> {
+async function databaseChecks(cfg: MemindexConfig, checks: Probe[]): Promise<void> {
   const label = storeLabel(cfg.store);
   try {
     const server = await probeStore(storeConfig(cfg));
@@ -347,12 +384,20 @@ async function databaseChecks(cfg: MemindexConfig, checks: Check[]): Promise<voi
   }
 }
 
+const LABEL: Readonly<Record<Check["status"], string>> = { ok: "ok", failed: "FAIL", skipped: "SKIPPED" };
+
 export function doctorText(checks: readonly Check[]): string {
   const lines = checks.flatMap((c) => [
-    `  [${c.ok ? "ok  " : "FAIL"}] ${c.name} — ${c.detail}`,
-    ...(c.ok || !c.hint ? [] : [`         fix: ${c.hint}`]),
+    `  [${LABEL[c.status].padEnd(7)}] ${c.name} — ${c.detail}`,
+    ...(c.status !== "failed" || !c.hint ? [] : [`            fix: ${c.hint}`]),
   ]);
-  return `${lines.join("\n")}\n\n${checks.every((c) => c.ok) ? "All checks passed." : "One or more checks failed."}\n`;
+  const skipped = checks.filter((c) => c.status === "skipped").length;
+  const verdict = checks.some((c) => c.status === "failed")
+    ? "One or more checks failed."
+    : skipped > 0
+      ? `All checks passed; ${skipped} skipped on purpose.`
+      : "All checks passed.";
+  return `${lines.join("\n")}\n\n${verdict}\n`;
 }
 
 export const doctorCommand = defineCommand({

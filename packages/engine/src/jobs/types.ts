@@ -10,7 +10,7 @@ export interface JobContext {
   readonly log: Log;
   /** Directory for duplicate-work lock files; null disables them. */
   readonly lockDir: string | null;
-  /** Job-specific arguments, e.g. `{ path }` for an import. Validated by the job. */
+  /** Job-specific arguments (`memindex jobs run --param k=v`). Validated by the job. */
   readonly args: Readonly<Record<string, string>>;
 }
 
@@ -40,8 +40,8 @@ export interface JobReport {
 
 /**
  * The one job shape. Convergent jobs are predicates over data: `pending` is a query, running twice
- * is a no-op, a crash just resumes. One-shot jobs (imports, store copy) keep a resumable cursor in
- * the `job_run` ledger; build them with `oneShotJob`.
+ * is a no-op, a crash just resumes. One-shot jobs keep a resumable cursor in the `job_run` ledger;
+ * build them with `oneShotJob`.
  */
 export interface JobDef {
   readonly id: string;

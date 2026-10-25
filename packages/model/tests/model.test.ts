@@ -57,7 +57,7 @@ describe("keys", () => {
     expect(chunkId(k, turnKey("b1"), 0, 0)).toHaveLength(24);
   });
 
-  test("content hash equals sha256 of embed text (swrag embed_text_hash compatible)", () => {
+  test("content hash equals sha256 of embed text", () => {
     expect(contentHash("hello")).toBe(
       "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824" as ReturnType<typeof contentHash>,
     );

@@ -2,13 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { producerId } from "@memindex/model";
 import { chunkHash, type ItemSnapshot, planItemWrite, turnHash } from "../src/core/plan.ts";
 import { facetColumn } from "../src/facets.ts";
-import {
-  bindNamedParams,
-  normalizeSql,
-  referencedRelations,
-  singleStatement,
-  splitLeadingWith,
-} from "../src/sqltext.ts";
+import { bindNamedParams, normalizeSql, singleStatement, splitLeadingWith } from "../src/sqltext.ts";
 import { CUR, chunksOf, draftOf, L1, rev, turnOf, writeOf } from "./contract.ts";
 
 const P = producerId("11111111-1111-4111-8111-111111111111");
@@ -97,12 +91,6 @@ describe("sqltext", () => {
     expect(r.values).toEqual([1, "x"]);
     expect(bindNamedParams("SELECT :k", { k: null }, 7).text).toBe("SELECT $8");
     expect(() => bindNamedParams("SELECT :missing", {})).toThrow(/missing/);
-  });
-
-  test("relations after FROM/JOIN, quoted and qualified", () => {
-    expect(
-      referencedRelations(`SELECT 'from recording' FROM main."Recording" r JOIN segment s ON true`),
-    ).toEqual(["recording", "segment"]);
   });
 
   test("leading WITH, single statement, normalization", () => {

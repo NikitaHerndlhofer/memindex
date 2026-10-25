@@ -6,13 +6,14 @@ import {
   openArchive,
   probeStore,
   pullEmbedModel,
+  saveSkippedSteps,
   saveStore,
   storeConfig,
 } from "@memindex/engine";
 import { defineCommand } from "citty";
 import { action, log, out, skillTrackFile, withArchive } from "../context.ts";
 import { UsageError } from "../errors.ts";
-import { installLaunchAgent, uninstallLaunchAgent } from "../install/launchd.ts";
+import { installLaunchAgent } from "../install/launchd.ts";
 import { installSkill, skillTargets } from "../install/skill.ts";
 import { clackUi, plainUi } from "../install/ui.ts";
 import { installPaths, runInstall } from "../install/wizard.ts";
@@ -75,7 +76,7 @@ export const installCommand = defineCommand({
     ui.intro(`memindex ${VERSION} install`);
     const results = await runInstall(
       {
-        paths: installPaths(config, env),
+        paths: installPaths(config),
         config,
         bin: args.bin ?? stableBinPath(),
         ui,
@@ -94,20 +95,18 @@ export const installCommand = defineCommand({
           health: () => checkEmbedder({ config }),
           pull: (onProgress) => pullEmbedModel(onProgress, { config }),
         },
-        launchd: {
-          install: installLaunchAgent,
-          uninstall: (label) => uninstallLaunchAgent(config.paths.home, label),
-        },
+        launchd: { install: installLaunchAgent },
+        saveSkipped: (steps) => saveSkippedSteps(config, steps),
         openArchive: (url) =>
           openArchive({ mode: "write", config: withUrl(url), binaryVersion: VERSION, log }),
       },
       {
         ...(args.url ? { url: args.url } : {}),
-        skip: {
-          ollama: args["skip-ollama"] === true,
-          watch: args["skip-watch"] === true,
-          hooks: args["skip-hooks"] === true,
-        },
+        skip: [
+          ...(args["skip-ollama"] ? ["ollama" as const] : []),
+          ...(args["skip-watch"] ? ["watcher" as const] : []),
+          ...(args["skip-hooks"] ? ["hooks" as const] : []),
+        ],
       },
     );
     const failed = results.filter((r) => r.status === "failed");

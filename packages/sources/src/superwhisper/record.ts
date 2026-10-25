@@ -16,7 +16,7 @@ import {
 import { z } from "zod";
 
 const CAPTURE_FORMAT = "superwhisper-row";
-export const SWRAG_CAPTURE_FORMAT = "swrag-legacy";
+const ARCHIVE_CAPTURE_FORMAT = "superwhisper-archive";
 const MEETING_FALLBACK_MIN_MS = 10 * 60 * 1000;
 
 const NullableString = z
@@ -131,7 +131,7 @@ export function revisionHash(r: {
 
 /**
  * Super Whisper writes `datetime` as UTC without a zone ("2026-05-27 18:39:33.470") or as
- * "…T…Z". Same normalization as swrag's `datetime_iso` (strftime('%Y-%m-%dT%H:%M:%fZ', datetime)).
+ * "…T…Z". Both normalize to the same ISO string.
  */
 export function normalizeDatetime(s: string): IsoTime {
   let v = s.trim().replace(" ", "T");
@@ -139,13 +139,13 @@ export function normalizeDatetime(s: string): IsoTime {
   return isoTime(v);
 }
 
-/** swrag `chunkSourceBody`: llmResult, else rawResult; blank ⇒ "". */
+/** The embedded body: llmResult, else rawResult; blank ⇒ "". */
 function sourceBody(r: Row): string {
   const body = r.llmResult || r.rawResult || "";
   return body.trim().length === 0 ? "" : body;
 }
 
-/** Super Whisper's own word count of the body (swrag's `wordCountForChunking`). */
+/** Super Whisper's own word count of the body. */
 function sourceBodyWordCount(r: Row): number {
   if (r.llmResult) return r.llmWordCount ?? 0;
   if (r.rawResult) return r.rawWordCount ?? 0;
@@ -201,10 +201,10 @@ function speakerTurns(metaJson: unknown, startedAt: IsoTime): TurnDraft[] {
 }
 
 /**
- * A `recording` row of the legacy superwhisper-rag archive, snake_case, as `memindex import swrag`
- * stores it. Most of these recordings no longer exist in Super Whisper, so the row is all there is.
+ * An archived recording: a snake_case copy of the Super Whisper row, stored as a capture.
+ * Most of these recordings no longer exist in Super Whisper, so the row is all there is.
  */
-const SwragRowSchema = z.looseObject({
+const ArchivedRecordingRowSchema = z.looseObject({
   recording_id_hex: z.string().min(1),
   folder_name: z.string(),
   datetime: z.string(),
@@ -226,11 +226,11 @@ const SwragRowSchema = z.looseObject({
   audio_path: NullableString,
   audio_hash: NullableString,
 });
-export type SwragRow = z.input<typeof SwragRowSchema>;
+type ArchivedRecordingRow = z.input<typeof ArchivedRecordingRowSchema>;
 
-/** meta.json is gone for most legacy recordings, so language/app come from the columns swrag copied out of it. */
-export function swragCaptureBody(input: SwragRow): CaptureBody {
-  const r = SwragRowSchema.parse(input);
+/** meta.json is gone for most archived recordings, so language/app come from the columns copied out of it. */
+function archivedRecordingBody(input: ArchivedRecordingRow): CaptureBody {
+  const r = ArchivedRecordingRowSchema.parse(input);
   return {
     row: {
       recordingIdHex: r.recording_id_hex,
@@ -267,7 +267,7 @@ export function swragCaptureBody(input: SwragRow): CaptureBody {
 /** Every capture format this plugin has written; stored captures are replayed through it forever. */
 const CAPTURE_BODIES: Readonly<Record<string, (body: unknown) => CaptureBody>> = {
   [CAPTURE_FORMAT]: (body) => CaptureBodySchema.parse(body),
-  [SWRAG_CAPTURE_FORMAT]: (body) => swragCaptureBody(body as SwragRow),
+  [ARCHIVE_CAPTURE_FORMAT]: (body) => archivedRecordingBody(body as ArchivedRecordingRow),
 };
 
 export function buildCapture(body: CaptureBody): Capture {
