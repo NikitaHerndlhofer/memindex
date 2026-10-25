@@ -611,11 +611,13 @@ export class PgWriteStore extends PgReadStore implements WriteStore {
     },
   ): Promise<readonly PendingEmbed[]> {
     const exclude = opts.exclude ?? [];
-    const pending = (preferOnly: boolean, limit: number, skip: readonly string[]) => sql`
+    type Pass = "titles" | "prefer" | "rest";
+    const pending = (pass: Pass, limit: number, skip: readonly string[]) => sql`
       SELECT DISTINCT ON (c.content_hash) c.content_hash, coalesce(c.embed_text, c.text) AS embed_text
       FROM memindex.chunk c JOIN memindex.item i ON i.item_key = c.item_key
       WHERE c.embed AND i.superseded_by IS NULL
-        ${preferOnly ? sql`AND c.item_key IN (SELECT jsonb_array_elements_text(${JSON.stringify(opts.prefer ?? [])}::jsonb))` : sql``}
+        ${pass === "titles" ? sql`AND c.kind = 'title'` : sql``}
+        ${pass === "prefer" ? sql`AND c.item_key IN (SELECT jsonb_array_elements_text(${JSON.stringify(opts.prefer ?? [])}::jsonb))` : sql``}
         ${skip.length ? sql`AND c.content_hash NOT IN (SELECT jsonb_array_elements_text(${JSON.stringify(skip)}::jsonb))` : sql``}
         AND NOT EXISTS (SELECT 1 FROM memindex.chunk_vector v WHERE v.space = ${space.id}::text AND v.content_hash = c.content_hash)
       ORDER BY c.content_hash
@@ -633,12 +635,18 @@ export class PgWriteStore extends PgReadStore implements WriteStore {
       await tx.execute(sql`SET LOCAL enable_hashjoin = off`);
       await tx.execute(sql`SET LOCAL enable_seqscan = off`);
       await tx.execute(sql`SET LOCAL jit = off`);
-      const first = opts.prefer?.length ? parse(await tx.execute(pending(true, limit, exclude))) : [];
-      if (first.length >= limit) return first;
-      const rest = parse(
-        await tx.execute(pending(false, limit - first.length, [...exclude, ...first.map((p) => p.hash)])),
-      );
-      return [...first, ...rest];
+      // Titles first: few, and the hybrid title list only sees embedded ones.
+      const passes: Pass[] = opts.prefer?.length ? ["titles", "prefer", "rest"] : ["titles", "rest"];
+      const out: PendingEmbed[] = [];
+      for (const pass of passes) {
+        if (out.length >= limit) break;
+        out.push(
+          ...parse(
+            await tx.execute(pending(pass, limit - out.length, [...exclude, ...out.map((p) => p.hash)])),
+          ),
+        );
+      }
+      return out;
     });
   }
 

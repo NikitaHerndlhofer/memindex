@@ -775,6 +775,21 @@ export function runStoreContract(name: string, backend: () => ContractBackend): 
         (await rows(w.run("SELECT kind FROM chunks WHERE chunk_id = :id", { params: { id: chunkId } })))[0]
           ?.kind;
 
+      test("the embed backlog hands out titles before any other chunk", async () => {
+        const w = await writer();
+        const words = (n: number) => Array.from({ length: 12 }, (_, i) => `word${n}x${i}`).join(" ");
+        for (let n = 0; n < 6; n++) {
+          const d = draftOf(CUR, `bl${n}`, [turnOf("a", words(n)), turnOf("b", words(n + 100))], {
+            title: `Backlog title ${n}`,
+          });
+          await w.apply(withTitle(writeOf(CUR, L1, d, rev("1"))));
+        }
+        const first = await w.vectors.backlog(SPACE, { limit: 6 });
+        expect(first.map((p) => p.embedText).sort()).toEqual(
+          Array.from({ length: 6 }, (_, n) => `Backlog title ${n}`).sort(),
+        );
+      });
+
       test("the archive backfill writes the title chunk ingest writes, so re-ingesting a migrated item changes nothing", async () => {
         const w = await writer();
         const named = draftOf(CUR, "named", [turnOf("a", "can you check the deploy"), turnOf("b", "sure")], {
