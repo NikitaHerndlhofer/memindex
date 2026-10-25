@@ -87,6 +87,10 @@ export async function writePlist(t: PlistTemplate): Promise<string> {
 export async function installLaunchAgent(t: PlistTemplate): Promise<string> {
   const path = await writePlist(t);
   bootout(PLIST_LABEL);
+  // bootout returns while the old watcher is still in its shutdown grace; bootstrapping before launchd
+  // drops the service fails with "Bootstrap failed: 5: Input/output error".
+  for (const deadline = Date.now() + 15_000; launchAgentLoaded() && Date.now() < deadline; )
+    await Bun.sleep(250);
   const r = run(["launchctl", "bootstrap", `gui/${uid()}`, path], { timeoutMs: 10_000 });
   if (r.exitCode !== 0) throw new Error(`launchctl bootstrap failed: ${r.stderr.trim()}`);
   return path;
