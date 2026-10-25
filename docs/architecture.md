@@ -38,7 +38,8 @@ The design honors these:
   parser changes. Version bumps are data updates that an older binary can't lower.
 - **Each machine is a producer** with a UUID minted once and kept in its config. No Ollama call
   happens inside a database transaction.
-- **Ollama bge-m3 is the only embedder**, and agent-chat tool output is embedded.
+- **Ollama bge-m3 is the only embedder.** Agent-chat chunks cover the conversation and what the
+  agent did; bulk tool output stays in turns, unchunked (see `packages/chunkers/src/tools.ts`).
 - **Install is check-and-fix.** Each `memindex install` step is idempotent and reports ok, skipped
   or failed; a failed step doesn't stop the rest. Steps the user turns off (`--skip-ollama`,
   `--skip-watch`, `--skip-hooks`) are saved in the config, and `memindex doctor` reports them as
@@ -250,8 +251,10 @@ enforcement, and that a settled watcher uses at most 1% CPU and 0.6 s of cputime
   file, or their own server).
 - Recordings rank by their best chunks; there is no per-recording summary vector.
 - Producers need the database reachable to ingest.
-- Tool output is embedded, so a fresh archive's one-time embedding catch-up is ~23 h, in exchange
-  for semantic search over tool output.
+- Bulk tool output (terminal output, file contents, page snapshots, search listings, code-change
+  bodies) is kept in turns but not chunked, which leaves about a quarter of the chunks. A search
+  can't match words that appear only in that output. Terminal commands, `edited <path>` and
+  `read <path>` markers, and results of other tools (web, Slack, Linear…) are still indexed.
 - Ollama stays the only embedder, in exchange for a single binary with no Python sidecar.
 
 ## Open questions and risks

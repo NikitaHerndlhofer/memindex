@@ -10,7 +10,8 @@
  *                  earlier in the turn), else lines
  *   { language }   a fixed language table
  * Pieces overlap by `overlapTokens`, keep the raw piece as `text` and embed `[<kind>[ <tool>] i/n]\n…`, which
- * fits in `maxTokens`. Keyword-only parts are never split.
+ * fits in `maxTokens`. Keyword-only parts are never split. Before any of that, `tools` condenses or drops
+ * tool parts and `scrub` cleans the text (see tools.ts).
  *
  * `recursiveTextChunker` is the same machinery with one strategy for every part: plain unstructured text.
  */
@@ -36,6 +37,7 @@ import {
   fits,
   type TokenCounter,
 } from "./tokens.ts";
+import { condenseParts, scrubText, type ToolTable } from "./tools.ts";
 
 export const PARTS_STOCK_VERSION = 2;
 export const RECURSIVE_TEXT_STOCK_VERSION = 2;
@@ -84,6 +86,10 @@ export interface PartsChunkerOptions extends StockIdentity, BudgetOptions {
   readonly split?: Readonly<Partial<Record<PartKind, SplitStrategy>>>;
   /** For kinds `split` doesn't name. Default "prose". */
   readonly defaultSplit?: SplitStrategy;
+  /** Per tool name, what of its traffic is indexed (see tools.ts). Default: everything. */
+  readonly tools?: ToolTable;
+  /** Drop terminal colour codes and replace base64 payloads before chunking. Default false. */
+  readonly scrub?: boolean;
 }
 
 export interface RecursiveTextChunkerOptions extends StockIdentity, BudgetOptions {
@@ -97,6 +103,8 @@ interface Resolved {
   readonly overlapTokens: number;
   readonly split: Readonly<Record<PartKind, SplitStrategy>>;
   readonly keywordOnly: readonly PartKind[];
+  readonly tools: ToolTable;
+  readonly scrub: boolean;
 }
 
 /** Language hints for "fenced-code" / "tool-output" parts. */
@@ -143,9 +151,13 @@ function piecesChunker(id: Chunker["id"], counter: TokenCounter, r: Resolved): C
     chunk(item) {
       const budget = { counter, maxTokens: r.maxTokens, overlapTokens: r.overlapTokens };
       const langs = partLanguages(item, r.split);
+      const condensed = condenseParts(item, r.tools);
       const out: ChunkDraft[] = [];
       for (const turn of item.turns) {
-        turn.parts.forEach((part, partIdx) => {
+        turn.parts.forEach((original, partIdx) => {
+          const kept = condensed.has(original) ? condensed.get(original) : original;
+          if (!kept) return;
+          const part = r.scrub ? { ...kept, text: scrubText(kept.text) } : kept;
           if (part.text.trim().length === 0) return;
           const base = {
             turnKey: turn.key,
@@ -163,7 +175,7 @@ function piecesChunker(id: Chunker["id"], counter: TokenCounter, r: Resolved): C
             pieceEmbedText(piece, part.kind, part.toolName, i, n);
           const pieces = fitPieces(
             part.text,
-            separators(strategy, langs.get(part) ?? null),
+            separators(strategy, langs.get(original) ?? null),
             strategy === "prose" ? "end" : "start",
             budget,
             embed,
@@ -180,7 +192,10 @@ function piecesChunker(id: Chunker["id"], counter: TokenCounter, r: Resolved): C
   };
 }
 
-function resolve(o: BudgetOptions, split: (kind: PartKind) => SplitStrategy): Resolved {
+function resolve(
+  o: BudgetOptions & { readonly tools?: ToolTable; readonly scrub?: boolean },
+  split: (kind: PartKind) => SplitStrategy,
+): Resolved {
   const maxTokens = o.maxTokens ?? DEFAULT_MAX_TOKENS;
   const overlapTokens = o.overlapTokens ?? DEFAULT_OVERLAP_TOKENS;
   checkBudget(maxTokens, overlapTokens);
@@ -190,13 +205,21 @@ function resolve(o: BudgetOptions, split: (kind: PartKind) => SplitStrategy): Re
     overlapTokens,
     split: Object.fromEntries(PART_KINDS.map((k) => [k, split(k)])) as Record<PartKind, SplitStrategy>,
     keywordOnly: [...(o.keywordOnly ?? ["transcript_raw"])].sort(),
+    tools: Object.fromEntries(Object.entries(o.tools ?? {}).filter(([, mode]) => mode !== "full")),
+    scrub: o.scrub ?? false,
   };
 }
 
 export function partsChunker(options: PartsChunkerOptions): Chunker {
   const table = { ...DEFAULT_PART_SPLITS, ...options.split };
   const r = resolve(options, (k) => table[k] ?? options.defaultSplit ?? "prose");
-  return piecesChunker(stockId(options, PARTS_STOCK_VERSION, { stock: "parts", ...r }), options.tokens, r);
+  const { tools, scrub, ...base } = r;
+  const config = Object.keys(tools).length > 0 || scrub ? { ...base, tools, scrub } : base;
+  return piecesChunker(
+    stockId(options, PARTS_STOCK_VERSION, { stock: "parts", ...config }),
+    options.tokens,
+    r,
+  );
 }
 
 export function recursiveTextChunker(options: RecursiveTextChunkerOptions): Chunker {

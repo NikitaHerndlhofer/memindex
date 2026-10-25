@@ -17,7 +17,7 @@ import { makeKit } from "./helpers.ts";
 const IDS = {
   dictation: "superwhisper.dictation@1+0b15d0",
   speaker: "superwhisper.speaker@2+b93db1",
-  parts: "agent-chat.parts@2+97a038",
+  parts: "agent-chat.parts@2+d93840",
 };
 
 test("one source list; the registry derives facets, plugin-owned chunkers and watch paths", () => {
