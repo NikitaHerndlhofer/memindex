@@ -9,6 +9,7 @@
   "dependencies": {
     "@memindex/chunkers": "workspace:*",
     "@memindex/model": "workspace:*",
+    "@memindex/tokenizer": "workspace:*",
     "zod": "^4.4.3"
   }
 }

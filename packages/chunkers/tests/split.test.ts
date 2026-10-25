@@ -2,6 +2,8 @@ import { describe, expect, test } from "bun:test";
 import { RecursiveCharacterTextSplitter, SupportedTextSplitterLanguages } from "@langchain/textsplitters";
 import { DIFF_SEPARATORS, LINE_SEPARATORS, languageSeparators, splitText } from "../src/split.ts";
 
+const chars = (s: string) => s.length;
+
 /** Deterministic pseudo-random corpus: code-ish, prose-ish and log-ish text with every separator kind. */
 function corpus(seed: number, n: number): string {
   const tokens = [
@@ -56,7 +58,7 @@ describe("the sync port equals langchain's RecursiveCharacterTextSplitter", () =
         const lib = new RecursiveCharacterTextSplitter({ ...size, separators: [...separators] });
         for (let seed = 1; seed <= 12; seed++) {
           const text = corpus(seed * 7919 + name.length, 400 + seed * 120);
-          expect(splitText(text, { ...size, separators, placement: "start" })).toEqual(
+          expect(splitText(text, { ...size, separators, placement: "start", length: chars })).toEqual(
             await lib.splitText(text),
           );
         }
@@ -68,8 +70,27 @@ describe("the sync port equals langchain's RecursiveCharacterTextSplitter", () =
 test("placement end keeps the separator with the piece it closes", () => {
   const text = "One two three. Four five six. Seven eight nine.";
   expect(
-    splitText(text, { chunkSize: 20, chunkOverlap: 0, separators: [". ", " ", ""], placement: "end" }),
+    splitText(text, {
+      chunkSize: 20,
+      chunkOverlap: 0,
+      separators: [". ", " ", ""],
+      placement: "end",
+      length: chars,
+    }),
   ).toEqual(["One two three.", "Four five six.", "Seven eight nine."]);
+});
+
+test("a zero-width RegExp separator cuts before its match without consuming it", () => {
+  const text = "Speaker 1: hello there. Speaker 2: hi. Speaker 1: bye now.";
+  expect(
+    splitText(text, {
+      chunkSize: 30,
+      chunkOverlap: 0,
+      separators: [/(?=Speaker \d+:)/, " ", ""],
+      placement: "end",
+      length: chars,
+    }),
+  ).toEqual(["Speaker 1: hello there.", "Speaker 2: hi.", "Speaker 1: bye now."]);
 });
 
 test("character fallback never splits a surrogate pair", () => {
@@ -78,6 +99,7 @@ test("character fallback never splits a surrogate pair", () => {
     chunkOverlap: 0,
     separators: [""],
     placement: "start",
+    length: chars,
   });
   expect(pieces.join("")).toBe("😀".repeat(30));
   for (const p of pieces) expect(p.isWellFormed()).toBe(true);

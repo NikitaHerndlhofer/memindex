@@ -76,7 +76,7 @@ SELECT * FROM memindex.search('rate limiter', :query_embedding, 'bge-m3@1024', '
 - `TurnKey` is source-native, never a position, so inserting a message mid-chat changes nothing
   else.
 - `ChunkId = h(item, turn, part, sub)`. `ContentHash = sha256(embedText)`, which equals swrag's
-  `embed_text_hash`, so legacy vectors import byte for byte.
+  `embed_text_hash`, so legacy vectors import byte for byte wherever the chunk is unchanged.
 - Items carry promoted cross-source columns (`kind`, `title`, `origin`, `started_at`,
   `parent_key`, `supersede_key`); everything else is per-plugin `meta` (jsonb, zod-typed),
   exposed through generated `<source>_items` facet views. Adding a plugin needs no migration.
@@ -88,21 +88,32 @@ SELECT * FROM memindex.search('rate limiter', :query_embedding, 'bge-m3@1024', '
 Each plugin declares its chunkers per item kind (`chunkers: { default, ...perKind }`). It either
 configures a stock chunker from `@memindex/chunkers` or implements `Chunker` itself.
 - **Stock chunkers** (`@memindex/chunkers`, depends only on `model`): `partsChunker` (structured
-  turns and parts), `wordWindowChunker`, `speakerTurnChunker`, `recursiveTextChunker`, plus the
-  primitives they're built from (word windows, a synchronous port of `@langchain/textsplitters`
-  checked against the library, `[kind i/n]` headers) for custom chunkers.
+  turns and parts), `transcriptChunker`, `speakerTurnChunker`, `recursiveTextChunker`, plus the
+  primitives they're built from (a synchronous port of `@langchain/textsplitters` checked against
+  the library, `fitPieces`, `[kind i/n]` headers) for custom chunkers.
+- **Sizes are bge-m3 tokens.** No embedded chunk's embed text (embed prefix and `[kind i/n]`
+  header included) exceeds `maxTokens` (default 512): bge-m3 retrieves best on passages of that
+  length, and one vector over more averages its topics away. Chunkers get the tokenizer injected
+  as a `TokenCounter`; `@memindex/tokenizer` counts exactly what Ollama counts (BOS and EOS
+  included) from bge-m3's SentencePiece model, embedded in the binary. Splitting stays
+  structure-aware and only the size test is tokens; pieces overlap by `overlapTokens` (default
+  64). Keyword-only parts (raw transcripts) are never split or budgeted.
 - **Ids are derived, never hand-bumped.** A stock chunker's id is
-  `<owner>.<name>@<stockVersion>+<hash of resolved options>`, so changing an option or fixing a
-  stock algorithm re-chunks exactly the items it affects. Custom chunkers choose their own
-  versioned id with `chunkerId(...)`.
+  `<owner>.<name>@<stockVersion>+<hash of resolved options>`, and the resolved options include the
+  tokenizer's id and the budget, so changing an option, the tokenizer or a stock algorithm
+  re-chunks exactly the items it affects. Custom chunkers choose their own versioned id with
+  `chunkerId(...)`.
+- **Super Whisper chunks are no longer byte-identical to swrag.** Imported swrag vectors are
+  reused only where the chunk is unchanged (dictations whose `[mode] body` fits the budget); the
+  rest re-embed.
 - The engine asks `registry.chunkerFor(source, kind)`; stored items whose chunker id is unknown or
   outdated are stale, and the `rechunk` job converts them.
 
-| In-tree chunker                              | Stock factory        | Behavior                                                                                                                                                                                                       |
-| -------------------------------------------- | -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `agent-chat.parts@1+…` (cursor, claude-code) | `partsChunker`       | One chunk per part, so tool output never shares a vector with prose. Parts over 1,800 chars split with 200 overlap: code by language, tool output by lines, diffs by hunks, prose by paragraphs then sentences |
-| `superwhisper.words@1+…` (dictation)         | `wordWindowChunker`  | Byte-identical to swrag (300 words, 50 overlap, one chunk up to 500 words, embed prefix `[{meta.mode}] `), so imported vectors match. Raw transcripts are keyword-only                                         |
-| `superwhisper.speaker@1+…` (meeting)         | `speakerTurnChunker` | The summary uses the dictation chunker; speaker turns from `meta.json` embed as `[speaker] text`, long turns window at ~300 words, tiny turns are keyword-only                                                 |
+| In-tree chunker                              | Stock factory        | Behavior                                                                                                                                                                                                     |
+| -------------------------------------------- | -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `agent-chat.parts@2+…` (cursor, claude-code) | `partsChunker`       | One chunk per part, so tool output never shares a vector with prose. Parts over 512 tokens split with 64 overlap: code by language, tool output by lines, diffs by hunks, prose by paragraphs then sentences |
+| `superwhisper.dictation@1+…` (dictation)     | `transcriptChunker`  | The body whole when `[{meta.mode}] body` fits 512 tokens, else windows cut at speaker labels, then paragraphs and sentence ends, with 64 overlap. Raw transcripts are keyword-only                           |
+| `superwhisper.speaker@2+…` (meeting)         | `speakerTurnChunker` | The summary uses the dictation chunker; speaker turns from `meta.json` embed as `[speaker] text`, turns over 512 tokens window at sentence ends, tiny turns are keyword-only                                 |
 
 ## Multi-producer correctness
 
@@ -148,7 +159,8 @@ Use a maintained library wherever it replaces code we would otherwise own.
 | Migrations               | drizzle-kit + Supabase CLI             | drizzle-kit generates Supabase-prefixed files into `supabase/migrations`; the CLI is the only migrator and ledger                                                                                        |
 | Ollama                   | `ollama` (official client)             | `embed` with `truncate`/`keep_alive`, plus `list` and streamed `pull` for `install` and `doctor`                                                                                                         |
 | Retries, concurrency     | `p-retry`, `p-limit`                   | Backoff on Ollama and network errors; bounded parallel embedding                                                                                                                                         |
-| Prose and code splitting | `@langchain/textsplitters`             | Recursive and language-aware splitters inside `parts@1`; `words@1` stays custom to match swrag byte for byte                                                                                             |
+| Prose and code splitting | `@langchain/textsplitters`             | Separator tables and the recursive algorithm behind every stock chunker, sized in tokens                                                                                                                 |
+| Token counting           | own SentencePiece Unigram counter      | Reads bge-m3's `sentencepiece.bpe.model` (5 MB, embedded); matches Ollama's counts exactly. `@huggingface/tokenizers` approximates the normalizer (3% of texts off) and costs ~240 MB of RSS vs ~32 MB   |
 | CLI                      | `citty` + `consola` + `@clack/prompts` | Commands, leveled logging, and the `install` wizard                                                                                                                                                      |
 | File watching            | `chokidar`                             | Small trees only (Super Whisper, Claude Code): under Bun its setup is quadratic in directories and blocks the event loop, so trees over 300 directories and Cursor (hooks plus a 15-min poll) are polled |
 | Validation               | `zod`                                  | Config, plugin meta, Ollama and hook payloads at the boundary                                                                                                                                            |
@@ -161,7 +173,7 @@ settle, exposing `search` and recipes as tools.
 ## Packages
 
 ```
-model  ←  chunkers  ←  sources
+model  ←  chunkers  ←  sources  →  tokenizer
 model  ←  embed
 model  ←  store
 model, store, embed, sources  ←  engine  ←  apps/memindex

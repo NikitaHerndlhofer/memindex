@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { contentHash, type ItemDraft, isoTime, type Sighting } from "@memindex/model";
 import type { Location } from "../src/index.ts";
-import { speakerChunker, wordsChunker } from "../src/superwhisper/chunkers.ts";
+import { dictationChunker, speakerChunker } from "../src/superwhisper/chunkers.ts";
 import { superwhisper } from "../src/superwhisper/index.ts";
 import { normalizeDatetime } from "../src/superwhisper/record.ts";
 import { cleanup, collect, commit, makeKit, type TestKit, tmpCopy } from "./helpers.ts";
@@ -151,7 +151,7 @@ describe("superwhisper read", () => {
       durationMs: 12400,
       bodyWordCount: 19,
     });
-    const chunks = d ? wordsChunker.chunk(d) : [];
+    const chunks = d ? dictationChunker.chunk(d) : [];
     expect(chunks[0]?.contentHash).toBe(
       contentHash("[Universal] I need to ship the BullMQ notifications fix today."),
     );
@@ -241,11 +241,11 @@ describe("superwhisper read", () => {
     ] as never);
     expect(superwhisper.parseCapture?.(JSON.parse(JSON.stringify(r.capture)))).toEqual(d);
 
-    const legacySummary = wordsChunker.chunk(v1).filter((c) => c.embed);
+    const legacySummary = dictationChunker.chunk(v1).filter((c) => c.embed);
     expect(speakerChunker.chunk(d).filter((c) => c.turnKey === "u")).toEqual(legacySummary);
   });
 
-  test("a meeting without speaker segments keeps the single `u` turn and chunks like words@1", async () => {
+  test("a meeting without speaker segments keeps the single `u` turn and chunks like a dictation", async () => {
     const metaPath = join(dir, "superwhisper", "recordings", "1779000100", "meta.json");
     const meta = JSON.parse(readFileSync(metaPath, "utf8"));
     writeFileSync(metaPath, JSON.stringify({ ...meta, kind: "meeting" }));
@@ -254,7 +254,7 @@ describe("superwhisper read", () => {
     expect(d.turns.map((t) => [t.key, t.parts.map((p) => p.kind)])).toEqual([
       ["u", ["transcript", "transcript_raw"]],
     ] as never);
-    expect(speakerChunker.chunk(d)).toEqual(wordsChunker.chunk(d));
+    expect(speakerChunker.chunk(d)).toEqual(dictationChunker.chunk(d));
   });
 
   test("vanished row reads as null", async () => {

@@ -33,6 +33,9 @@
         "@langchain/textsplitters": "^1.0.2",
         "@memindex/model": "workspace:*",
       },
+      "devDependencies": {
+        "@memindex/tokenizer": "workspace:*",
+      },
     },
     "packages/embed": {
       "name": "@memindex/embed",
@@ -68,6 +71,7 @@
       "dependencies": {
         "@memindex/chunkers": "workspace:*",
         "@memindex/model": "workspace:*",
+        "@memindex/tokenizer": "workspace:*",
         "zod": "^4.4.3",
       },
     },
@@ -86,9 +90,6 @@
     "packages/tokenizer": {
       "name": "@memindex/tokenizer",
       "version": "0.1.0",
-      "dependencies": {
-        "@huggingface/tokenizers": "0.2.0",
-      },
     },
   },
   "packages": {
@@ -183,8 +184,6 @@
     "@esbuild/win32-ia32": ["@esbuild/win32-ia32@0.25.12", "", { "os": "win32", "cpu": "ia32" }, "sha512-HkqnmmBoCbCwxUKKNPBixiWDGCpQGVsrQfJoVGYLPT41XWF8lHuE5N6WhVia2n4o5QK5M4tYr21827fNhi4byQ=="],
 
     "@esbuild/win32-x64": ["@esbuild/win32-x64@0.25.12", "", { "os": "win32", "cpu": "x64" }, "sha512-alJC0uCZpTFrSL0CCDjcgleBXPnCrEAhTBILpeAp7M/OFgoqtAetfBzX0xM00MUsVVPpVjlPuMbREqnZCXaTnA=="],
-
-    "@huggingface/tokenizers": ["@huggingface/tokenizers@0.2.0", "", {}, "sha512-LidMHe1FpcSYH4vcSjXooda34pC0M8m1gmDOv7SQi6Iv+ib1zX7J3sHBCC9/3FPCkn2k1b55FneVqMRxrr99pg=="],
 
     "@langchain/core": ["@langchain/core@1.3.0", "", { "dependencies": { "@cfworker/json-schema": "^4.0.2", "@standard-schema/spec": "^1.1.0", "js-tiktoken": "^1.0.12", "langsmith": ">=0.11.0 <1.0.0", "mustache": "^4.2.0", "p-queue": "^6.6.2", "zod": "^3.25.76 || ^4" } }, "sha512-ZiS8USsHdO8ZVFh0m8Rs6v2BvqBEvfFicG66zxdF4rGgXSJjk0d0sLnnFZCx3RXPUvP8ybTJgPlNfkJGs1J7BA=="],
 

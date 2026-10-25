@@ -26,6 +26,10 @@
       "entry": ["scripts/*.ts", "tests/**/*.test.ts"],
       "project": ["src/**/*.ts", "scripts/**/*.ts", "tests/**/*.ts"]
     },
+    "packages/tokenizer": {
+      "entry": ["scripts/*.ts", "tests/**/*.test.ts"],
+      "project": ["src/**/*.ts", "scripts/**/*.ts", "tests/**/*.ts"]
+    },
     "packages/store": {
       "entry": ["scripts/*.ts", "tests/**/*.test.ts"],
       "project": ["src/**/*.ts", "scripts/**/*.ts", "tests/**/*.ts"]

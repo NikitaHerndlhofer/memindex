@@ -1,6 +1,6 @@
 /**
- * `partsChunker` — structured turns (agent chats). Every part is its own chunk, so a tool result never
- * shares a vector with the prose around it. A part of at most `maxChars` stays whole with text = embedText
+ * `partsChunker`: structured turns (agent chats). Every part is its own chunk, so a tool result never
+ * shares a vector with the prose around it. A part of at most `maxTokens` stays whole with text = embedText
  * (acrag's content hash for an unsplit part). A longer part is split by its kind's strategy:
  *   "prose"        paragraphs → sentences → words (separators kept with the sentence they end)
  *   "lines"        blank lines → lines → words
@@ -9,7 +9,8 @@
  *   "tool-output"  the language of the file the part's tool call named (by toolCallId, else the last call
  *                  earlier in the turn), else lines
  *   { language }   a fixed language table
- * Pieces overlap by `overlap` characters, keep the raw piece as `text` and embed `[<kind>[ <tool>] i/n]\n…`.
+ * Pieces overlap by `overlapTokens`, keep the raw piece as `text` and embed `[<kind>[ <tool>] i/n]\n…`, which
+ * fits in `maxTokens`. Keyword-only parts are never split.
  *
  * `recursiveTextChunker` is the same machinery with one strategy for every part: plain unstructured text.
  */
@@ -26,16 +27,18 @@ import {
 import { type StockIdentity, stockId } from "./config.ts";
 import { argsLanguage, fenceLanguage } from "./language.ts";
 import { pieceEmbedText } from "./pieces.ts";
+import { DIFF_SEPARATORS, LINE_SEPARATORS, languageSeparators, PROSE_SEPARATORS } from "./split.ts";
 import {
-  DIFF_SEPARATORS,
-  LINE_SEPARATORS,
-  languageSeparators,
-  PROSE_SEPARATORS,
-  splitText,
-} from "./split.ts";
+  checkBudget,
+  DEFAULT_MAX_TOKENS,
+  DEFAULT_OVERLAP_TOKENS,
+  fitPieces,
+  fits,
+  type TokenCounter,
+} from "./tokens.ts";
 
-export const PARTS_STOCK_VERSION = 1;
-export const RECURSIVE_TEXT_STOCK_VERSION = 1;
+export const PARTS_STOCK_VERSION = 2;
+export const RECURSIVE_TEXT_STOCK_VERSION = 2;
 
 export type SplitStrategy =
   | "prose"
@@ -65,33 +68,33 @@ export const DEFAULT_PART_SPLITS: Readonly<Partial<Record<PartKind, SplitStrateg
   tool_call: "lines",
 };
 
-export interface PartsChunkerOptions extends StockIdentity {
-  /** Parts of at most this many characters stay whole. Default 1800. */
-  readonly maxChars?: number;
-  /** Characters shared by consecutive pieces. Default 200. */
-  readonly overlap?: number;
-  /** Per part kind; merged over DEFAULT_PART_SPLITS. */
-  readonly split?: Readonly<Partial<Record<PartKind, SplitStrategy>>>;
-  /** For kinds `split` doesn't name. Default "prose". */
-  readonly defaultSplit?: SplitStrategy;
+interface BudgetOptions {
+  /** The embedding model's tokenizer. */
+  readonly tokens: TokenCounter;
+  /** No embedded chunk counts more tokens than this. Default 512. */
+  readonly maxTokens?: number;
+  /** Tokens shared by consecutive pieces. Default 64. */
+  readonly overlapTokens?: number;
   /** Part kinds that are never embedded. Default ["transcript_raw"]. */
   readonly keywordOnly?: readonly PartKind[];
 }
 
-export interface RecursiveTextChunkerOptions extends StockIdentity {
-  /** Default 1800. */
-  readonly maxChars?: number;
-  /** Default 200. */
-  readonly overlap?: number;
+export interface PartsChunkerOptions extends StockIdentity, BudgetOptions {
+  /** Per part kind; merged over DEFAULT_PART_SPLITS. */
+  readonly split?: Readonly<Partial<Record<PartKind, SplitStrategy>>>;
+  /** For kinds `split` doesn't name. Default "prose". */
+  readonly defaultSplit?: SplitStrategy;
+}
+
+export interface RecursiveTextChunkerOptions extends StockIdentity, BudgetOptions {
   /** One strategy for every part. Default "prose". */
   readonly split?: SplitStrategy;
-  /** Default ["transcript_raw"]. */
-  readonly keywordOnly?: readonly PartKind[];
 }
 
 interface Resolved {
-  readonly maxChars: number;
-  readonly overlap: number;
+  readonly tokens: string;
+  readonly maxTokens: number;
+  readonly overlapTokens: number;
   readonly split: Readonly<Record<PartKind, SplitStrategy>>;
   readonly keywordOnly: readonly PartKind[];
 }
@@ -133,41 +136,17 @@ function separators(strategy: SplitStrategy, lang: SupportedTextSplitterLanguage
   }
 }
 
-/** Pieces of one part; a single element means the part stays whole. */
-export function splitPiece(
-  text: string,
-  strategy: SplitStrategy,
-  lang: SupportedTextSplitterLanguage | null,
-  maxChars: number,
-  overlap: number,
-): string[] {
-  if (text.length <= maxChars) return [text];
-  const pieces = splitText(text, {
-    chunkSize: maxChars,
-    chunkOverlap: overlap,
-    separators: separators(strategy, lang),
-    placement: strategy === "prose" ? "end" : "start",
-  });
-  return pieces.length > 1 ? pieces : [text];
-}
-
-function piecesChunker(id: Chunker["id"], r: Resolved): Chunker {
+function piecesChunker(id: Chunker["id"], counter: TokenCounter, r: Resolved): Chunker {
   const keywordOnly = new Set<PartKind>(r.keywordOnly);
   return {
     id,
     chunk(item) {
+      const budget = { counter, maxTokens: r.maxTokens, overlapTokens: r.overlapTokens };
       const langs = partLanguages(item, r.split);
       const out: ChunkDraft[] = [];
       for (const turn of item.turns) {
         turn.parts.forEach((part, partIdx) => {
           if (part.text.trim().length === 0) return;
-          const pieces = splitPiece(
-            part.text,
-            r.split[part.kind],
-            langs.get(part) ?? null,
-            r.maxChars,
-            r.overlap,
-          );
           const base = {
             turnKey: turn.key,
             partIdx,
@@ -175,13 +154,24 @@ function piecesChunker(id: Chunker["id"], r: Resolved): Chunker {
             toolName: part.toolName ?? null,
             embed: !keywordOnly.has(part.kind),
           };
-          if (pieces.length === 1) {
+          if (!base.embed || fits(budget, part.text)) {
             out.push(chunkDraft(item.key, { ...base, sub: 0, text: part.text }));
             return;
           }
+          const strategy = r.split[part.kind];
+          const embed = (piece: string, i: number, n: number) =>
+            pieceEmbedText(piece, part.kind, part.toolName, i, n);
+          const pieces = fitPieces(
+            part.text,
+            separators(strategy, langs.get(part) ?? null),
+            strategy === "prose" ? "end" : "start",
+            budget,
+            embed,
+          );
           pieces.forEach((text, sub) => {
-            const embedText = pieceEmbedText(text, part.kind, part.toolName, sub, pieces.length);
-            out.push(chunkDraft(item.key, { ...base, sub, text, embedText }));
+            out.push(
+              chunkDraft(item.key, { ...base, sub, text, embedText: embed(text, sub, pieces.length) }),
+            );
           });
         });
       }
@@ -190,16 +180,14 @@ function piecesChunker(id: Chunker["id"], r: Resolved): Chunker {
   };
 }
 
-function resolve(
-  o: { maxChars?: number; overlap?: number; keywordOnly?: readonly PartKind[] },
-  split: (kind: PartKind) => SplitStrategy,
-): Resolved {
-  const maxChars = o.maxChars ?? 1800;
-  const overlap = o.overlap ?? 200;
-  if (overlap >= maxChars) throw new Error("chunker: overlap must be < maxChars");
+function resolve(o: BudgetOptions, split: (kind: PartKind) => SplitStrategy): Resolved {
+  const maxTokens = o.maxTokens ?? DEFAULT_MAX_TOKENS;
+  const overlapTokens = o.overlapTokens ?? DEFAULT_OVERLAP_TOKENS;
+  checkBudget(maxTokens, overlapTokens);
   return {
-    maxChars,
-    overlap,
+    tokens: o.tokens.id,
+    maxTokens,
+    overlapTokens,
     split: Object.fromEntries(PART_KINDS.map((k) => [k, split(k)])) as Record<PartKind, SplitStrategy>,
     keywordOnly: [...(o.keywordOnly ?? ["transcript_raw"])].sort(),
   };
@@ -208,7 +196,7 @@ function resolve(
 export function partsChunker(options: PartsChunkerOptions): Chunker {
   const table = { ...DEFAULT_PART_SPLITS, ...options.split };
   const r = resolve(options, (k) => table[k] ?? options.defaultSplit ?? "prose");
-  return piecesChunker(stockId(options, PARTS_STOCK_VERSION, { stock: "parts", ...r }), r);
+  return piecesChunker(stockId(options, PARTS_STOCK_VERSION, { stock: "parts", ...r }), options.tokens, r);
 }
 
 export function recursiveTextChunker(options: RecursiveTextChunkerOptions): Chunker {
@@ -217,11 +205,13 @@ export function recursiveTextChunker(options: RecursiveTextChunkerOptions): Chun
   return piecesChunker(
     stockId(options, RECURSIVE_TEXT_STOCK_VERSION, {
       stock: "recursive-text",
-      maxChars: r.maxChars,
-      overlap: r.overlap,
+      tokens: r.tokens,
+      maxTokens: r.maxTokens,
+      overlapTokens: r.overlapTokens,
       split: strategy,
       keywordOnly: r.keywordOnly,
     }),
+    options.tokens,
     r,
   );
 }

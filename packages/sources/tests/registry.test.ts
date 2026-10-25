@@ -15,16 +15,16 @@ import { buildRegistry, SOURCES, type SourcePlugin } from "../src/index.ts";
 import { makeKit } from "./helpers.ts";
 
 const IDS = {
-  words: "superwhisper.words@1+cfd3a4",
-  speaker: "superwhisper.speaker@1+406149",
-  parts: "agent-chat.parts@1+05ca51",
+  dictation: "superwhisper.dictation@1+0b15d0",
+  speaker: "superwhisper.speaker@2+b93db1",
+  parts: "agent-chat.parts@2+97a038",
 };
 
 test("one source list; the registry derives facets, plugin-owned chunkers and watch paths", () => {
   const reg = buildRegistry();
   expect(reg.all.map((s) => s.id as string)).toEqual(["superwhisper", "cursor", "claude-code"]);
   const chunkerOf = (source: string, kind: ItemKind) => reg.chunkerFor(sourceId(source), kind).id as string;
-  expect(chunkerOf("superwhisper", "dictation")).toBe(IDS.words);
+  expect(chunkerOf("superwhisper", "dictation")).toBe(IDS.dictation);
   expect(chunkerOf("superwhisper", "meeting")).toBe(IDS.speaker);
   expect(chunkerOf("cursor", "conversation")).toBe(IDS.parts);
   expect(chunkerOf("claude-code", "conversation")).toBe(IDS.parts);
@@ -68,7 +68,7 @@ test("rejects unknown ids, duplicate sources, clashing chunker ids, and capture 
   expect(() => buildRegistry([sw, sw])).toThrow(/duplicate source id: superwhisper/);
   const impostor: Chunker = { id: sw.chunkers.default.id, chunk: () => [] };
   expect(() => buildRegistry([sw, { ...cur, chunkers: { default: impostor } }])).toThrow(
-    /chunker id superwhisper\.words@1\+[0-9a-f]{6} is already taken/,
+    /chunker id superwhisper\.dictation@1\+[0-9a-f]{6} is already taken/,
   );
   expect(() =>
     buildRegistry([{ ...cur, chunkers: { default: cur.chunkers.default, meeting: sw.chunkers.default } }]),

@@ -1,7 +1,7 @@
 /**
  * @memindex/chunkers — stock chunkers plugins can configure, and the primitives they are built from for
  * plugins that write their own. Pure and synchronous; depends only on the model and the textsplitters'
- * separator tables.
+ * separator tables. Sizes are in the embedding model's tokens, counted by an injected `TokenCounter`.
  *
  * Stock chunker ids are derived: `<owner>.<name>@<STOCK_VERSION>+<config hash>` (see config.ts). A custom
  * chunker sets its own id with `chunkerId(name, version)` and bumps the version when its output changes.
@@ -27,7 +27,6 @@ export {
   type RecursiveTextChunkerOptions,
   recursiveTextChunker,
   type SplitStrategy,
-  splitPiece,
 } from "./parts.ts";
 export { pieceEmbedText, pieceHeader } from "./pieces.ts";
 export {
@@ -40,19 +39,21 @@ export {
   LINE_SEPARATORS,
   languageSeparators,
   PROSE_SEPARATORS,
+  type Separator,
   type SplitOptions,
   splitText,
 } from "./split.ts";
 export {
-  SWRAG_SPEAKER_LABEL,
-  SWRAG_WINDOWS,
-  tokenize,
-  type WordWindow,
-  type WordWindowOptions,
-  wordWindows,
-} from "./windows.ts";
+  DEFAULT_MAX_TOKENS,
+  DEFAULT_OVERLAP_TOKENS,
+  fitPieces,
+  fits,
+  type TokenBudget,
+  type TokenCounter,
+} from "./tokens.ts";
 export {
-  WORD_WINDOW_STOCK_VERSION,
-  type WordWindowChunkerOptions,
-  wordWindowChunker,
-} from "./word-window.ts";
+  SPEAKER_LABEL,
+  TRANSCRIPT_STOCK_VERSION,
+  type TranscriptChunkerOptions,
+  transcriptChunker,
+} from "./transcript.ts";

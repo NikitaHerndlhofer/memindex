@@ -3,7 +3,7 @@ import { dirname, join } from "node:path";
 import { itemKey, locationId, parseItemKey, type Sighting, sourceId } from "@memindex/model";
 import type { Location, SourceDb, SourceKit, SourcePlugin } from "../contract.ts";
 import { blobToString, hashFile, mtimeNs, parseJson } from "../util.ts";
-import { speakerChunker, wordsChunker } from "./chunkers.ts";
+import { dictationChunker, speakerChunker } from "./chunkers.ts";
 import {
   buildCapture,
   type CaptureBody,
@@ -101,7 +101,7 @@ export const superwhisper: SourcePlugin<SuperWhisperMeta> = {
   kinds: ["dictation", "meeting"],
   meta: SuperWhisperMeta,
   facets: { mode: "text", appName: "text", language: "text", durationMs: "real" },
-  chunkers: { default: wordsChunker, meeting: speakerChunker },
+  chunkers: { default: dictationChunker, meeting: speakerChunker },
   /**
    * 1: one turn `u` (transcript + transcript_raw) for every recording.
    * 2: meetings with diarized segments get speaker turns `s<n>` plus the summary as turn `u`.

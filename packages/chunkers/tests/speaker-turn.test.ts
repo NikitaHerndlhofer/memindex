@@ -1,7 +1,8 @@
 import { expect, test } from "bun:test";
 import { type ItemDraft, isoTime, itemKey, turnKey } from "@memindex/model";
-import { speakerTurnChunker, wordWindowChunker } from "../src/index.ts";
-import { meeting, words } from "./configs.ts";
+import { bgeM3 } from "@memindex/tokenizer";
+import { speakerTurnChunker, transcriptChunker } from "../src/index.ts";
+import { dictation, meeting } from "./configs.ts";
 import { golden, plain } from "./golden.ts";
 
 const g = golden("speaker-turn-golden");
@@ -15,12 +16,17 @@ test("golden: chunks and the derived id are pinned byte for byte", () => {
 test("the summary turn is delegated to the nested chunker, whose id is part of this one's", () => {
   const chunks = meeting.chunk(MEETING).filter((c) => c.turnKey === "u");
   expect(chunks.length).toBeGreaterThan(1);
-  expect(chunks).toEqual(words.chunk({ ...MEETING, turns: MEETING.turns.slice(0, 1) }) as never);
+  expect(chunks).toEqual(dictation.chunk({ ...MEETING, turns: MEETING.turns.slice(0, 1) }) as never);
   for (const c of chunks) expect(c.embedText).toBe(`[Meeting] ${c.text}`);
-  const otherSummary = wordWindowChunker({ owner: "test", name: "words", embedPrefix: "" });
-  expect(speakerTurnChunker({ owner: "test", name: "speaker", summary: otherSummary }).id).not.toBe(
-    meeting.id,
-  );
+  const otherSummary = transcriptChunker({
+    owner: "test",
+    name: "dictation",
+    tokens: bgeM3,
+    embedPrefix: "",
+  });
+  expect(
+    speakerTurnChunker({ owner: "test", name: "speaker", summary: otherSummary, tokens: bgeM3 }).id,
+  ).not.toBe(meeting.id);
 });
 
 test("a transcript without speaker turns chunks exactly like its summary chunker", () => {
@@ -39,10 +45,10 @@ test("a transcript without speaker turns chunks exactly like its summary chunker
       },
     ],
   };
-  expect(meeting.chunk(undiarized)).toEqual(words.chunk(undiarized) as never);
+  expect(meeting.chunk(undiarized)).toEqual(dictation.chunk(undiarized) as never);
 });
 
-test("speaker turns: [speaker] prefix, ~300-word windows ending at sentences, short turns keyword-only", () => {
+test("speaker turns: [speaker] prefix, windows ending at sentences within 512 tokens, short turns keyword-only", () => {
   const chunks = meeting.chunk(MEETING).filter((c) => c.turnKey !== "u");
   expect(chunks.find((c) => c.turnKey === "s0")).toMatchObject({
     text: "Yeah, okay.",
@@ -55,9 +61,9 @@ test("speaker turns: [speaker] prefix, ~300-word windows ending at sentences, sh
     expect(c.embed).toBe(true);
     expect(c.embedText).toBe(`[Nikita] ${c.text}`);
     expect(c.text.endsWith(".")).toBe(true);
-    const n = c.text.split(/\s+/).length;
-    if (i < long.length - 1) expect(n).toBeGreaterThan(250);
-    expect(n).toBeLessThan(400);
+    const tokens = bgeM3.count(c.embedText);
+    expect(tokens).toBeLessThanOrEqual(512);
+    if (i < long.length - 1) expect(tokens).toBeGreaterThan(400);
   });
 });
 
@@ -85,6 +91,12 @@ test("minEmbedWords: a turn of exactly that many words is embedded; one fewer is
   });
   expect(meeting.chunk(turnOf(4))[0]?.embed).toBe(true);
   expect(meeting.chunk(turnOf(3))[0]?.embed).toBe(false);
-  const strict = speakerTurnChunker({ owner: "test", name: "speaker", summary: words, minEmbedWords: 1 });
+  const strict = speakerTurnChunker({
+    owner: "test",
+    name: "speaker",
+    summary: dictation,
+    tokens: bgeM3,
+    minEmbedWords: 1,
+  });
   expect(strict.chunk(turnOf(1))[0]?.embed).toBe(true);
 });

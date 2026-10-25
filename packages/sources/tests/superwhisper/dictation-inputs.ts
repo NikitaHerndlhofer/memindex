@@ -1,4 +1,33 @@
-/** Deterministic chunker inputs shared by the golden generator and the golden test. */
+/** Deterministic dictation bodies shared by the golden generator and the golden test. */
+
+import { type ItemDraft, isoTime, itemKey, turnKey } from "@memindex/model";
+
+export function dictationItem(body: string): ItemDraft {
+  return {
+    key: itemKey("superwhisper", "ABC"),
+    kind: "dictation",
+    title: null,
+    startedAt: isoTime(0),
+    endedAt: null,
+    origin: null,
+    parentKey: null,
+    tags: [],
+    supersedeKey: null,
+    meta: { mode: "Meeting" },
+    turns: [
+      {
+        key: turnKey("u"),
+        role: "speaker",
+        at: null,
+        speaker: null,
+        parts: [
+          { kind: "transcript", text: body },
+          { kind: "transcript_raw", text: body.toLowerCase() },
+        ],
+      },
+    ],
+  };
+}
 
 function repeatWords(n: number, prefix = "word"): string {
   return Array.from({ length: n }, (_, i) => `${prefix}${i}`).join(" ");
@@ -57,7 +86,7 @@ function withAt(n: number, at: Record<number, string>): string {
   return Array.from({ length: n }, (_, i) => at[i] ?? `w${i}`).join(" ");
 }
 
-export const WORD_INPUTS: Record<string, string> = {
+export const DICTATION_INPUTS: Record<string, string> = {
   empty: "",
   below: repeatWords(499),
   atThreshold: repeatWords(500),

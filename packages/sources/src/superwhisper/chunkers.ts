@@ -1,36 +1,33 @@
 /**
- * Super Whisper's chunkers: stock chunkers configured for swrag compatibility.
+ * Super Whisper's chunkers, sized in bge-m3 tokens: no embedded chunk exceeds 512, prefix included.
  *
- *   dictation  word windows with swrag's parameters, `[<mode>] ` embed prefix and Super Whisper's own word
- *              count, so chunks and content hashes equal swrag's and imported vectors are reused.
- *   meeting    speaker turns; the summary turn `u` goes through the dictation chunker, so a summary keeps
- *              the hash it had as a single-turn recording. A meeting without speaker segments has only `u`
- *              and chunks exactly like a dictation.
+ *   dictation  the body whole when `[<mode>] <body>` fits, else windows cut at speaker labels and sentence
+ *              ends; the raw transcript is keyword-only.
+ *   meeting    speaker turns embedded as `[<speaker>] <text>`; the summary turn `u` goes through the
+ *              dictation chunker, so a meeting without speaker segments chunks exactly like a dictation.
  */
 
-import { SWRAG_WINDOWS, speakerTurnChunker, wordWindowChunker } from "@memindex/chunkers";
+import { speakerTurnChunker, transcriptChunker } from "@memindex/chunkers";
+import { bgeM3 } from "@memindex/tokenizer";
 
-export const wordsChunker = wordWindowChunker({
+export const dictationChunker = transcriptChunker({
   owner: "superwhisper",
-  name: "words",
-  words: SWRAG_WINDOWS.size,
-  overlap: SWRAG_WINDOWS.overlap,
-  singleUpTo: SWRAG_WINDOWS.threshold,
-  boundaryWindow: SWRAG_WINDOWS.boundaryWindow,
-  speakerLabel: SWRAG_WINDOWS.speakerLabel,
+  name: "dictation",
+  tokens: bgeM3,
+  maxTokens: 512,
+  overlapTokens: 64,
   embedPrefix: "[{meta.mode}] ",
-  wordCountMeta: "bodyWordCount",
   keywordOnly: ["transcript_raw"],
 });
 
 export const speakerChunker = speakerTurnChunker({
   owner: "superwhisper",
   name: "speaker",
-  summary: wordsChunker,
+  summary: dictationChunker,
   summaryTurn: "u",
-  words: 300,
-  overlap: 50,
-  singleUpTo: 400,
+  tokens: bgeM3,
+  maxTokens: 512,
+  overlapTokens: 64,
   minEmbedWords: 4,
   embedPrefix: "[{speaker}] ",
 });

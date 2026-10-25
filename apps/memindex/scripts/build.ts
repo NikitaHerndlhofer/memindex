@@ -21,6 +21,8 @@ function sh(cmd: string[], cwd: string): void {
   if (r.exitCode !== 0) throw new Error(`failed (${r.exitCode}): ${cmd.join(" ")}`);
 }
 
+sh(["bun", join(ROOT, "..", "..", "packages", "tokenizer", "scripts", "fetch.ts")], ROOT);
+
 if (existsSync(DIST)) rmSync(DIST, { recursive: true, force: true });
 mkdirSync(DIST, { recursive: true });
 

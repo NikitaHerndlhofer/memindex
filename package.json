@@ -11,7 +11,9 @@
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "lint": "biome lint .",
     "lint:knip": "knip",
-    "format": "biome format --write ."
+    "format": "biome format --write .",
+    "postinstall": "bun packages/tokenizer/scripts/fetch.ts",
+    "check:tokenizer": "bun scripts/check-tokenizer.ts"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.4.15",

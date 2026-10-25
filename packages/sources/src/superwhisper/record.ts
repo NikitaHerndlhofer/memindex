@@ -145,7 +145,7 @@ function sourceBody(r: Row): string {
   return body.trim().length === 0 ? "" : body;
 }
 
-/** swrag `wordCountForChunking`. */
+/** Super Whisper's own word count of the body (swrag's `wordCountForChunking`). */
 function sourceBodyWordCount(r: Row): number {
   if (r.llmResult) return r.llmWordCount ?? 0;
   if (r.rawResult) return r.rawWordCount ?? 0;
