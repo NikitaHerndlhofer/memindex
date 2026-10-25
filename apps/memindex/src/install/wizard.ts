@@ -12,6 +12,7 @@ import {
 } from "@memindex/engine";
 import COMPOSE from "../../../../docker-compose.yml" with { type: "text" };
 import type { RunResult } from "../spawn.ts";
+import { ACCESS_FILE_ENV, type AccessReport, accessNotice } from "./documents.ts";
 import type { PlistTemplate } from "./launchd.ts";
 import { ensureOllama } from "./ollama.ts";
 import { installSkill, skillTargets } from "./skill.ts";
@@ -21,6 +22,8 @@ export interface InstallPaths {
   readonly home: string;
   readonly watchLog: string;
   readonly skillTrackFile: string;
+  /** Where the watcher reports its macOS Documents permission (see documents.ts). */
+  readonly superwhisperAccess: string;
 }
 
 export function installPaths(config: MemindexConfig): InstallPaths {
@@ -29,6 +32,7 @@ export function installPaths(config: MemindexConfig): InstallPaths {
     home,
     watchLog: join(config.paths.logDir, "watch.log"),
     skillTrackFile: join(config.paths.configDir, "skills.json"),
+    superwhisperAccess: join(config.paths.configDir, "superwhisper-access.json"),
   };
 }
 
@@ -42,6 +46,9 @@ export interface InstallDeps {
   readonly sh: (cmd: readonly string[], opts?: { readonly timeoutMs?: number }) => Promise<RunResult>;
   readonly which: (name: string) => string | null;
   readonly sleep: (ms: number) => Promise<void>;
+  readonly now: () => number;
+  /** The watcher's latest report from paths.superwhisperAccess. */
+  readonly readAccess: () => Promise<AccessReport | null>;
   readonly store: {
     probe(url: string): Promise<StoreProbe>;
     /** true when it changed the database's search_path. */
@@ -77,6 +84,10 @@ export interface StepResult {
 }
 
 const BREW_TIMEOUT_MS = 20 * 60_000;
+/** How long a starting watcher gets to report on Super Whisper, and how long a person gets to answer macOS. */
+const ACCESS_REPORT_WAIT_MS = 20_000;
+const ACCESS_ANSWER_WAIT_MS = 3 * 60_000;
+const ACCESS_POLL_MS = 500;
 const COMPOSE_URL = "postgresql://memindex:memindex@127.0.0.1:54329/memindex";
 
 const tail = (r: RunResult) =>
@@ -141,7 +152,10 @@ export async function runInstall(d: InstallDeps, opts: InstallOptions): Promise<
   else await ollama(d, s);
 
   if (opts.skip.includes("watcher")) s.skip("watcher", "--skip-watch");
-  else await watcher(d, s);
+  else {
+    const since = d.now();
+    if (await watcher(d, s)) await documents(d, s, since);
+  }
 
   if (!url || !migrated) {
     s.skip("hooks", "the archive is not migrated");
@@ -311,18 +325,61 @@ async function ollama(d: InstallDeps, s: Steps): Promise<void> {
   }
 }
 
-async function watcher(d: InstallDeps, s: Steps): Promise<void> {
+async function watcher(d: InstallDeps, s: Steps): Promise<boolean> {
   const task = d.ui.task("Watcher (launchd)");
   try {
     if (!d.bin) {
       s.skip("watcher", "no stable memindex binary path (development run?); pass --bin", task);
-      return;
+      return false;
     }
-    const plist = await d.launchd.install({ binPath: d.bin, home: d.paths.home, logPath: d.paths.watchLog });
+    const plist = await d.launchd.install({
+      binPath: d.bin,
+      home: d.paths.home,
+      logPath: d.paths.watchLog,
+      env: { [ACCESS_FILE_ENV]: d.paths.superwhisperAccess },
+    });
     s.ok("watcher", plist, task);
+    return true;
   } catch (e) {
     s.fail("watcher", errorMessage(e), task);
+    return false;
   }
+}
+
+/**
+ * macOS asks before the watcher first reads ~/Documents (Super Whisper's recordings), and asks again for
+ * every new binary path, so every upgrade. Waiting for the new watcher's report puts that dialog on
+ * screen while the person who ran install is still at the keyboard.
+ */
+async function documents(d: InstallDeps, s: Steps, since: number): Promise<void> {
+  const task = d.ui.task("Super Whisper recordings (macOS permission)");
+  const fresh = async () => {
+    const r = await d.readAccess();
+    return r && Date.parse(r.at) >= since ? r : null;
+  };
+  let deadline = since + ACCESS_REPORT_WAIT_MS;
+  let asked = false;
+  let r = await fresh();
+  while ((r === null || r.state === "waiting") && d.now() < deadline) {
+    const notice = r && accessNotice(r);
+    if (notice && !asked) {
+      asked = true;
+      deadline = d.now() + ACCESS_ANSWER_WAIT_MS;
+      task.update(`macOS asks whether memindex may read Super Whisper's recordings: ${notice.fix}`);
+    }
+    await d.sleep(ACCESS_POLL_MS);
+    r = await fresh();
+  }
+  const notice = r && accessNotice(r);
+  if (!r)
+    s.skip(
+      "documents",
+      "the watcher has not reported on Super Whisper yet; `memindex doctor` shows it",
+      task,
+    );
+  else if (notice) s.fail("documents", `${notice.problem}; fix: ${notice.fix}`, task);
+  else if (r.state === "absent") s.skip("documents", "no Super Whisper on this Mac", task);
+  else s.ok("documents", `the watcher can read ${r.dir}`, task);
 }
 
 async function hooks(d: InstallDeps, s: Steps, archive: Pick<Archive, "hooks">): Promise<void> {

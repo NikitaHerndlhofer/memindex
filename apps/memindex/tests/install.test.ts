@@ -122,6 +122,23 @@ describe("launchd plist", () => {
       StandardErrorPath: logPath,
     });
   });
+
+  test("extra environment reaches the watcher next to PATH and HOME", async () => {
+    const path = await writePlist({
+      binPath: "/opt/homebrew/bin/memindex",
+      logPath: join(dir, "logs", "watch.log"),
+      home: dir,
+      env: { MEMINDEX_SUPERWHISPER_ACCESS_FILE: "/cfg/a&b.json" },
+    });
+    const parsed = JSON.parse(
+      Bun.spawnSync(["plutil", "-convert", "json", "-o", "-", path]).stdout.toString(),
+    ) as { EnvironmentVariables: Record<string, string> };
+    expect(parsed.EnvironmentVariables).toEqual({
+      PATH: "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin",
+      HOME: dir,
+      MEMINDEX_SUPERWHISPER_ACCESS_FILE: "/cfg/a&b.json",
+    });
+  });
 });
 
 describe("ensureOllama", () => {

@@ -14,6 +14,8 @@ export interface PlistTemplate {
   readonly home: string;
   /** Seconds between relaunches; stops a crash-looping binary from melting the CPU. */
   readonly throttleSeconds?: number;
+  /** Set for the watcher next to PATH and HOME. */
+  readonly env?: Readonly<Record<string, string>>;
 }
 
 /**
@@ -53,7 +55,9 @@ export function renderPlist(t: PlistTemplate): string {
     <key>PATH</key>
     <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
     <key>HOME</key>
-    <string>${escapeXml(t.home)}</string>
+    <string>${escapeXml(t.home)}</string>${Object.entries(t.env ?? {})
+      .map(([k, v]) => `\n    <key>${escapeXml(k)}</key>\n    <string>${escapeXml(v)}</string>`)
+      .join("")}
   </dict>
 </dict>
 </plist>

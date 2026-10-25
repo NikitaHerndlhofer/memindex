@@ -1,6 +1,10 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { EmbedActivity, EmbedRuntime } from "@memindex/engine";
-import { doctorText, embedderText, settleChecks } from "../src/commands/admin.ts";
+import { doctorText, documentsCheck, embedderText, settleChecks } from "../src/commands/admin.ts";
+import { type AccessReport, readAccessReport } from "../src/install/documents.ts";
 
 const NOW = Date.parse("2026-10-24T23:00:00Z");
 const SLICE = { at: NOW - 60_000, chunks: 360, ms: 30_000, remaining: 63_000, error: null };
@@ -80,5 +84,61 @@ describe("doctor: deliberately skipped install steps", () => {
     expect(text).toContain("[FAIL   ] watcher (launchd) — not loaded");
     expect(text).toContain("fix: memindex install");
     expect(text).toContain("One or more checks failed.");
+  });
+});
+
+describe("doctor: the watcher's macOS Documents permission for Super Whisper", () => {
+  let dir: string;
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "memindex-access-"));
+  });
+  afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+  const report = (state: AccessReport["state"], pid = process.pid): AccessReport => ({
+    state,
+    pid,
+    binary: "/opt/homebrew/Cellar/memindex/0.2.0/bin/memindex",
+    dir: "/Users/me/Documents/superwhisper/recordings",
+    at: "2026-10-25T18:15:08.000Z",
+  });
+
+  test("waiting says plainly that memindex waits for macOS, and how to grant it", () => {
+    const text = doctorText(
+      settleChecks(
+        [documentsCheck(report("waiting"))].flatMap((c) => c ?? []),
+        [],
+      ),
+    );
+    expect(text).toContain(
+      "memindex is waiting for macOS permission to read /Users/me/Documents/superwhisper/recordings",
+    );
+    expect(text).toContain('click Allow in "memindex would like to access files in your Documents folder"');
+    expect(text).toContain("One or more checks failed.");
+  });
+
+  test("denied fails with the System Settings switch; granted passes; absent says nothing", () => {
+    const denied = doctorText(
+      settleChecks(
+        [documentsCheck(report("denied"))].flatMap((c) => c ?? []),
+        [],
+      ),
+    );
+    expect(denied).toContain("macOS denied memindex reading");
+    expect(denied).toContain("fix: System Settings > Privacy & Security > Files and Folders > memindex");
+    expect(documentsCheck(report("granted"))?.ok).toBe(true);
+    expect(documentsCheck(report("absent"))).toBeNull();
+    expect(documentsCheck(null)).toBeNull();
+  });
+
+  test("a report from a watcher that has exited, or a malformed one, counts as no report", async () => {
+    const file = join(dir, "superwhisper-access.json");
+    expect(await readAccessReport(file)).toBeNull();
+    writeFileSync(file, JSON.stringify(report("waiting")));
+    expect(await readAccessReport(file)).toEqual(report("waiting"));
+    const exited = Bun.spawnSync(["true"]).pid;
+    writeFileSync(file, JSON.stringify(report("waiting", exited)));
+    expect(await readAccessReport(file)).toBeNull();
+    writeFileSync(file, "{not json");
+    expect(await readAccessReport(file)).toBeNull();
   });
 });

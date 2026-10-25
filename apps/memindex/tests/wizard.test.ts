@@ -9,6 +9,7 @@ import {
   type SkippableStep,
   type StoreProbe,
 } from "@memindex/engine";
+import type { AccessReport } from "../src/install/documents.ts";
 import type { Task, Ui } from "../src/install/ui.ts";
 import {
   type InstallDeps,
@@ -72,6 +73,7 @@ interface Harness {
   deps: InstallDeps;
   commands: string[];
   plists: string[];
+  plistEnv: Readonly<Record<string, string>>[];
   hookBins: string[];
   saved: string[];
   migrated: string[];
@@ -91,12 +93,17 @@ async function harness(
     probe?: (url: string) => Promise<StoreProbe>;
     ensureSearchPath?: () => Promise<boolean>;
     migrate?: () => Promise<never>;
+    /** The watcher's report at each successive read; `stale` ones predate this install. */
+    access?: ({ state: AccessReport["state"]; stale?: boolean } | null)[];
   } = {},
 ): Promise<Harness> {
   const env = { HOME: home, MEMINDEX_CONFIG_DIR: join(home, "cfg"), ...over.env };
   const config = await loadConfig(env);
   const commands: string[] = [];
   const plists: string[] = [];
+  const plistEnv: Readonly<Record<string, string>>[] = [];
+  let clock = Date.parse("2026-10-25T18:00:00.000Z");
+  const access = over.access ?? [{ state: "granted" }];
   const hookBins: string[] = [];
   const saved: string[] = [];
   const migrated: string[] = [];
@@ -116,7 +123,22 @@ async function harness(
       return over.sh?.(cmd) ?? ok;
     },
     which: (name) => (present[name as keyof typeof present] ? `/usr/local/bin/${name}` : null),
-    sleep: async () => {},
+    sleep: async (ms) => {
+      clock += ms;
+    },
+    now: () => clock,
+    readAccess: async () => {
+      const next = access.length > 1 ? access.shift() : access[0];
+      return next
+        ? {
+            state: next.state,
+            pid: 4242,
+            binary: "/opt/homebrew/Cellar/memindex/0.2.0/bin/memindex",
+            dir: join(home, "Documents", "superwhisper", "recordings"),
+            at: new Date(next.stale ? clock - 3_600_000 : clock).toISOString(),
+          }
+        : null;
+    },
     store: {
       probe: over.probe ?? (async () => healthyProbe),
       ensureSearchPath: over.ensureSearchPath ?? (async () => true),
@@ -140,6 +162,7 @@ async function harness(
     launchd: {
       install: async (t) => {
         plists.push(t.binPath);
+        plistEnv.push(t.env ?? {});
         return join(home, "Library", "LaunchAgents", "com.memindex.watch.plist");
       },
     },
@@ -158,7 +181,7 @@ async function harness(
       close: async () => {},
     }),
   };
-  return { deps, commands, plists, hookBins, saved, migrated, skipped, ui };
+  return { deps, commands, plists, plistEnv, hookBins, saved, migrated, skipped, ui };
 }
 
 const WITH_URL = { url: URL_, skip: [] };
@@ -174,6 +197,7 @@ describe("memindex install wizard", () => {
       migrate: "ok",
       ollama: "ok",
       watcher: "ok",
+      documents: "ok",
       hooks: "ok",
       skill: "ok",
     });
@@ -357,6 +381,53 @@ describe("memindex install wizard", () => {
     expect(h.plists).toEqual([]);
     expect(h.hookBins).toEqual([]);
     expect(h.skipped).toEqual([["watcher", "hooks"]]);
+  });
+
+  test("the watcher is told where to report its macOS Documents permission", async () => {
+    const h = await harness();
+    await runInstall(h.deps, { ...WITH_URL, skip: ["ollama"] });
+    expect(h.plistEnv).toEqual([
+      { MEMINDEX_SUPERWHISPER_ACCESS_FILE: join(home, "cfg", "superwhisper-access.json") },
+    ]);
+  });
+
+  test("while macOS asks the new watcher for Documents access, install says to click Allow and waits for the answer", async () => {
+    const h = await harness({
+      access: [
+        { state: "granted", stale: true },
+        null,
+        { state: "waiting" },
+        { state: "waiting" },
+        { state: "granted" },
+      ],
+    });
+    const results = await runInstall(h.deps, { ...WITH_URL, skip: ["ollama"] });
+    expect(statuses(results).documents).toBe("ok");
+    const allow = h.ui.lines.filter((l) => l.includes("click Allow"));
+    expect(allow).toHaveLength(1);
+    expect(allow[0]).toContain("memindex would like to access files in your Documents folder");
+  });
+
+  test("denied: the step fails with the System Settings fix, and the rest of install still runs", async () => {
+    const h = await harness({ access: [{ state: "denied" }] });
+    const results = await runInstall(h.deps, { ...WITH_URL, skip: ["ollama"] });
+    expect(statuses(results)).toMatchObject({ watcher: "ok", documents: "failed", hooks: "ok", skill: "ok" });
+    expect(detail(results, "documents")).toContain("Privacy & Security > Files and Folders");
+  });
+
+  test("nobody answers the prompt: the step fails after a bounded wait, saying how to grant it", async () => {
+    const h = await harness({ access: [{ state: "waiting" }] });
+    const results = await runInstall(h.deps, { ...WITH_URL, skip: ["ollama"] });
+    expect(statuses(results)).toMatchObject({ documents: "failed", skill: "ok" });
+    expect(detail(results, "documents")).toContain("waiting for macOS permission");
+  });
+
+  test("no Super Whisper, or no report from the watcher: the step is skipped, never failed", async () => {
+    for (const access of [[{ state: "absent" as const }], [null]]) {
+      const h = await harness({ access });
+      const results = await runInstall(h.deps, { ...WITH_URL, skip: ["ollama"] });
+      expect(statuses(results).documents).toBe("skipped");
+    }
   });
 
   test("a failed migration skips hooks and skill instead of opening the archive", async () => {

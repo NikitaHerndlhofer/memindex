@@ -13,6 +13,7 @@ import {
 import { defineCommand } from "citty";
 import { action, log, out, skillTrackFile, withArchive } from "../context.ts";
 import { UsageError } from "../errors.ts";
+import { readAccessReport } from "../install/documents.ts";
 import { installLaunchAgent } from "../install/launchd.ts";
 import { installSkill, skillTargets } from "../install/skill.ts";
 import { clackUi, plainUi } from "../install/ui.ts";
@@ -73,16 +74,19 @@ export const installCommand = defineCommand({
       );
     const ui = args.yes ? plainUi(log) : clackUi();
     const withUrl = (url: string) => ({ ...config, store: { url } });
+    const paths = installPaths(config);
     ui.intro(`memindex ${VERSION} install`);
     const results = await runInstall(
       {
-        paths: installPaths(config),
+        paths,
         config,
         bin: args.bin ?? stableBinPath(),
         ui,
         sh: runAsync,
         which: (name) => Bun.which(name),
         sleep: (ms) => Bun.sleep(ms),
+        now: () => Date.now(),
+        readAccess: () => readAccessReport(paths.superwhisperAccess),
         store: {
           probe: (url) => probeStore(storeConfig(withUrl(url))),
           ensureSearchPath: (url) => ensureExtensionsSearchPath(storeConfig(withUrl(url))),

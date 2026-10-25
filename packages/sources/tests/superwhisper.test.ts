@@ -430,7 +430,10 @@ describe("superwhisper: meta.json is part of the revision", () => {
     kit.dispose();
     expect(await superwhisper.scan(location, kit)).toEqual({ kind: "unchanged" });
     kit.dispose();
-    expect((await hashes()).get("ABC222")).toBe(after.get("ABC222"));
+    rewrite("UPDATE recording_fts SET llmResult = ? WHERE hex(recordingId) = ?", ["Rewritten.", ID_111]);
+    const later = await hashes();
+    expect(later.get("ABC222")).toBe(after.get("ABC222"));
+    expect(later.get("ABC111")).not.toBe(after.get("ABC111"));
   });
 
   test("a recording first seen after the upgrade gets a new revision when its meta.json changes", async () => {
@@ -517,6 +520,16 @@ describe("superwhisper: macOS Documents permission", () => {
     chmodSync(recordings, 0o000);
     expect(await superwhisper.scan(location, gated)).toEqual({ kind: "unchanged" });
     expect(report()).toMatchObject({ state: "denied", pid: process.pid });
+  });
+
+  test("no Super Whisper database: no location, and the report says so", async () => {
+    const none = makeKit({
+      MEMINDEX_SUPERWHISPER_DB: join(dir, "missing.sqlite"),
+      MEMINDEX_SUPERWHISPER_DIR: join(dir, "missing-recordings"),
+      MEMINDEX_SUPERWHISPER_ACCESS_FILE: accessFile,
+    });
+    expect(await superwhisper.locations(none)).toEqual([]);
+    expect(report()).toMatchObject({ state: "absent", pid: process.pid });
   });
 
   test("granted access is reported and the scan lists every recording", async () => {

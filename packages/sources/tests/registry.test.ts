@@ -40,14 +40,9 @@ test("one source list; the registry derives facets, plugin-owned chunkers and wa
   const watch = reg
     .watchPaths(makeKit({}, "/Users/test"))
     .map((w) => ({ source: w.source as string, path: w.path }));
-  expect(watch).toContainEqual({
-    source: "superwhisper",
-    path: "/Users/test/Documents/superwhisper/recordings",
-  });
-  expect(watch).toContainEqual({
-    source: "superwhisper",
-    path: "/Users/test/Library/Application Support/superwhisper/database",
-  });
+  expect(watch.filter((w) => w.source === "superwhisper")).toEqual([
+    { source: "superwhisper", path: "/Users/test/Library/Application Support/superwhisper/database" },
+  ]);
   expect(watch).toContainEqual({ source: "claude-code", path: "/Users/test/.claude/projects" });
   expect(watch.filter((w) => w.source === "cursor")).toEqual([]);
   expect(
@@ -55,7 +50,10 @@ test("one source list; the registry derives facets, plugin-owned chunkers and wa
       id: s.id as string,
       poll: s.triggers.pollEvery,
     })),
-  ).toEqual([{ id: "cursor", poll: { minutes: 15 } }]);
+  ).toEqual([
+    { id: "superwhisper", poll: { minutes: 5 } },
+    { id: "cursor", poll: { minutes: 15 } },
+  ]);
   expect(SOURCES.filter((s) => s.triggers.hooks).map((s) => s.id as string)).toEqual(["cursor"]);
 });
 

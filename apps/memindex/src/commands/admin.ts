@@ -23,9 +23,11 @@ import { z } from "zod";
 import { parseParams } from "../args.ts";
 import { action, log, out, skillTrackFile, withArchive } from "../context.ts";
 import { describeError, UsageError } from "../errors.ts";
+import { type AccessReport, accessNotice, readAccessReport } from "../install/documents.ts";
 import { launchAgentLoaded, PLIST_LABEL } from "../install/launchd.ts";
 import { formatPull } from "../install/ollama.ts";
 import { type SkillState, skillStates, skillTargets } from "../install/skill.ts";
+import { installPaths } from "../install/wizard.ts";
 import { fromArray, render } from "../render.ts";
 import { VERSION } from "../version.ts";
 
@@ -69,6 +71,7 @@ function statusText(
   skills: readonly { path: string; state: SkillState }[],
   watcher: boolean,
   pace: EmbedPace,
+  access: AccessReport | null,
 ): string {
   const lines = [
     `memindex ${VERSION}`,
@@ -94,6 +97,8 @@ function statusText(
     );
   for (const k of skills) lines.push(`skill     ${k.state.padEnd(8)} ${k.path}`);
   lines.push(`watcher   ${PLIST_LABEL} ${watcher ? "loaded" : "not loaded"}`);
+  const notice = access ? accessNotice(access) : null;
+  if (notice) lines.push(`superwhisper: ${notice.problem} (fix: ${notice.fix})`);
   return `${lines.join("\n")}\n`;
 }
 
@@ -161,7 +166,14 @@ export const statusCommand = defineCommand({
               null,
               2,
             )}\n`
-          : statusText(status, server, skills, watcher, archive.config.embed.pace),
+          : statusText(
+              status,
+              server,
+              skills,
+              watcher,
+              archive.config.embed.pace,
+              await readAccessReport(installPaths(archive.config).superwhisperAccess),
+            ),
       );
     });
     return 0;
@@ -355,10 +367,25 @@ export async function runDoctor(
     detail: `${PLIST_LABEL} ${loaded ? "loaded" : "not loaded"}`,
     ...(loaded ? {} : { hint: "memindex install" }),
   });
+  const access = documentsCheck(await readAccessReport(installPaths(cfg).superwhisperAccess));
+  if (access) checks.push(access);
   if (cfg.skippedSteps.includes("hooks"))
     checks.push({ name: "agent hooks", step: "hooks", ok: false, detail: "not installed" });
   const settled = settleChecks(checks, cfg.skippedSteps);
   return { ok: settled.every((c) => c.status !== "failed"), checks: settled };
+}
+
+/** The running watcher's macOS Documents permission for Super Whisper; null when there is nothing to report. */
+export function documentsCheck(r: AccessReport | null): Probe | null {
+  if (!r || r.state === "absent") return null;
+  const notice = accessNotice(r);
+  return {
+    name: "Super Whisper recordings (macOS permission)",
+    step: "watcher",
+    ok: notice === null,
+    detail: notice?.problem ?? `the watcher (pid ${r.pid}) can read ${r.dir}`,
+    ...(notice ? { hint: notice.fix } : {}),
+  };
 }
 
 async function databaseChecks(cfg: MemindexConfig, checks: Probe[]): Promise<void> {

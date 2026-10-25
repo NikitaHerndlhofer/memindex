@@ -108,15 +108,21 @@ export const SuperWhisperMeta = z.object({
 });
 export type SuperWhisperMeta = z.infer<typeof SuperWhisperMeta>;
 
-/** sha256(duration|rawWordCount|llmWordCount|sha256(result)|sha256(llmResult)|sha256(rawResult)). */
-export function revisionHash(r: {
-  duration: number;
-  rawWordCount: number | null;
-  llmWordCount: number | null;
-  result: string | null;
-  llmResult: string | null;
-  rawResult: string | null;
-}): string {
+/**
+ * sha256(duration|rawWordCount|llmWordCount|sha256(result)|sha256(llmResult)|sha256(rawResult)[|meta]).
+ * `meta` is the meta.json change token; null keeps the hash every build before it wrote.
+ */
+export function revisionHash(
+  r: {
+    duration: number;
+    rawWordCount: number | null;
+    llmWordCount: number | null;
+    result: string | null;
+    llmResult: string | null;
+    rawResult: string | null;
+  },
+  meta: string | null,
+): string {
   return sha256Hex(
     [
       r.duration,
@@ -125,6 +131,7 @@ export function revisionHash(r: {
       sha256Hex(r.result ?? ""),
       sha256Hex(r.llmResult ?? ""),
       sha256Hex(r.rawResult ?? ""),
+      ...(meta === null ? [] : [`meta:${meta}`]),
     ].join("|"),
   );
 }
