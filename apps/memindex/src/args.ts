@@ -3,7 +3,10 @@ import {
   ITEM_KINDS,
   parseSince,
   type Query,
+  RECIPES,
   type Recipe,
+  type RecipeRun,
+  recipeCommand,
   SEARCH_MODES,
   type SearchMode,
   type SearchSpec,
@@ -37,10 +40,17 @@ const PARAM_ARG = {
   param: { type: "string", description: "Bind a :name placeholder, k=v (repeatable)" },
 } as const satisfies ArgsDef;
 
+const SQL_PARAM_ARG = {
+  param: {
+    type: "string",
+    description: "Bind a :name placeholder, k=v; a bare name binds NULL (repeatable)",
+  },
+} as const satisfies ArgsDef;
+
 export const SQL_ARGS = {
   search: { type: "string", description: "Search text; results arrive as the `hits` relation" },
   ...FILTER_ARGS,
-  ...PARAM_ARG,
+  ...SQL_PARAM_ARG,
   ...OUTPUT_ARGS,
 } as const satisfies ArgsDef;
 
@@ -48,6 +58,10 @@ export const Q_ARGS = {
   recipe: { type: "positional", required: false, description: "Recipe name, or `recipes` to list them" },
   ...FILTER_ARGS,
   ...PARAM_ARG,
+  sql: {
+    type: "boolean",
+    description: "Print the recipe's SQL as the `memindex sql` command that runs it, instead of running it",
+  },
   ...OUTPUT_ARGS,
 } as const satisfies ArgsDef;
 
@@ -108,9 +122,14 @@ function filterOf(f: Filters): SearchSpec["filter"] {
   };
 }
 
-/** `--param k=v` / `--param=k=v`, repeatable. Read from raw argv because the arg parser keeps one value. */
-export function parseParams(rawArgs: readonly string[]): Record<string, string> {
-  const out: Record<string, string> = {};
+const PARAM_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+/**
+ * `memindex sql`: `--param k=v` / `--param=k=v`, repeatable; a bare `--param k` is null (SQL NULL).
+ * Read from raw argv because the arg parser keeps one value.
+ */
+function parseSqlParams(rawArgs: readonly string[]): Record<string, string | null> {
+  const out: Record<string, string | null> = {};
   for (let i = 0; i < rawArgs.length; i++) {
     const a = rawArgs[i] ?? "";
     let kv: string | undefined;
@@ -118,8 +137,21 @@ export function parseParams(rawArgs: readonly string[]): Record<string, string> 
     else if (a.startsWith("--param=")) kv = a.slice("--param=".length);
     else continue;
     const eq = kv?.indexOf("=") ?? -1;
-    if (!kv || eq <= 0) throw new UsageError(`--param expects name=value, got "${kv ?? ""}"`);
-    out[kv.slice(0, eq)] = kv.slice(eq + 1);
+    const name = eq < 0 ? kv : kv?.slice(0, eq);
+    if (!kv || !name || !PARAM_NAME.test(name))
+      throw new UsageError(`--param expects name=value or a bare name, got "${kv ?? ""}"`);
+    out[name] = eq < 0 ? null : kv.slice(eq + 1);
+  }
+  return out;
+}
+
+/** Recipes and jobs: every `--param` needs a value (an absent param takes its default). */
+export function parseParams(rawArgs: readonly string[]): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(parseSqlParams(rawArgs))) {
+    if (v === null)
+      throw new UsageError(`--param expects name=value, got "${k}"; omit it to use the default`);
+    out[k] = v;
   }
   return out;
 }
@@ -160,7 +192,7 @@ export async function parseSqlCommand(rawArgs: readonly string[], stdin: StdinSo
   if (sql.length === 0) throw new UsageError("no SQL provided: stdin was empty");
   const filters = parseFilters(args);
   const format = outputFormat(args);
-  const params = parseParams(rawArgs);
+  const params = parseSqlParams(rawArgs);
   const text = typeof args.search === "string" ? args.search.trim() : "";
   if (!text) {
     const stray = SEARCH_ONLY.filter((k) => filters[k] !== undefined);
@@ -179,17 +211,35 @@ export async function parseSqlCommand(rawArgs: readonly string[], stdin: StdinSo
 
 export type ParsedQ =
   | { readonly kind: "list"; readonly format: OutputFormat }
+  /** `--sql`: shell text to print instead of running anything. */
+  | { readonly kind: "sql"; readonly text: string }
   | ({ readonly kind: "run" } & ParsedQuery);
+
+function sqlText(recipe: Recipe, run: RecipeRun = {}): string {
+  try {
+    return `# ${recipe.name}: ${recipe.summary}\n${recipeCommand(recipe, run)}\n`;
+  } catch (e) {
+    throw new UsageError(e instanceof Error ? e.message : String(e));
+  }
+}
 
 /**
  * `memindex q <recipe> [text…]`. For search recipes the positional is the search text; otherwise it
  * fills the first required param not given via --param. --source/--limit bind same-named params.
+ * `--sql` prints the run as a `memindex sql` command; missing text or required params become placeholders.
  */
 export function parseQCommand(rawArgs: readonly string[]): ParsedQ {
   const args = parseArgs([...rawArgs], Q_ARGS);
+  const showSql = args.sql === true;
+  if (showSql && (args.json || args.csv || args.table))
+    throw new UsageError("--sql prints shell text; drop --json / --csv / --table");
   const format = outputFormat(args);
   const [name, ...rest] = args._;
-  if (!name || name === "recipes") return { kind: "list", format };
+  if (!name || name === "recipes") {
+    return showSql
+      ? { kind: "sql", text: RECIPES.map((r) => sqlText(r)).join("\n") }
+      : { kind: "list", format };
+  }
   let recipe: Recipe;
   try {
     recipe = findRecipe(name);
@@ -201,17 +251,17 @@ export function parseQCommand(rawArgs: readonly string[]): ParsedQ {
   const text = rest.join(" ").trim();
 
   if (recipe.search) {
+    if (filters.limit !== undefined && "limit" in recipe.params) params.limit = String(filters.limit);
+    const mode = filters.mode ? { mode: filters.mode } : {};
+    const filter = filterOf(filters);
+    if (showSql)
+      return { kind: "sql", text: sqlText(recipe, { args: params, search: { text, ...mode, filter } }) };
     if (!text)
       throw new UsageError(`recipe ${recipe.name} needs search text: memindex q ${recipe.name} "<text>"`);
-    if (filters.limit !== undefined && "limit" in recipe.params) params.limit = String(filters.limit);
     return {
       kind: "run",
       format,
-      query: {
-        recipe: recipe.name,
-        args: params,
-        search: { text, ...(filters.mode ? { mode: filters.mode } : {}), filter: filterOf(filters) },
-      },
+      query: { recipe: recipe.name, args: params, search: { text, ...mode, filter } },
     };
   }
 
@@ -233,5 +283,6 @@ export function parseQCommand(rawArgs: readonly string[]): ParsedQ {
     if (!slot) throw new UsageError(`recipe ${recipe.name} takes no positional; use --param name=value`);
     params[slot] = text;
   }
+  if (showSql) return { kind: "sql", text: sqlText(recipe, { args: params }) };
   return { kind: "run", format, query: { recipe: recipe.name, args: params } };
 }

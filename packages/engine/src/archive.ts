@@ -9,6 +9,7 @@ import {
 } from "@memindex/sources";
 import {
   type Backend,
+  facetColumn,
   migrateStore,
   openStore,
   type ReadStore,
@@ -478,7 +479,9 @@ class ArchiveImpl implements Archive {
   skill(): string {
     const notes = new Map<SourceId, string>();
     for (const s of this.p.registry.all) {
-      const facets = Object.entries(s.facets).map(([k, t]) => `\`${k}\` (${t})`);
+      const facets = Object.entries(s.facets)
+        .sort(([a], [b]) => (a < b ? -1 : 1))
+        .map(([k, t]) => `\`${facetColumn(k)}\` (${t})`);
       const view = `\`${s.id.replaceAll("-", "_")}_items\``;
       const facetLine =
         facets.length > 0

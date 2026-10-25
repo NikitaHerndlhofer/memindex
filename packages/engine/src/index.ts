@@ -93,7 +93,15 @@ export {
 } from "./query.ts";
 export { findRecipe, type ParamType, RECIPES, type Recipe, type RecipeParam } from "./recipes.ts";
 export type { CursorGet, KitFactory, Registry } from "./registry.ts";
-export { renderSkill, type SkillScope, VIEW_CONTRACT } from "./skill.ts";
+export {
+  ITEM_COLUMNS,
+  type RecipeRun,
+  recipeCommand,
+  renderSkill,
+  type SkillScope,
+  VIEW_CONTRACT,
+  type ViewDoc,
+} from "./skill.ts";
 export {
   type PathWatcher,
   type WatchFactory,

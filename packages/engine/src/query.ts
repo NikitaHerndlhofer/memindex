@@ -2,7 +2,7 @@ import type { Embedder } from "@memindex/embed";
 import { type IsoTime, type ItemKind, isoTime, type SourceId } from "@memindex/model";
 import type { ChunkFilter, Hit, RankedChunk, ReadStore, Row, StoreSearch } from "@memindex/store";
 import { z } from "zod";
-import { findRecipe, type Recipe } from "./recipes.ts";
+import { assertKnownParams, findRecipe, type Recipe } from "./recipes.ts";
 import { findPlugin, type Registry } from "./registry.ts";
 
 export type SearchMode = "keyword" | "fuzzy" | "semantic" | "hybrid";
@@ -32,7 +32,12 @@ export interface SearchSpec {
 export type Params = Readonly<Record<string, string>>;
 
 export type Query =
-  | { readonly sql: string; readonly params?: Params; readonly search?: SearchSpec }
+  | {
+      readonly sql: string;
+      /** null binds SQL NULL (`--param name` without a value). */
+      readonly params?: Readonly<Record<string, string | null>>;
+      readonly search?: SearchSpec;
+    }
   | {
       readonly recipe: string;
       readonly args?: Params;
@@ -148,12 +153,7 @@ const INT = z.coerce.number().int();
 
 /** Applies defaults, checks required params and types, and drops params the SQL doesn't reference. */
 export function bindRecipe(recipe: Recipe, args: Params): BoundParams {
-  const unknown = Object.keys(args).filter((k) => !(k in recipe.params));
-  if (unknown.length > 0) {
-    throw new Error(
-      `recipe ${recipe.name}: unknown param ${unknown.join(", ")}; takes ${Object.keys(recipe.params).join(", ") || "none"}`,
-    );
-  }
+  assertKnownParams(recipe, args);
   const out: Record<string, string | number | null> = {};
   for (const [name, def] of Object.entries(recipe.params)) {
     const raw = args[name] ?? def.default;

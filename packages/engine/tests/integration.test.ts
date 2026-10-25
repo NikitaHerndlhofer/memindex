@@ -11,7 +11,17 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { migrateStore } from "@memindex/store";
 import { SQL } from "bun";
-import { type Archive, loadConfig, openArchive, RECIPES, type Recipe, VIEW_CONTRACT } from "../src/index.ts";
+import {
+  type Archive,
+  ITEM_COLUMNS,
+  loadConfig,
+  openArchive,
+  RECIPES,
+  type Recipe,
+  type SearchMode,
+  VIEW_CONTRACT,
+  type ViewDoc,
+} from "../src/index.ts";
 import { fakeEmbedder, recordingLog } from "./fakes.ts";
 
 const ADMIN_URL = process.env.MEMINDEX_TEST_PG_URL ?? "postgres://postgres:postgres@127.0.0.1:54422/postgres";
@@ -120,12 +130,73 @@ describe("integration: fixtures → Supabase store → recipes", () => {
     expect(pending).toEqual({ reparse: 0, rechunk: 0, embed: 0, "vec-gc": null });
   });
 
-  test.skipIf(storeNotReady)("the documented view contract matches the store", async () => {
-    for (const v of VIEW_CONTRACT) {
-      if (v.name.includes("<") || v.name === "hits" || v.columns.startsWith("same as")) continue;
-      await rows({ sql: `SELECT ${v.columns} FROM ${v.name} LIMIT 1` });
-    }
-  });
+  test.skipIf(storeNotReady)(
+    "the documented view contract is exactly the store's columns, in order",
+    async () => {
+      const db = new SQL(withDb(ADMIN_URL, DB_NAME), { max: 1 });
+      try {
+        const actual = async (view: string) =>
+          (
+            await db`SELECT column_name FROM information_schema.columns
+                   WHERE table_schema = 'memindex' AND table_name = ${view} ORDER BY ordinal_position`
+          ).map((r: { column_name: string }) => r.column_name);
+        const itemCols = ITEM_COLUMNS.map((c) => c.name);
+        const documented = (v: ViewDoc) => (v.columns === "items" ? itemCols : v.columns.map((c) => c.name));
+        for (const v of VIEW_CONTRACT) {
+          if (v.name === "hits" || v.name === "<source>_items") continue;
+          expect({ view: v.name, columns: await actual(v.name) }).toEqual({
+            view: v.name,
+            columns: documented(v),
+          });
+        }
+        const facetDoc = /^Facet view `(\w+)`: (.*)\.$/gm;
+        const views = [...live().skill().matchAll(facetDoc)];
+        expect(views.length).toBeGreaterThan(0);
+        for (const [, view = "", list = ""] of views) {
+          const facets = [...list.matchAll(/`(\w+)` \(/g)].map((m) => m[1]);
+          expect({ view, columns: await actual(view) }).toEqual({ view, columns: [...itemCols, ...facets] });
+        }
+      } finally {
+        await db.close();
+      }
+    },
+  );
+
+  test.skipIf(storeNotReady)(
+    "every SQL pattern in the skill runs as its rendered `memindex sql` command binds it",
+    async () => {
+      const [anyChunk] = await rows({
+        sql: "SELECT chunk_id, item_key FROM chunks ORDER BY chunk_id LIMIT 1",
+      });
+      const [anyMode] = await rows({ sql: "SELECT mode FROM superwhisper_items ORDER BY mode LIMIT 1" });
+      const fill: Readonly<Record<string, string>> = {
+        chunk_id: String(anyChunk?.chunk_id),
+        item_key: String(anyChunk?.item_key),
+        mode: String(anyMode?.mode),
+      };
+      const commands = [
+        ...live()
+          .skill()
+          .matchAll(/^memindex sql (.*) <<'SQL'\n([\s\S]*?)\nSQL$/gm),
+      ];
+      expect(commands.length).toBe(RECIPES.filter((r) => r.teach).length);
+      const failures: string[] = [];
+      for (const [, flags = "", sql = ""] of commands) {
+        const params: Record<string, string | null> = {};
+        for (const [, name = "", value] of flags.matchAll(/--param (\w+)(?:=(\S+))?/g)) {
+          const placeholder = value?.match(/^<(\w+)>$/)?.[1];
+          params[name] = value === undefined ? null : placeholder ? (fill[placeholder] ?? null) : value;
+        }
+        const mode = flags.match(/--mode (\w+)/)?.[1] as SearchMode | undefined;
+        try {
+          await rows(mode ? { sql, params, search: { text: "the", mode, filter: {} } } : { sql, params });
+        } catch (e) {
+          failures.push(`${flags}: ${e instanceof Error ? e.message : String(e)}`);
+        }
+      }
+      expect(failures).toEqual([]);
+    },
+  );
 
   test.skipIf(storeNotReady)(
     "camelCase plugin facets reach the facet view as snake_case columns",

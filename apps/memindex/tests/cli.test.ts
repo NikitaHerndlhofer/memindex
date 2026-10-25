@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdtempSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { RECIPES } from "@memindex/engine";
+import { findRecipe, RECIPES } from "@memindex/engine";
 import pkg from "../package.json";
 
 const CLI = join(import.meta.dir, "..", "src", "cli.ts");
@@ -41,6 +41,14 @@ describe("memindex CLI (subprocess)", () => {
     expect(r.code).toBe(0);
     const rows = JSON.parse(r.stdout) as { recipe: string }[];
     expect(rows.map((x) => x.recipe)).toEqual(RECIPES.map((x) => x.name));
+  });
+
+  test("q <recipe> --sql prints the runnable command to stdout without opening the archive", () => {
+    const r = memindex(["q", "context", "--sql", "--param", "around=4"], { env: { MEMINDEX_STORE: "" } });
+    expect(r.code).toBe(0);
+    expect(r.stdout).toBe(
+      `# context: ${findRecipe("context").summary}\nmemindex sql --param chunk=<chunk_id> --param around=4 <<'SQL'\n${findRecipe("context").sql}\nSQL\n`,
+    );
   });
 
   test("sql without stdin is a usage error (exit 1), positional SQL too", () => {

@@ -7,10 +7,12 @@ import type { RankedChunk, StoreSearch } from "@memindex/store";
 import {
   bindRecipe,
   findRecipe,
+  ITEM_COLUMNS,
   loadConfig,
   openArchive,
   parseSince,
   RECIPES,
+  recipeCommand,
   renderSkill,
   resolveQuery,
   rrf,
@@ -183,9 +185,61 @@ describe("recipes", () => {
       "reprocess-history",
       "fuzzy",
       "recency-decay",
+      "hit-turns",
+      "thread-page",
     ];
     for (const n of intents) expect(names.has(n)).toBe(true);
     expect(RECIPES.some((r) => r.name.startsWith("stats-"))).toBe(true);
+  });
+});
+
+describe("recipeCommand", () => {
+  test("binds every param: given, else default, else a placeholder when required, else bare (NULL)", () => {
+    expect(recipeCommand(findRecipe("context"))).toBe(
+      `memindex sql --param chunk=<chunk_id> --param around=2 <<'SQL'\n${findRecipe("context").sql}\nSQL`,
+    );
+    expect(recipeCommand(findRecipe("recent"), { args: { days: "7" } }).split("\n")[0]).toBe(
+      "memindex sql --param days=7 --param source --param limit=50 <<'SQL'",
+    );
+    expect(recipeCommand(findRecipe("mode-recent")).split("\n")[0]).toBe(
+      "memindex sql --param mode=<mode> --param days=7 --param limit=50 <<'SQL'",
+    );
+  });
+
+  test("search recipes carry text, mode and every search filter; values are shell-quoted", () => {
+    expect(
+      recipeCommand(findRecipe("rank-items"), {
+        args: { limit: "3" },
+        search: {
+          text: "bob's auth bug",
+          filter: {
+            source: ["cursor", "claude-code"],
+            kind: ["conversation"],
+            since: "14d",
+            includeSuperseded: true,
+          },
+        },
+      }).split("\n")[0],
+    ).toBe(
+      "memindex sql --search 'bob'\\''s auth bug' --mode semantic --source cursor,claude-code --kind conversation --since 14d --all --param limit=3 <<'SQL'",
+    );
+    expect(recipeCommand(findRecipe("search")).split("\n")[0]).toBe(
+      `memindex sql --search "<text>" --mode hybrid --param limit=20 <<'SQL'`,
+    );
+    expect(
+      recipeCommand(findRecipe("search"), {
+        search: { mode: "keyword", filter: { allSources: true } },
+      }).split("\n")[0],
+    ).toBe(`memindex sql --search "<text>" --mode keyword --all-sources --param limit=20 <<'SQL'`);
+    expect(recipeCommand(findRecipe("by-repo"), { args: { repo: "my repo" } }).split("\n")[0]).toBe(
+      "memindex sql --param 'repo=my repo' --param limit=50 <<'SQL'",
+    );
+  });
+
+  test("unknown params fail", () => {
+    expect(() => recipeCommand(findRecipe("thread"), { args: { bogus: "1" } })).toThrow(
+      /unknown param bogus/,
+    );
   });
 });
 
@@ -350,9 +404,60 @@ describe("renderSkill", () => {
 
   test("lists every recipe, every view, the hits columns and the contract version", () => {
     for (const r of RECIPES) expect(md).toContain(`| \`${r.name}\` |`);
-    for (const v of VIEW_CONTRACT) expect(md).toContain(`\`${v.name}\``);
-    expect(md).toContain("rank, score, via, chunk_id, item_key, turn_key, snippet");
+    for (const v of VIEW_CONTRACT) expect(md).toContain(`- \`${v.name}\`: `);
+    expect(md).toContain(
+      "Columns: `rank` (1 = best), `score` (mode-specific, higher is better), `via` (keyword | fuzzy | semantic | hybrid), `chunk_id`",
+    );
     expect(md).toContain("View contract v2");
+  });
+
+  test("every SQL example is a teaching recipe's SQL, byte for byte, inside the command that runs it", () => {
+    const examples = [...md.matchAll(/^(memindex sql .*) <<'SQL'\n([\s\S]*?)\nSQL$/gm)].map(
+      ([, cmd, sql]) => ({
+        cmd,
+        sql,
+      }),
+    );
+    const teaching = RECIPES.filter((r) => r.teach);
+    expect(examples.map((e) => e.sql)).toEqual(teaching.map((r) => r.sql));
+    expect(examples.map((e) => `${e.cmd} <<'SQL'\n${e.sql}\nSQL`)).toEqual(
+      teaching.map((r) => recipeCommand(r)),
+    );
+    const prose = md.replace(/<<'SQL'\n[\s\S]*?\nSQL$/gm, "");
+    expect(prose).not.toMatch(/<<'SQL'|```sql|\bSELECT\b/);
+  });
+
+  test("teaching recipes: 6-8 one-line lessons covering the schema's join and query patterns", () => {
+    const teaching = RECIPES.filter((r) => r.teach);
+    expect(teaching.length).toBeGreaterThanOrEqual(6);
+    expect(teaching.length).toBeLessThanOrEqual(8);
+    for (const r of teaching) expect(r.teach?.lesson).not.toContain("\n");
+    const all = teaching.map((r) => r.sql).join("\n");
+    expect(all).toMatch(/JOIN chunks c ON c.chunk_id = h.chunk_id\s+JOIN turns t[^\n]*\s+JOIN items/);
+    expect(all).toMatch(/FROM (superwhisper|cursor|claude_code)_items/);
+    expect(all).toMatch(/\bage_days\b/);
+    expect(all).toMatch(/GROUP BY started_day/);
+    expect(all).toMatch(/BETWEEN hit.ord - :around/);
+    expect(all).toMatch(/FROM hits h JOIN items i[^;]*GROUP BY i.item_key/);
+    expect(all).toMatch(/FROM turns\s+WHERE item_key = :item[^;]*LIMIT :limit/);
+  });
+
+  test("join keys name documented columns on both sides", () => {
+    const cols = (name: string) => {
+      const v = VIEW_CONTRACT.find((x) => x.name === name);
+      if (!v) throw new Error(`no view ${name}`);
+      return (v.columns === "items" ? ITEM_COLUMNS : v.columns).map((c) => c.name);
+    };
+    const undocumented = VIEW_CONTRACT.flatMap((v) =>
+      v.joins.flatMap((j) => [
+        ...j.cols.filter((c) => !cols(v.name).includes(c)).map((c) => `${v.name}.${c}`),
+        ...(j.toCols ?? j.cols).filter((c) => !cols(j.to).includes(c)).map((c) => `${j.to}.${c}`),
+      ]),
+    );
+    expect(undocumented).toEqual([]);
+    expect(md).toContain(
+      "Joins: `chunk_id` → `chunks`; (`item_key`, `turn_key`) → `turns`; `item_key` → `items`.",
+    );
   });
 
   test("teaches the CLI surface, the subagent workflow and includes source notes", () => {

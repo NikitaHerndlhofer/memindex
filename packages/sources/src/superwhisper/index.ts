@@ -149,6 +149,5 @@ export const superwhisper: SourcePlugin<SuperWhisperMeta> = {
     "and `transcript_raw` (verbatim speech, keyword-searchable only). Diarized meetings instead have turn `u`",
     "with only the summary, then one turn per speaker run (`s<n>`, `speaker` = the label from Super Whisper).",
     "Reprocessings of the same audio share a supersede group; default views show only the newest.",
-    "Facets: mode, appName, language, durationMs.",
   ].join("\n"),
 };

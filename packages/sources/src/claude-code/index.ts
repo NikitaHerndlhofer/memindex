@@ -199,5 +199,5 @@ export const claudeCode: SourcePlugin<ClaudeCodeMeta> = {
 
   skillNotes:
     "Claude Code: one item per session (`claude-code:<sessionId>`), turns keyed by line uuid. Subagent " +
-    "sessions carry parent_key. Facets: repository (git origin of cwd), gitBranch.",
+    "sessions carry parent_key. Facets: repository (git origin of cwd), git_branch.",
 };

@@ -24,6 +24,8 @@ export interface Recipe {
    * between backends). Lint-tested.
    */
   readonly sql: string;
+  /** Present ⇒ SKILL.md's "SQL patterns" shows this SQL verbatim under the one-line lesson. */
+  readonly teach?: { readonly lesson: string };
 }
 
 const limit = (n: number): RecipeParam => ({ type: "int", summary: "max rows", default: String(n) });
@@ -33,13 +35,14 @@ FROM hits h JOIN items i ON i.item_key = h.item_key
 ORDER BY h.rank
 LIMIT :limit`;
 
-const searchRecipe = (name: string, mode: SearchMode, summary: string): Recipe => ({
+const searchRecipe = (name: string, mode: SearchMode, summary: string, teach?: Recipe["teach"]): Recipe => ({
   name,
   summary,
   group: "search",
   params: { limit: limit(20) },
   search: { defaultMode: mode },
   sql: SEARCH_SQL,
+  ...(teach ? { teach } : {}),
 });
 
 /** THE recipe list. SKILL.md's recipe table, `memindex q recipes` and the lint/integration tests derive from it. */
@@ -99,6 +102,10 @@ FROM superwhisper_items
 WHERE lower(mode) = lower(:mode) AND age_days <= :days
 ORDER BY started_at DESC
 LIMIT :limit`,
+    teach: {
+      lesson:
+        "A facet view (`superwhisper_items`, `cursor_items`, …) is `items` plus that source's columns; `age_days <= n` is the recency filter (no date functions).",
+    },
   },
   {
     name: "meeting-notes",
@@ -166,11 +173,32 @@ WHERE c.kind = :kind
 ORDER BY i.started_at DESC, c.chunk_id
 LIMIT :limit`,
   },
-  searchRecipe("search", "hybrid", "Ranked chunks across all sources (hybrid by default; --mode to change)"),
+  searchRecipe("search", "hybrid", "Ranked chunks across all sources (hybrid by default; --mode to change)", {
+    lesson:
+      "`--search` adds `hits` (ranked chunks, `rank` 1 = best); join `items` on `item_key` for the metadata.",
+  }),
   searchRecipe("semantic", "semantic", "Semantic search: conceptual recall, paraphrases, cross-lingual"),
   searchRecipe("keyword", "keyword", "Keyword search (stemmed): exact tokens, function names, error strings"),
   searchRecipe("fuzzy", "fuzzy", "Trigram search: substrings, typos, glued identifiers (≥3 chars)"),
   searchRecipe("hybrid", "hybrid", "Keyword + semantic fused with RRF (k=60)"),
+  {
+    name: "hit-turns",
+    summary: "Hits with the whole turn they matched in: who said it, which chunk kind, the message itself",
+    group: "search",
+    params: { limit: limit(10) },
+    search: { defaultMode: "semantic" },
+    sql: `SELECT h.rank, i.source, i.started_day, i.title, c.kind, t.ord, t.role, substr(t.body, 1, 1000) AS body, h.item_key
+FROM hits h
+JOIN chunks c ON c.chunk_id = h.chunk_id
+JOIN turns t ON t.item_key = c.item_key AND t.turn_key = c.turn_key
+JOIN items i ON i.item_key = t.item_key
+ORDER BY h.rank
+LIMIT :limit`,
+    teach: {
+      lesson:
+        "The full chain: `hits.chunk_id` → `chunks`, then (`item_key`, `turn_key`) → `turns`, then `item_key` → `items`.",
+    },
+  },
   {
     name: "best-moment",
     summary: "Best-matching chunk per item, with its full text: the canonical long-form retrieval",
@@ -198,6 +226,7 @@ FROM hits h JOIN items i ON i.item_key = h.item_key
 GROUP BY i.item_key, i.source, i.kind, i.started_day, i.title, i.origin
 ORDER BY best_rank
 LIMIT :limit`,
+    teach: { lesson: "Rank whole items: GROUP BY the item over `hits`, order by its best chunk's rank." },
   },
   {
     name: "recency-decay",
@@ -222,6 +251,26 @@ LIMIT :limit`,
     sql: `SELECT ord, turn_key, role, speaker, at, body FROM turns WHERE item_key = :item ORDER BY ord`,
   },
   {
+    name: "thread-page",
+    summary:
+      "One page of an item's turns from ord `from`, bodies capped at 2000 chars (`chars` = full length)",
+    group: "read",
+    params: {
+      item: { type: "item_key", summary: "item key, e.g. cursor:3f1c…", required: true },
+      from: { type: "int", summary: "first turn ord", default: "0" },
+      limit: limit(20),
+    },
+    sql: `SELECT ord, role, speaker, at, length(body) AS chars, substr(body, 1, 2000) AS body
+FROM turns
+WHERE item_key = :item AND ord >= :from
+ORDER BY ord
+LIMIT :limit`,
+    teach: {
+      lesson:
+        "Read a long chat or meeting in pages: ORDER BY `ord`, start at `ord >= n`, LIMIT, and cap bodies with `substr`.",
+    },
+  },
+  {
     name: "context",
     summary: "Turns around a hit: the chunk's turn ± `around` neighbors",
     group: "read",
@@ -235,6 +284,10 @@ JOIN turns hit ON hit.item_key = c.item_key AND hit.turn_key = c.turn_key
 JOIN turns t ON t.item_key = c.item_key
 WHERE c.chunk_id = :chunk AND t.ord BETWEEN hit.ord - :around AND hit.ord + :around
 ORDER BY t.ord`,
+    teach: {
+      lesson:
+        "Expand a hit: find its turn through the chunk, then take that item's turns within ± `around` by `ord`.",
+    },
   },
   {
     name: "chunk-neighbors",
@@ -269,6 +322,10 @@ ORDER BY a.started_at, a.item_key`,
 FROM items WHERE age_days <= :days
 GROUP BY started_day, source, kind
 ORDER BY started_day DESC, items DESC`,
+    teach: {
+      lesson:
+        "Aggregate per day: GROUP BY `started_day` (UTC `YYYY-MM-DD` text), `age_days` bounds the window.",
+    },
   },
   {
     name: "stats-longest",
@@ -315,6 +372,15 @@ ORDER BY started_at DESC
 LIMIT :limit`,
   },
 ];
+
+export function assertKnownParams(recipe: Recipe, args: Readonly<Record<string, unknown>>): void {
+  const unknown = Object.keys(args).filter((k) => !(k in recipe.params));
+  if (unknown.length > 0) {
+    throw new Error(
+      `recipe ${recipe.name}: unknown param ${unknown.join(", ")}; takes ${Object.keys(recipe.params).join(", ") || "none"}`,
+    );
+  }
+}
 
 export function findRecipe(name: string): Recipe {
   const r = RECIPES.find((x) => x.name === name);

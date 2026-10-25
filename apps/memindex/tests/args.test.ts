@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { findRecipe, RECIPES } from "@memindex/engine";
 import { parseParams, parseQCommand, parseSqlCommand } from "../src/args.ts";
 import { UsageError } from "../src/errors.ts";
 import type { StdinSource } from "../src/stdin.ts";
@@ -147,6 +148,35 @@ describe("memindex q", () => {
   test("unknown recipes are usage errors", () => {
     expect(() => parseQCommand(["nope"])).toThrow(UsageError);
   });
+
+  test("--sql prints the run as a `memindex sql` command; missing text and required params become placeholders", () => {
+    const sqlOf = (args: string[]) => {
+      const r = parseQCommand(args);
+      if (r.kind !== "sql") throw new Error(`expected sql, got ${r.kind}`);
+      return r.text;
+    };
+    expect(sqlOf(["thread-page", "cursor:3f1c", "--param", "from=40", "--sql"])).toBe(
+      `# thread-page: ${findRecipe("thread-page").summary}\nmemindex sql --param item=cursor:3f1c --param from=40 --param limit=20 <<'SQL'\n${findRecipe("thread-page").sql}\nSQL\n`,
+    );
+    expect(
+      sqlOf(["semantic", "token refresh", "--source", "cursor", "--limit", "5", "--sql"]).split("\n")[1],
+    ).toBe("memindex sql --search 'token refresh' --mode semantic --source cursor --param limit=5 <<'SQL'");
+    expect(sqlOf(["rank-items", "--sql"]).split("\n")[1]).toBe(
+      `memindex sql --search "<text>" --mode semantic --param limit=10 <<'SQL'`,
+    );
+    expect(sqlOf(["context", "--sql"]).split("\n")[1]).toBe(
+      "memindex sql --param chunk=<chunk_id> --param around=2 <<'SQL'",
+    );
+  });
+
+  test("q recipes --sql prints every recipe; --sql refuses output formats and unknown params", () => {
+    const all = parseQCommand(["recipes", "--sql"]);
+    if (all.kind !== "sql") throw new Error("expected sql");
+    for (const r of RECIPES) expect(all.text).toContain(`# ${r.name}: ${r.summary}\nmemindex sql `);
+    for (const r of RECIPES) expect(all.text).toContain(`<<'SQL'\n${r.sql}\nSQL\n`);
+    expect(() => parseQCommand(["context", "--sql", "--json"])).toThrow(/--sql prints shell text/);
+    expect(() => parseQCommand(["context", "--sql", "--param", "bogus=1"])).toThrow(UsageError);
+  });
 });
 
 describe("parseParams", () => {
@@ -154,5 +184,15 @@ describe("parseParams", () => {
     expect(() => parseParams(["--param", "novalue"])).toThrow(/name=value/);
     expect(() => parseParams(["--param"])).toThrow(/name=value/);
     expect(parseParams(["--param", "a=b=c"])).toEqual({ a: "b=c" });
+  });
+});
+
+describe("memindex sql --param", () => {
+  test("a bare name binds NULL; names must be placeholder identifiers", async () => {
+    const r = await parseSqlCommand(["--param", "source", "--param=days=3"], piped("SELECT :source, :days"));
+    expect(r.query).toEqual({ sql: "SELECT :source, :days", params: { source: null, days: "3" } });
+    await expect(parseSqlCommand(["--param", "--json"], piped("SELECT 1"))).rejects.toThrow(
+      /--param expects/,
+    );
   });
 });

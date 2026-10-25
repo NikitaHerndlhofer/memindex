@@ -23,11 +23,15 @@ export const qCommand = defineCommand({
   meta: {
     name: "q",
     description:
-      "Run a named recipe: memindex q <recipe> [text] [--param k=v]; `memindex q recipes` lists them",
+      "Run a named recipe: memindex q <recipe> [text] [--param k=v]; `memindex q recipes` lists them; --sql prints the SQL instead",
   },
   args: Q_ARGS,
   run: action(async ({ rawArgs }) => {
     const parsed = parseQCommand(rawArgs);
+    if (parsed.kind === "sql") {
+      out(parsed.text);
+      return 0;
+    }
     if (parsed.kind === "list") {
       const rows = RECIPES.map((r) => ({
         recipe: r.name,
