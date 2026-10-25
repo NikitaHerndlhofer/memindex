@@ -619,12 +619,20 @@ export class PgWriteStore extends PgReadStore implements WriteStore {
         return { hash: v.str(r, "content_hash") as ContentHash, embedText: v.str(r, "embed_text") };
       });
     const limit = Math.max(1, Math.floor(opts.limit));
-    const first = opts.prefer?.length ? parse(await this.db.execute(pending(true, limit, exclude))) : [];
-    if (first.length >= limit) return first;
-    const rest = parse(
-      await this.db.execute(pending(false, limit - first.length, [...exclude, ...first.map((p) => p.hash)])),
-    );
-    return [...first, ...rest];
+    return this.conn.db.transaction(async (tx) => {
+      // A batch must walk chunk_content_hash_idx in order and merge-anti-join the vector key until it has
+      // `limit` rows. After a mass re-chunk the anti join is estimated at 1 row, and the planner hashes
+      // and sorts the whole table instead: minutes per batch where this takes ~25 ms.
+      await tx.execute(sql`SET LOCAL enable_hashjoin = off`);
+      await tx.execute(sql`SET LOCAL enable_seqscan = off`);
+      await tx.execute(sql`SET LOCAL jit = off`);
+      const first = opts.prefer?.length ? parse(await tx.execute(pending(true, limit, exclude))) : [];
+      if (first.length >= limit) return first;
+      const rest = parse(
+        await tx.execute(pending(false, limit - first.length, [...exclude, ...first.map((p) => p.hash)])),
+      );
+      return [...first, ...rest];
+    });
   }
 
   private async backlogSize(space: VectorSpace): Promise<number> {
