@@ -47,6 +47,8 @@ export type Query =
 export interface QueryOptions {
   readonly timeoutMs?: number;
   readonly maxRows?: number;
+  /** Yield the statement's EXPLAIN ANALYZE plan lines instead of its rows. */
+  readonly explain?: boolean;
 }
 
 /**
@@ -206,5 +208,6 @@ export async function* runQuery(deps: SearchDeps, q: Query, opts: QueryOptions =
     ...(hits ? { hits } : {}),
     ...(opts.timeoutMs !== undefined ? { timeoutMs: opts.timeoutMs } : {}),
     ...(opts.maxRows !== undefined ? { maxRows: opts.maxRows } : {}),
+    ...(opts.explain ? { explain: true } : {}),
   });
 }

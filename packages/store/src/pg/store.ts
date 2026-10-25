@@ -197,6 +197,7 @@ export class PgReadStore implements ReadStore {
       const w = splitLeadingWith(body);
       body = w ? `WITH ${w.recursive ? "RECURSIVE " : ""}${cte},${w.rest}` : `WITH ${cte}\n${body}`;
     }
+    if (opts.explain) body = `EXPLAIN (ANALYZE, BUFFERS) ${body}`;
     const values = [...prefix, ...bound.values];
     try {
       return await this.conn.client.begin("read only", async (tx) => {
@@ -206,6 +207,12 @@ export class PgReadStore implements ReadStore {
         await tx.unsafe("SET LOCAL random_page_cost = 1.1");
         if (this.canAssumeReader) await tx.unsafe("SET LOCAL ROLE memindex_reader");
         const out: Row[] = [];
+        if (opts.explain) {
+          // A portal (cursor) runs EXPLAIN but returns none of its lines.
+          for (const r of await tx.unsafe(body, values))
+            out.push({ "QUERY PLAN": rowValue(r["QUERY PLAN"]) });
+          return out;
+        }
         for await (const batch of tx.unsafe(body, values).cursor(500)) {
           for (const r of batch) {
             if (out.length === maxRows) {

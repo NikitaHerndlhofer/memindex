@@ -363,6 +363,18 @@ export function runStoreContract(name: string, backend: () => ContractBackend): 
         expect(turns.map((t) => t.turn_key)).toEqual(["a", "x", "b", "c"]);
       });
 
+      test("explain yields the EXPLAIN ANALYZE plan of the same statement, with its params bound", async () => {
+        const w = await writer();
+        const d = draftOf(CUR, "plan", [turnOf("a", "one")]);
+        await w.apply(writeOf(CUR, L1, d, rev("1", 1, 1)));
+        const plan = await rows(
+          w.run("SELECT turn_key FROM turns WHERE item_key = :k", { params: { k: d.key }, explain: true }),
+        );
+        const text = plan.map((r) => String(r["QUERY PLAN"])).join("\n");
+        expect(text).toContain("actual time=");
+        expect(text).toContain("Execution Time");
+      });
+
       test("removed turns delete their chunks; items are never deleted", async () => {
         const w = await writer();
         const d = draftOf(CUR, "rm", [turnOf("a", "keep"), turnOf("b", "drop")]);

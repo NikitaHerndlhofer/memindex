@@ -124,6 +124,11 @@ export interface RunOptions {
   readonly timeoutMs?: number;
   /** Default 10k. The stream ends with a truncation marker row rather than silently cutting. */
   readonly maxRows?: number;
+  /**
+   * Yield `EXPLAIN (ANALYZE, BUFFERS)` lines (`{ "QUERY PLAN": … }`) instead of rows. The statement runs
+   * once with the same transaction settings, role and `hits`, so the plan is the one a normal run gets.
+   */
+  readonly explain?: boolean;
 }
 
 export type Row = Readonly<Record<string, string | number | null>>;

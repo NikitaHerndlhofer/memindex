@@ -17,6 +17,13 @@ import { UsageError } from "./errors.ts";
 import { formatFrom, type OutputFormat } from "./render.ts";
 import type { StdinSource } from "./stdin.ts";
 
+const EXPLAIN_ARG = {
+  explain: {
+    type: "boolean",
+    description: "Print the EXPLAIN (ANALYZE, BUFFERS) plan of the run instead of its rows",
+  },
+} as const satisfies ArgsDef;
+
 const OUTPUT_ARGS = {
   json: { type: "boolean", description: "One JSON array (best for agents)" },
   csv: { type: "boolean", description: "CSV with a header row" },
@@ -51,6 +58,7 @@ export const SQL_ARGS = {
   search: { type: "string", description: "Search text; results arrive as the `hits` relation" },
   ...FILTER_ARGS,
   ...SQL_PARAM_ARG,
+  ...EXPLAIN_ARG,
   ...OUTPUT_ARGS,
 } as const satisfies ArgsDef;
 
@@ -58,6 +66,7 @@ export const Q_ARGS = {
   recipe: { type: "positional", required: false, description: "Recipe name, or `recipes` to list them" },
   ...FILTER_ARGS,
   ...PARAM_ARG,
+  ...EXPLAIN_ARG,
   sql: {
     type: "boolean",
     description: "Print the recipe's SQL as the `memindex sql` command that runs it, instead of running it",
@@ -159,6 +168,7 @@ export function parseParams(rawArgs: readonly string[]): Record<string, string> 
 export interface ParsedQuery {
   readonly query: Query;
   readonly format: OutputFormat;
+  readonly explain: boolean;
 }
 
 function outputFormat(args: Record<string, unknown>): OutputFormat {
@@ -193,12 +203,13 @@ export async function parseSqlCommand(rawArgs: readonly string[], stdin: StdinSo
   const filters = parseFilters(args);
   const format = outputFormat(args);
   const params = parseSqlParams(rawArgs);
+  const explain = args.explain === true;
   const text = typeof args.search === "string" ? args.search.trim() : "";
   if (!text) {
     const stray = SEARCH_ONLY.filter((k) => filters[k] !== undefined);
     if (stray.length > 0)
       throw new UsageError(`--${stray.join(", --")} only apply together with --search <text>`);
-    return { query: { sql, params }, format };
+    return { query: { sql, params }, format, explain };
   }
   const search: SearchSpec = {
     text,
@@ -206,7 +217,7 @@ export async function parseSqlCommand(rawArgs: readonly string[], stdin: StdinSo
     filter: filterOf(filters),
     ...(filters.limit ? { limit: filters.limit } : {}),
   };
-  return { query: { sql, params, search }, format };
+  return { query: { sql, params, search }, format, explain };
 }
 
 export type ParsedQ =
@@ -231,8 +242,10 @@ function sqlText(recipe: Recipe, run: RecipeRun = {}): string {
 export function parseQCommand(rawArgs: readonly string[]): ParsedQ {
   const args = parseArgs([...rawArgs], Q_ARGS);
   const showSql = args.sql === true;
+  const explain = args.explain === true;
   if (showSql && (args.json || args.csv || args.table))
     throw new UsageError("--sql prints shell text; drop --json / --csv / --table");
+  if (showSql && explain) throw new UsageError("pass either --sql or --explain");
   const format = outputFormat(args);
   const [name, ...rest] = args._;
   if (!name || name === "recipes") {
@@ -261,6 +274,7 @@ export function parseQCommand(rawArgs: readonly string[]): ParsedQ {
     return {
       kind: "run",
       format,
+      explain,
       query: { recipe: recipe.name, args: params, search: { text, ...mode, filter } },
     };
   }
@@ -284,5 +298,5 @@ export function parseQCommand(rawArgs: readonly string[]): ParsedQ {
     params[slot] = text;
   }
   if (showSql) return { kind: "sql", text: sqlText(recipe, { args: params }) };
-  return { kind: "run", format, query: { recipe: recipe.name, args: params } };
+  return { kind: "run", format, explain, query: { recipe: recipe.name, args: params } };
 }

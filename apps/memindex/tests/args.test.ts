@@ -10,7 +10,14 @@ const tty: StdinSource = { piped: false, read: async () => "" };
 describe("memindex sql", () => {
   test("reads SQL from stdin", async () => {
     const r = await parseSqlCommand([], piped("  SELECT 1;\n"));
-    expect(r).toEqual({ query: { sql: "SELECT 1;", params: {} }, format: "table" });
+    expect(r).toEqual({ query: { sql: "SELECT 1;", params: {} }, format: "table", explain: false });
+  });
+
+  test("--explain asks for the plan; --sql and --explain together are a usage error", async () => {
+    expect((await parseSqlCommand(["--explain"], piped("SELECT 1"))).explain).toBe(true);
+    const q = parseQCommand(["recent", "--explain"]);
+    expect(q.kind === "run" && q.explain).toBe(true);
+    expect(() => parseQCommand(["recent", "--explain", "--sql"])).toThrow(/either --sql or --explain/);
   });
 
   test("rejects positional SQL, with a pointer to the heredoc form", async () => {
@@ -109,6 +116,7 @@ describe("memindex q", () => {
     expect(r).toEqual({
       kind: "run",
       format: "table",
+      explain: false,
       query: {
         recipe: "search",
         args: { limit: "5" },

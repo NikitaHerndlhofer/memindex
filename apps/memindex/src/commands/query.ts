@@ -2,8 +2,21 @@ import { RECIPES } from "@memindex/engine";
 import { defineCommand } from "citty";
 import { parseQCommand, parseSqlCommand, Q_ARGS, SQL_ARGS } from "../args.ts";
 import { action, out, withArchive } from "../context.ts";
-import { fromArray, render } from "../render.ts";
+import { fromArray, type OutputFormat, render } from "../render.ts";
 import { processStdin } from "../stdin.ts";
+
+/** A plan prints as Postgres prints it, one line per row; rows render in the chosen format. */
+async function show(
+  rows: AsyncIterable<Readonly<Record<string, string | number | null>>>,
+  format: OutputFormat,
+  explain: boolean,
+): Promise<void> {
+  if (!explain || format !== "table") {
+    await render(rows, format, out);
+    return;
+  }
+  for await (const r of rows) out(`${r["QUERY PLAN"] ?? ""}\n`);
+}
 
 export const sqlCommand = defineCommand({
   meta: {
@@ -13,8 +26,8 @@ export const sqlCommand = defineCommand({
   },
   args: SQL_ARGS,
   run: action(async ({ rawArgs }) => {
-    const { query, format } = await parseSqlCommand(rawArgs, processStdin);
-    await withArchive("read", (archive) => render(archive.query(query), format, out));
+    const { query, format, explain } = await parseSqlCommand(rawArgs, processStdin);
+    await withArchive("read", (archive) => show(archive.query(query, { explain }), format, explain));
     return 0;
   }),
 });
@@ -45,7 +58,9 @@ export const qCommand = defineCommand({
       await render(fromArray(rows), parsed.format, out);
       return 0;
     }
-    await withArchive("read", (archive) => render(archive.query(parsed.query), parsed.format, out));
+    await withArchive("read", (archive) =>
+      show(archive.query(parsed.query, { explain: parsed.explain }), parsed.format, parsed.explain),
+    );
     return 0;
   }),
 });
