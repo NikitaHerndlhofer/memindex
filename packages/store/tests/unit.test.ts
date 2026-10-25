@@ -2,7 +2,13 @@ import { describe, expect, test } from "bun:test";
 import { producerId } from "@memindex/model";
 import { chunkHash, type ItemSnapshot, planItemWrite, turnHash } from "../src/core/plan.ts";
 import { facetColumn } from "../src/facets.ts";
-import { bindNamedParams, normalizeSql, singleStatement, splitLeadingWith } from "../src/sqltext.ts";
+import {
+  bindNamedParams,
+  matchesPatterns,
+  normalizeSql,
+  singleStatement,
+  splitLeadingWith,
+} from "../src/sqltext.ts";
 import { CUR, chunksOf, draftOf, L1, rev, turnOf, writeOf } from "./contract.ts";
 
 const P = producerId("11111111-1111-4111-8111-111111111111");
@@ -104,6 +110,24 @@ describe("sqltext", () => {
       "CREATE TABLE x (a int) SELECT 'a  b'",
     );
     expect(normalizeSql("SELECT $f$ a ; b $f$")).toBe("SELECT $f$ a ; b $f$");
+  });
+
+  test("pattern matching is found in code, not in literals or comments", () => {
+    for (const sql of [
+      "SELECT * FROM chunks WHERE text ILIKE '%x%'",
+      "SELECT * FROM chunks WHERE text like :p",
+      "SELECT * FROM turns WHERE body ~* 'err'",
+      "SELECT strpos(text, 'x') FROM chunks",
+      "SELECT * FROM chunks WHERE text SIMILAR TO '%(a|b)%'",
+    ])
+      expect(matchesPatterns(sql)).toBe(true);
+    for (const sql of [
+      "SELECT 'I like it' AS t",
+      "SELECT * FROM hits -- not ILIKE\n",
+      'SELECT "like" FROM t',
+      "SELECT likely FROM t",
+    ])
+      expect(matchesPatterns(sql)).toBe(false);
   });
 });
 

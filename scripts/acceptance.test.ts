@@ -6,9 +6,13 @@ import {
   formatLine,
   type ItemRev,
   idleCpuVerdict,
+  type LatencySample,
+  latencyVerdict,
   parseCputime,
   parseOptions,
+  percentile,
   pickWord,
+  requiredParams,
   UsageError,
 } from "./acceptance.ts";
 
@@ -100,6 +104,72 @@ describe("idle-cpu", () => {
     expect(idleCpuVerdict(idle(1, 0, 0)).verdict).toBe("INCONCLUSIVE");
     expect(idleCpuVerdict(idle(5, 0, 0)).verdict).toBe("INCONCLUSIVE");
     expect(idleCpuVerdict([]).verdict).toBe("INCONCLUSIVE");
+  });
+});
+
+describe("search-latency", () => {
+  const ran = (group: LatencySample["group"], label: string, ms: number): LatencySample => ({
+    group,
+    label,
+    outcome: { kind: "ran", ms },
+  });
+
+  test("nearest-rank percentiles", () => {
+    expect(percentile([30, 10, 20], 0.5)).toBe(20);
+    expect(percentile([1, 2, 3, 4, 5, 6, 7, 8, 9, 10], 0.95)).toBe(10);
+    expect(percentile([7], 0.95)).toBe(7);
+  });
+
+  test("VERIFIED when every run is under the limit; reports p50/p95 per mode and the slowest recipe", () => {
+    const r = latencyVerdict([
+      ran("keyword", "sql", 100),
+      ran("keyword", "rate limiter", 300),
+      ran("fuzzy", "sql", 2999),
+      ran("recipe", "sources", 50),
+      ran("recipe", "thread", 900),
+    ]);
+    expect(r.verdict).toBe("VERIFIED");
+    expect(r.evidence).toContain("keyword p50 100 ms p95 300 ms (n=2)");
+    expect(r.evidence).toContain("fuzzy p50 2999 ms");
+    expect(r.evidence).toContain("slowest thread 900 ms");
+  });
+
+  test("one run at the limit or one failure is NOT VERIFIED, and both are named", () => {
+    const slow = latencyVerdict([ran("keyword", "sql", 10), ran("fuzzy", "swrag sql", 3000)]);
+    expect(slow.verdict).toBe("NOT VERIFIED");
+    expect(slow.evidence).toContain('fuzzy "swrag sql" 3000 ms');
+    const failed = latencyVerdict([
+      ran("keyword", "sql", 10),
+      {
+        group: "fuzzy",
+        label: "sql",
+        outcome: { kind: "failed", ms: 15_100, error: "exit 1: statement timeout" },
+      },
+    ]);
+    expect(failed.verdict).toBe("NOT VERIFIED");
+    expect(failed.evidence).toContain('fuzzy "sql" (exit 1: statement timeout)');
+  });
+
+  test("a skipped run is INCONCLUSIVE, never a pass; a slow run still fails", () => {
+    const noEmbed = { kind: "skipped" as const, reason: "Ollama unreachable" };
+    const r = latencyVerdict([
+      ran("keyword", "sql", 10),
+      { group: "semantic", label: "sql", outcome: noEmbed },
+      { group: "hybrid", label: "sql", outcome: noEmbed },
+    ]);
+    expect(r.verdict).toBe("INCONCLUSIVE");
+    expect(r.evidence).toContain("skipped: 2 (Ollama unreachable)");
+    expect(
+      latencyVerdict([ran("keyword", "x", 5000), { group: "hybrid", label: "x", outcome: noEmbed }]).verdict,
+    ).toBe("NOT VERIFIED");
+    expect(latencyVerdict([]).verdict).toBe("INCONCLUSIVE");
+  });
+
+  test("required recipe params are the bare names", () => {
+    expect(requiredParams("mode days=7 limit=50")).toEqual(["mode"]);
+    expect(requiredParams("parent? limit=50")).toEqual([]);
+    expect(requiredParams("chunk around=2")).toEqual(["chunk"]);
+    expect(requiredParams("")).toEqual([]);
   });
 });
 

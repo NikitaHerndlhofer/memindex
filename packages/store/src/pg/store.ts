@@ -56,7 +56,7 @@ import {
   producer as producerTable,
   turn,
 } from "../schema.ts";
-import { bindNamedParams, singleStatement, splitLeadingWith } from "../sqltext.ts";
+import { bindNamedParams, matchesPatterns, singleStatement, splitLeadingWith } from "../sqltext.ts";
 import { type Connection, type Exec, pgCode, withRetry } from "./connect.ts";
 import * as v from "./rows.ts";
 
@@ -115,6 +115,21 @@ function rowValue(x: unknown): string | number | null {
 }
 
 const ts = (d: Date | null): IsoTime | null => (d ? isoTime(d) : null);
+
+/** What a run() that hit its statement timeout most likely did, and what to run instead. */
+function timeoutFix(sql: string, searched: boolean): string {
+  return [
+    matchesPatterns(sql)
+      ? "LIKE / ILIKE / ~ over chunks.text or turns.body is not indexed and reads every chunk; search instead with `--search <text> --mode fuzzy` (substrings, typos) or `--mode keyword` (whole words) and join `hits`."
+      : null,
+    searched
+      ? "If the search itself is slow: use longer or rarer words, narrow it with --source, --kind or --since, or try --mode keyword."
+      : null,
+    "Add a LIMIT and filter by source, kind or age_days before joining turns or chunks.",
+  ]
+    .filter(Boolean)
+    .join(" ");
+}
 
 function isHitList(h: StoreSearch | readonly Hit[]): h is readonly Hit[] {
   return Array.isArray(h);
@@ -187,6 +202,8 @@ export class PgReadStore implements ReadStore {
       return await this.conn.client.begin("read only", async (tx) => {
         await tx.unsafe(`SET LOCAL statement_timeout = ${timeoutMs}`);
         await tx.unsafe("SET LOCAL search_path = memindex, extensions");
+        // The default 4 makes a whole-table chunk scan beat the trigram index near ties on SSD storage.
+        await tx.unsafe("SET LOCAL random_page_cost = 1.1");
         if (this.canAssumeReader) await tx.unsafe("SET LOCAL ROLE memindex_reader");
         const out: Row[] = [];
         for await (const batch of tx.unsafe(body, values).cursor(500)) {
@@ -205,6 +222,13 @@ export class PgReadStore implements ReadStore {
     } catch (e) {
       if (pgCode(e) === "25006") {
         throw new StoreError("readonly", "run() is read-only; writes go through the producer API", String(e));
+      }
+      if (pgCode(e) === "57014" && /statement timeout/.test(String(e))) {
+        throw new StoreError(
+          "timeout",
+          timeoutFix(text, cte !== null),
+          `cancelled after the ${timeoutMs} ms statement timeout`,
+        );
       }
       throw e;
     }

@@ -171,6 +171,15 @@ export function splitLeadingWith(sql: string): { readonly recursive: boolean; re
   return null;
 }
 
+/** Pattern matching in code (LIKE, ILIKE, SIMILAR TO, `~` operators, strpos, position), not in literals or comments. */
+export function matchesPatterns(sql: string): boolean {
+  return scan(sql).some(
+    (s) =>
+      s.kind === "code" &&
+      (/\b(i?like|similar\s+to|strpos|position)\b/i.test(s.text) || s.text.includes("~")),
+  );
+}
+
 /** Strips trailing `;` and refuses multiple top-level statements. */
 export function singleStatement(sql: string): string {
   const segs = scan(sql);

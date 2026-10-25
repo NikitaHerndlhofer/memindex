@@ -311,6 +311,7 @@ export class StoreError extends Error {
       | "schema_gap"
       | "busy"
       | "readonly"
+      | "timeout"
       | "missing"
       | "unsupported",
     readonly fix: string,

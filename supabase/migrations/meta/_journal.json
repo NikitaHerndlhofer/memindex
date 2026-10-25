@@ -57,6 +57,13 @@
       "when": 1792892355518,
       "tag": "20261025013915_memindex_archive_labels",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1792901290853,
+      "tag": "20261025040810_memindex_search_bounds",
+      "breakpoints": true
     }
   ]
 }

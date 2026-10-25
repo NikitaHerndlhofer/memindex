@@ -165,13 +165,16 @@ async function rows(it: AsyncIterable<Row>): Promise<Row[]> {
   return out;
 }
 
-async function expectStoreError(p: Promise<unknown> | (() => Promise<unknown>), code: StoreError["code"]) {
+async function expectStoreError(
+  p: Promise<unknown> | (() => Promise<unknown>),
+  code: StoreError["code"],
+): Promise<StoreError> {
   try {
     await (typeof p === "function" ? p() : p);
   } catch (e) {
     expect(e).toBeInstanceOf(StoreError);
     expect(e instanceof StoreError ? e.code : null).toBe(code);
-    return;
+    return e as StoreError;
   }
   throw new Error(`expected StoreError ${code}`);
 }
@@ -672,6 +675,26 @@ export function runStoreContract(name: string, backend: () => ContractBackend): 
         expect(hy.every((h) => h.itemKey.startsWith("superwhisper:"))).toBe(true);
       });
 
+      test("fuzzy finds a phrase across case and separators, ranks the exact phrase first, and still corrects typos", async () => {
+        const w = await writer();
+        const texts = {
+          glued: "configure the RateLimiter first",
+          snake: "rate_limiter tuning notes",
+          exact: "the rate limiter dropped requests",
+          other: "nothing relevant in here at all",
+        };
+        for (const [k, t] of Object.entries(texts))
+          await w.apply(writeOf(CUR, L1, draftOf(CUR, k, [turnOf("m", t)]), rev("1")));
+        const hits = await w.search({ via: "fuzzy", text: "rate limiter", filter: {}, k: 10 });
+        expect(new Set(hits.map((h) => h.itemKey))).toEqual(
+          new Set([itemKey(CUR, "glued"), itemKey(CUR, "snake"), itemKey(CUR, "exact")]),
+        );
+        expect(hits.at(-1)?.itemKey).toBe(itemKey(CUR, "glued"));
+        expect(hits.at(-1)?.score ?? 1).toBeLessThan(1);
+        const typo = await w.search({ via: "fuzzy", text: "rate limitter", filter: {}, k: 10 });
+        expect(typo.map((h) => h.itemKey)).toContain(itemKey(CUR, "exact"));
+      });
+
       test("a multi-megabyte chunk applies whole and its opening words are keyword- and fuzzy-searchable", async () => {
         const w = await writer();
         const letters = "abcdefghijklmnopqrstuvwxyz";
@@ -777,9 +800,29 @@ export function runStoreContract(name: string, backend: () => ContractBackend): 
         await expect(rows(w.run("SELECT memindex.vec_gc()", {}))).rejects.toThrow(
           /permission denied|read-only/,
         );
-        await expect(rows(w.run("SELECT pg_sleep(2)", { timeoutMs: 100 }))).rejects.toThrow(
-          /statement timeout/,
+        const slow = await expectStoreError(rows(w.run("SELECT pg_sleep(2)", { timeoutMs: 100 })), "timeout");
+        expect(slow.message).toContain("100 ms statement timeout");
+        expect(slow.fix).toContain("LIMIT");
+        expect(slow.fix).not.toContain("--mode fuzzy");
+        const scan = await expectStoreError(
+          rows(
+            w.run("SELECT pg_sleep(2) FROM chunks WHERE text ILIKE '%x%' OR true LIMIT 1", {
+              timeoutMs: 100,
+            }),
+          ),
+          "timeout",
         );
+        expect(scan.fix).toContain("--mode fuzzy");
+        const searched = await expectStoreError(
+          rows(
+            w.run("SELECT pg_sleep(2) FROM hits", {
+              hits: { via: "keyword", text: "x", filter: {}, k: 1 },
+              timeoutMs: 100,
+            }),
+          ),
+          "timeout",
+        );
+        expect(searched.fix).toContain("--source");
         const many = await rows(w.run("SELECT g FROM generate_series(1, 50) g", { maxRows: 10 }));
         expect(many.length).toBe(11);
         expect(many.at(-1)).toEqual({ __truncated: 1, __max_rows: 10 });

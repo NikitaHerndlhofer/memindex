@@ -29,7 +29,15 @@ export interface ClauseResult {
   readonly data?: Readonly<Record<string, unknown>>;
 }
 
-const CLAUSE_IDS = ["schema", "live-ingest", "embed", "search-scoped", "read-only", "idle-cpu"] as const;
+const CLAUSE_IDS = [
+  "schema",
+  "live-ingest",
+  "embed",
+  "search-scoped",
+  "search-latency",
+  "read-only",
+  "idle-cpu",
+] as const;
 export type ClauseId = (typeof CLAUSE_IDS)[number];
 
 export interface Options {
@@ -220,6 +228,73 @@ export function idleCpuVerdict(samples: readonly CpuSample[]): ClauseResult {
     evidence: `avg ${avg.toFixed(1)}% CPU (limit ${IDLE_MAX_AVG_PCPU}%), cputime +${grew.toFixed(2)} s (limit ${IDLE_MAX_CPUTIME_S.toFixed(2)} s) over ${Math.round(spanMs / 1000)} s, ${inWindow.length} samples after a baseline at ${first.pcpu.toFixed(1)}%`,
     data: { samples, avg, grew },
   };
+}
+
+const LATENCY_LIMIT_MS = 3_000;
+type LatencyGroup = "keyword" | "fuzzy" | "semantic" | "hybrid" | "recipe";
+const LATENCY_GROUPS: readonly LatencyGroup[] = ["keyword", "fuzzy", "semantic", "hybrid", "recipe"];
+
+type LatencyOutcome =
+  | { readonly kind: "ran"; readonly ms: number }
+  | { readonly kind: "failed"; readonly ms: number; readonly error: string }
+  | { readonly kind: "skipped"; readonly reason: string };
+
+export interface LatencySample {
+  readonly group: LatencyGroup;
+  /** The query text for a search mode, the recipe name for a recipe. */
+  readonly label: string;
+  readonly outcome: LatencyOutcome;
+}
+
+/** Nearest-rank percentile of a non-empty list. */
+export function percentile(values: readonly number[], p: number): number {
+  const sorted = [...values].sort((a, b) => a - b);
+  return sorted[Math.max(0, Math.ceil(p * sorted.length) - 1)] ?? Number.NaN;
+}
+
+/**
+ * VERIFIED iff every sample ran, exited 0 and took under `limitMs`. A failure or a slow run is NOT
+ * VERIFIED; a skipped sample (no embedder, no value for a required param) leaves it INCONCLUSIVE.
+ */
+export function latencyVerdict(samples: readonly LatencySample[], limitMs = LATENCY_LIMIT_MS): ClauseResult {
+  const name = (s: LatencySample) => (s.group === "recipe" ? s.label : `${s.group} "${s.label}"`);
+  const ran: { s: LatencySample; ms: number }[] = [];
+  const failed: string[] = [];
+  const skipped = new Map<string, number>();
+  for (const s of samples) {
+    const o = s.outcome;
+    if (o.kind === "ran") ran.push({ s, ms: o.ms });
+    else if (o.kind === "failed") failed.push(`${name(s)} (${o.error})`);
+    else skipped.set(o.reason, (skipped.get(o.reason) ?? 0) + 1);
+  }
+  const slow = ran.filter((r) => r.ms >= limitMs);
+  const stats = LATENCY_GROUPS.flatMap((g) => {
+    const runs = ran.filter((r) => r.s.group === g);
+    if (runs.length === 0) return [];
+    const ms = runs.map((r) => r.ms);
+    const line = `${g === "recipe" ? "recipes" : g} p50 ${percentile(ms, 0.5)} ms p95 ${percentile(ms, 0.95)} ms (n=${ms.length})`;
+    if (g !== "recipe") return [line];
+    const slowest = runs.reduce((a, b) => (b.ms > a.ms ? b : a));
+    return [`${line}, slowest ${slowest.s.label} ${slowest.ms} ms`];
+  });
+  const parts = [
+    stats.join("; ") || "nothing ran",
+    slow.length ? `over ${limitMs} ms: ${slow.map((r) => `${name(r.s)} ${r.ms} ms`).join(", ")}` : "",
+    failed.length ? `failed: ${failed.join(", ")}` : "",
+    skipped.size ? `skipped: ${[...skipped].map(([why, n]) => `${n} (${why})`).join(", ")}` : "",
+  ].filter(Boolean);
+  const verdict: Verdict =
+    failed.length || slow.length
+      ? "NOT VERIFIED"
+      : skipped.size || ran.length === 0
+        ? "INCONCLUSIVE"
+        : "VERIFIED";
+  return { verdict, evidence: parts.join("; "), data: { limitMs, samples } };
+}
+
+/** `memindex q recipes --json` params: `mode days=7 source? limit=50` → the required names (`mode`). */
+export function requiredParams(spec: string): string[] {
+  return spec.split(/\s+/).filter((p) => p && !p.includes("=") && !p.endsWith("?"));
 }
 
 // ─── Harness context ─────────────────────────────────────────────────────────
@@ -737,6 +812,139 @@ const searchScoped: Clause = {
   },
 };
 
+/** Short identifiers, two-word phrases, a typo, a non-English word and code tokens. */
+const LATENCY_QUERIES = [
+  "sql",
+  "useEffect",
+  "rate limiter",
+  "swrag sql",
+  "statment timeout",
+  "Besprechung",
+  "ECONNREFUSED",
+  "pgvector halfvec",
+] as const;
+const LATENCY_MODES = ["keyword", "fuzzy", "semantic", "hybrid"] as const;
+const EMBEDDING_MODES = new Set<string>(["semantic", "hybrid"]);
+
+/** One representative value per required recipe param, sampled from the archive (owner-side reads). */
+const PARAM_SAMPLES: Readonly<Record<string, string>> = {
+  item: `SELECT i.item_key AS v FROM memindex.item i
+         WHERE i.superseded_by IS NULL AND EXISTS (SELECT 1 FROM memindex.chunk c WHERE c.item_key = i.item_key)
+         ORDER BY i.started_at DESC, i.item_key LIMIT 1`,
+  mode: `SELECT meta ->> 'mode' AS v FROM memindex.item WHERE source = 'superwhisper' AND meta ? 'mode'
+         GROUP BY 1 ORDER BY count(*) DESC, 1 LIMIT 1`,
+  language: `SELECT meta ->> 'language' AS v FROM memindex.item WHERE source = 'superwhisper' AND meta ? 'language'
+             GROUP BY 1 ORDER BY count(*) DESC, 1 LIMIT 1`,
+  repo: `SELECT origin AS v FROM memindex.item WHERE origin IS NOT NULL GROUP BY 1 ORDER BY count(*) DESC, 1 LIMIT 1`,
+  tag: `SELECT tag AS v FROM memindex.item_tag GROUP BY 1 ORDER BY count(*) DESC, 1 LIMIT 1`,
+  kind: `SELECT kind AS v FROM memindex.chunk TABLESAMPLE SYSTEM (1) GROUP BY 1 ORDER BY count(*) DESC, 1 LIMIT 1`,
+};
+
+async function warmEmbedder(): Promise<void> {
+  await fetch(`${OLLAMA}/api/embed`, {
+    method: "POST",
+    body: JSON.stringify({ model: "bge-m3", input: "warm up" }),
+    signal: AbortSignal.timeout(120_000),
+  }).catch(() => {});
+}
+
+const searchLatency: Clause = {
+  id: "search-latency",
+  title: `every search mode and every recipe answers in under ${LATENCY_LIMIT_MS / 1000} s`,
+  requires: [],
+  async run(h) {
+    const ollama = await ollamaHasModel();
+    if (!ollama) await warmEmbedder();
+    const listed = await h.cli(["q", "recipes", "--json"], { timeoutMs: 60_000 });
+    const recipes = parseJsonRows(listed.stdout);
+    if (listed.code !== 0 || recipes === null)
+      return {
+        verdict: "INCONCLUSIVE",
+        evidence: `q recipes exit ${listed.code}: ${firstLine(listed.stderr)}`,
+      };
+
+    const values = await h.sql.begin("read only", async (tx) => {
+      const out: Record<string, string> = {};
+      for (const [param, query] of Object.entries(PARAM_SAMPLES)) {
+        const [row] = (await tx.unsafe(query)) as { v: string | null }[];
+        if (row?.v) out[param] = row.v;
+      }
+      if (out.item) {
+        const [c] = (await tx.unsafe(
+          "SELECT chunk_id AS v FROM memindex.chunk WHERE item_key = $1 ORDER BY ord, chunk_id LIMIT 1",
+          [out.item],
+        )) as { v: string }[];
+        if (c) out.chunk = c.v;
+      }
+      return out;
+    });
+
+    const samples: LatencySample[] = [];
+    let refused: string | null = null;
+    const time = async (group: LatencyGroup, label: string, args: readonly string[], needsEmbed: boolean) => {
+      if (refused) return;
+      if (needsEmbed && ollama) {
+        samples.push({ group, label, outcome: { kind: "skipped", reason: `Ollama ${ollama}` } });
+        return;
+      }
+      const r = await h.cli([...args, "--json"], { timeoutMs: 120_000 });
+      if (r.code === 2) refused = firstLine(r.stderr);
+      const ok = r.code === 0 && parseJsonRows(r.stdout) !== null;
+      const error =
+        r.stderr
+          .split("\n")
+          .find((l) => / error /.test(l))
+          ?.slice(0, 200) ?? firstLine(r.stderr);
+      samples.push({
+        group,
+        label,
+        outcome: ok
+          ? { kind: "ran", ms: r.ms }
+          : { kind: "failed", ms: r.ms, error: `exit ${r.code}: ${error}` },
+      });
+    };
+
+    for (const mode of LATENCY_MODES)
+      for (const q of LATENCY_QUERIES)
+        await time(
+          mode,
+          q,
+          ["q", "search", q, "--mode", mode, "--all-sources", "--limit", "20"],
+          EMBEDDING_MODES.has(mode),
+        );
+
+    for (const r of recipes) {
+      const name = String(r.recipe);
+      const missing = requiredParams(String(r.params ?? "")).filter((p) => values[p] === undefined);
+      if (missing.length) {
+        samples.push({
+          group: "recipe",
+          label: name,
+          outcome: { kind: "skipped", reason: `no sample value for :${missing.join(", :")}` },
+        });
+        continue;
+      }
+      const params = requiredParams(String(r.params ?? "")).flatMap((p) => ["--param", `${p}=${values[p]}`]);
+      const search = r.search === null || r.search === undefined ? null : String(r.search);
+      const args = ["q", name, ...(search ? ["rate limiter", "--all-sources"] : []), ...params];
+      await time("recipe", name, args, search !== null && EMBEDDING_MODES.has(search));
+    }
+
+    if (refused)
+      return {
+        verdict: "INCONCLUSIVE",
+        evidence: `the CLI refused the database: ${refused}`,
+        data: { samples },
+      };
+    const r = latencyVerdict(samples);
+    return {
+      ...r,
+      evidence: `${r.evidence}; ${LATENCY_QUERIES.length} queries x ${LATENCY_MODES.length} modes and ${recipes.length} recipes through the CLI, wall time per run${ollama ? "" : ", embedder warmed first"}`,
+      data: { ...r.data, params: values },
+    };
+  },
+};
+
 const readOnly: Clause = {
   id: "read-only",
   title: "memindex sql refuses writes",
@@ -862,7 +1070,15 @@ const idleCpu: Clause = {
   },
 };
 
-const CLAUSES: readonly Clause[] = [schema, liveIngest, embed, searchScoped, readOnly, idleCpu];
+const CLAUSES: readonly Clause[] = [
+  schema,
+  liveIngest,
+  embed,
+  searchScoped,
+  searchLatency,
+  readOnly,
+  idleCpu,
+];
 
 // ─── Main ────────────────────────────────────────────────────────────────────
 
