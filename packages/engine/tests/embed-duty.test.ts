@@ -2,16 +2,22 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { chunkDraft, chunkerId, type ItemDraft } from "@memindex/model";
 import {
   type Archive,
+  type Budget,
+  budget,
   type Clock,
   createPowerProbe,
   deferReason,
   EMBED_DEFAULTS,
   type EmbedActivity,
   type EmbedDutyDeps,
+  type EmbedPace,
   type EmbedPolicy,
   type EmbedRuntime,
+  JOBS,
+  type JobContext,
   loadConfig,
   openArchive,
   type PowerState,
@@ -19,8 +25,10 @@ import {
   readEmbedRuntime,
   runEmbedDuty,
 } from "../src/index.ts";
+import { runJobs, runMaintenance, selectJobs } from "../src/jobs/index.ts";
 import {
   FakeStore,
+  fakeChunker,
   fakeEmbedder,
   fakePlugin,
   fakeRegistry,
@@ -46,9 +54,13 @@ const many = (n: number) =>
 async function open(
   store: FakeStore,
   n: number,
-  extra: { embedder?: ReturnType<typeof fakeEmbedder>; power?: () => Promise<PowerState> } = {},
+  extra: {
+    embedder?: ReturnType<typeof fakeEmbedder>;
+    power?: () => Promise<PowerState>;
+    plugin?: ReturnType<typeof fakePlugin>;
+  } = {},
 ): Promise<Archive> {
-  const plugin = fakePlugin({ entries: many(n) });
+  const plugin = extra.plugin ?? fakePlugin({ entries: many(n) });
   return openArchive({
     mode: "write",
     config: await loadConfig({ HOME: dir, MEMINDEX_CONFIG_DIR: dir }),
@@ -93,19 +105,33 @@ async function spawnEmbedHolder() {
 function fakeClock(holdFromMs: number) {
   let t = 0;
   const sleeps: { at: number; ms: number }[] = [];
+  const timers = new Set<{ due: number; fn: () => void }>();
+  const advance = (ms: number) => {
+    t += ms;
+    for (const timer of [...timers]) {
+      if (timer.due > t) continue;
+      timers.delete(timer);
+      timer.fn();
+    }
+  };
   const clock: Clock = {
     now: () => t,
     sleep: async (ms, signal) => {
       sleeps.push({ at: t, ms });
       if (ms < holdFromMs) {
-        t += ms;
+        advance(ms);
         return;
       }
       if (signal.aborted) return;
       await new Promise<void>((resolve) => signal.addEventListener("abort", () => resolve(), { once: true }));
     },
+    after: (ms, fn) => {
+      const timer = { due: t + ms, fn };
+      timers.add(timer);
+      return () => timers.delete(timer);
+    },
   };
-  return { clock, sleeps, advance: (ms: number) => (t += ms), now: () => t };
+  return { clock, sleeps, advance, now: () => t };
 }
 
 /** Each embed call costs `msPerCall` of fake time; call times are recorded. */
@@ -131,6 +157,7 @@ function startDuty(opts: {
   power?: () => Promise<PowerState>;
   maintain?: EmbedDutyDeps["maintain"];
   pace?: EmbedDutyDeps["pace"];
+  logs?: string[];
   stopWhen?: (a: EmbedActivity, states: EmbedRuntime[]) => boolean;
 }) {
   const controller = new AbortController();
@@ -143,7 +170,7 @@ function startDuty(opts: {
       lockDir: join(dir, "locks"),
       power: opts.power ?? (async () => AC),
       clock: opts.clock,
-      log: recordingLog(),
+      log: recordingLog(opts.logs),
       ...(opts.maintain ? { maintain: opts.maintain } : {}),
       ...(opts.pace ? { pace: opts.pace } : {}),
       onState: (r) => {
@@ -242,10 +269,13 @@ describe("duty cycle", () => {
       store,
       embedder,
       clock: fc.clock,
-      pace: async () => {
-        asked++;
-        if (asked === 2) pace = "gentle";
-        return pace;
+      pace: {
+        read: async () => {
+          asked++;
+          if (asked === 2) pace = "gentle";
+          return pace;
+        },
+        save: async () => {},
       },
     });
     while (fc.sleeps.at(-1)?.ms !== EMBED_DEFAULTS.idleRecheckMs) await Bun.sleep(1);
@@ -265,8 +295,11 @@ describe("duty cycle", () => {
       embedder,
       clock: fc.clock,
       policy: { pace: "full" },
-      pace: async () => {
-        throw new Error("config is not valid JSON");
+      pace: {
+        read: async () => {
+          throw new Error("config is not valid JSON");
+        },
+        save: async () => {},
       },
     });
     while (fc.sleeps.at(-1)?.ms !== EMBED_DEFAULTS.idleRecheckMs) await Bun.sleep(1);
@@ -449,6 +482,58 @@ describe("power awareness", () => {
     expect(store.vecs.size).toBe(3);
   });
 
+  test("a maintenance slice past 3x busyMs warns once, naming the job and the item in flight", async () => {
+    const logs: string[] = [];
+    const fc = fakeClock(EMBED_DEFAULTS.idleRecheckMs);
+    let finish: (() => void) | undefined;
+    const duty = startDuty({
+      store: new FakeStore(),
+      embedder: fakeEmbedder(),
+      clock: fc.clock,
+      logs,
+      maintain: async (b) => {
+        b.onUnit?.("rechunk", "fake:stuck");
+        await new Promise<void>((resolve) => (finish = resolve));
+        return [{ id: "rechunk", done: 0, remaining: 0, error: null }];
+      },
+      stopWhen: (a) => a.state === "idle",
+    });
+    while (!finish) await Bun.sleep(1);
+    const warnings = () => logs.filter((l) => l.startsWith("warn:"));
+    fc.advance(3 * EMBED_DEFAULTS.busyMs - 1);
+    expect(warnings()).toEqual([]);
+    fc.advance(1);
+    fc.advance(10 * EMBED_DEFAULTS.busyMs);
+    expect(warnings()).toHaveLength(1);
+    expect(warnings()[0]).toContain("rechunk fake:stuck");
+    finish();
+    await duty.done;
+  });
+
+  test("an embed slice past 3x busyMs warns once, naming the batch in flight", async () => {
+    const store = await seeded(100);
+    const logs: string[] = [];
+    const fc = fakeClock(EMBED_DEFAULTS.idleRecheckMs);
+    const base = fakeEmbedder();
+    let calls = 0;
+    let finish: (() => void) | undefined;
+    const embedder = {
+      ...base,
+      embed: async (texts: readonly string[]) => {
+        if (++calls === 2) await new Promise<void>((resolve) => (finish = resolve));
+        return base.embed(texts);
+      },
+    };
+    const duty = startDuty({ store, embedder, clock: fc.clock, logs, stopWhen: (a) => a.state === "idle" });
+    while (!finish) await Bun.sleep(1);
+    fc.advance(3 * EMBED_DEFAULTS.busyMs);
+    const warnings = logs.filter((l) => l.startsWith("warn:"));
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toMatch(/embed 36 chunk\(s\) from \S+/);
+    finish();
+    await duty.done;
+  });
+
   test("ingest still writes on battery; only its embedding is deferred", async () => {
     const embedder = fakeEmbedder();
     const archive = await open(new FakeStore(), 2, { embedder, power: async () => BATTERY });
@@ -457,5 +542,182 @@ describe("power awareness", () => {
     expect(r.embedded).toBe(0);
     expect(r.skipped).toEqual([{ source: "embed", reason: "deferred: on battery" }]);
     expect(embedder.calls).toEqual([]);
+  });
+});
+
+describe("full pace is one backfill", () => {
+  function savedPace(initial: EmbedPace) {
+    const saves: EmbedPace[] = [];
+    const p = {
+      current: initial,
+      saves,
+      pace: {
+        read: async () => p.current,
+        save: async (next: EmbedPace) => {
+          saves.push(next);
+          p.current = next;
+        },
+      },
+    };
+    return p;
+  }
+
+  test("full drops back to gentle when the backlog first empties, and does so again after the user sets full later", async () => {
+    const store = await seeded(100);
+    const logs: string[] = [];
+    const fc = fakeClock(EMBED_DEFAULTS.idleRecheckMs);
+    const { embedder } = timedEmbedder(fc.advance, fc.now);
+    const saved = savedPace("full");
+    const duty = startDuty({ store, embedder, clock: fc.clock, logs, pace: saved.pace });
+    const idleCount = () => duty.states.filter((s) => s.activity.state === "idle").length;
+    while (idleCount() < 1) await Bun.sleep(1);
+    expect(store.vecs.size).toBe(100);
+    expect(saved.saves).toEqual(["gentle"]);
+    expect(logs.filter((l) => l.includes("pace"))).toHaveLength(1);
+
+    saved.current = "full";
+    await (await open(store, 200)).ingest();
+    duty.nudge();
+    while (idleCount() < 2) await Bun.sleep(1);
+    expect(store.vecs.size).toBe(200);
+    expect(saved.saves).toEqual(["gentle", "gentle"]);
+    duty.stop();
+    await duty.done;
+  });
+
+  test("a gentle drain, an idle wake with nothing to embed, or a failing embedder leaves the pace alone", async () => {
+    const fc = fakeClock(EMBED_DEFAULTS.idleRecheckMs);
+    const gentle = savedPace("gentle");
+    await startDuty({
+      store: await seeded(10),
+      embedder: fakeEmbedder(),
+      clock: fc.clock,
+      pace: gentle.pace,
+      stopWhen: (a) => a.state === "idle",
+    }).done;
+    expect(gentle.saves).toEqual([]);
+
+    const empty = savedPace("full");
+    await startDuty({
+      store: new FakeStore(),
+      embedder: fakeEmbedder(),
+      clock: fc.clock,
+      pace: empty.pace,
+      stopWhen: (a) => a.state === "idle",
+    }).done;
+    expect(empty.saves).toEqual([]);
+
+    const failing = savedPace("full");
+    await startDuty({
+      store: await seeded(10),
+      embedder: fakeEmbedder(8, true),
+      clock: fc.clock,
+      pace: failing.pace,
+      stopWhen: (a) => a.state === "idle",
+    }).done;
+    expect(failing.saves).toEqual([]);
+  });
+});
+
+describe("watcher maintenance", () => {
+  const V2 = chunkerId("fake", 2);
+  /** A chunker bump that rewrites the text of `text 0` only, so its old vector is orphaned. */
+  const rewording = {
+    id: V2,
+    chunk: (d: ItemDraft) =>
+      fakeChunker()
+        .chunk(d)
+        .map((c) =>
+          chunkDraft(d.key, {
+            turnKey: c.turnKey,
+            partIdx: c.partIdx,
+            sub: c.sub,
+            kind: c.kind,
+            toolName: c.toolName,
+            text: c.text === "text 0" ? "TEXT 0" : c.text,
+            embed: c.embed,
+          }),
+        ),
+  };
+
+  function bumped(store: FakeStore, plugin = fakePlugin({ entries: many(0), chunker: V2 })): JobContext {
+    return {
+      store,
+      embedder: fakeEmbedder(),
+      registry: fakeRegistry([plugin], [fakeChunker(), rewording]),
+      log: recordingLog(),
+      lockDir: null,
+      args: {},
+    };
+  }
+
+  const liveHashes = (store: FakeStore) =>
+    new Set<string>(
+      [...store.items.values()].flatMap((r) => r.chunks.filter((c) => c.embed).map((c) => c.contentHash)),
+    );
+
+  test("after re-chunking it deletes the vectors no chunk uses any more and keeps every one a chunk still uses", async () => {
+    const store = new FakeStore();
+    await (await open(store, 3)).ingest({ embed: { budgetMs: 5_000 } });
+    const before = new Set(store.vecs.keys());
+    expect(before.size).toBe(3);
+
+    const reports = await runMaintenance(JOBS, bumped(store), budget(5_000));
+    expect(reports.map((r) => [r.id, r.done, r.remaining])).toEqual([
+      ["reparse", 0, 0],
+      ["rechunk", 3, 0],
+      ["vec-gc", 1, 0],
+    ]);
+    const live = liveHashes(store);
+    expect([...store.vecs.keys()].sort()).toEqual([...before].filter((h) => live.has(h)).sort());
+    expect(store.vecs.size).toBe(2);
+  });
+
+  test("gc waits while a re-chunk pass was cut short by the budget", async () => {
+    const store = new FakeStore();
+    await (await open(store, 3)).ingest({ embed: { budgetMs: 5_000 } });
+    const expired: Budget = { deadline: 0, expired: () => true };
+    const reports = await runMaintenance(JOBS, bumped(store), expired);
+    expect(reports.map((r) => r.id)).toEqual(["reparse", "rechunk"]);
+    expect(store.vecs.size).toBe(3);
+  });
+
+  /** Each write costs one second of `t`; the budget is 30 s. */
+  function secondPerWrite(store: FakeStore) {
+    let t = 0;
+    const replace = store.replaceChunks.bind(store);
+    store.replaceChunks = async (...a) => {
+      t += 1_000;
+      return replace(...a);
+    };
+    const apply = store.apply.bind(store);
+    const b: Budget = { deadline: 30_000, expired: () => t >= 30_000 };
+    return {
+      b,
+      slowApply: () => {
+        store.apply = async (w) => {
+          t += 1_000;
+          return apply(w);
+        };
+      },
+    };
+  }
+
+  test("rechunk checks the budget after every item, not once per 200-item page", async () => {
+    const store = new FakeStore();
+    await (await open(store, 300)).ingest();
+    const { b } = secondPerWrite(store);
+    const [, rechunk] = await runJobs(selectJobs(JOBS, ["reparse", "rechunk"]), bumped(store), b);
+    expect(rechunk).toMatchObject({ id: "rechunk", done: 30, remaining: null });
+  });
+
+  test("reparse checks the budget after every item, not once per 200-item page", async () => {
+    const store = new FakeStore();
+    await (await open(store, 0, { plugin: fakePlugin({ entries: many(300), capture: true }) })).ingest();
+    const { b, slowApply } = secondPerWrite(store);
+    slowApply();
+    const v2 = fakePlugin({ entries: many(300), capture: true, parserVersion: 2 });
+    const [reparse] = await runJobs(selectJobs(JOBS, ["reparse"]), bumped(store, v2), b);
+    expect(reparse).toMatchObject({ id: "reparse", done: 30, remaining: null });
   });
 });

@@ -15,6 +15,8 @@ export interface Clock {
   now(): number;
   /** Resolves after `ms`, or as soon as `signal` aborts. Never spins. */
   sleep(ms: number, signal: AbortSignal): Promise<void>;
+  /** Calls `fn` once after `ms` unless the returned cancel runs first. */
+  after(ms: number, fn: () => void): () => void;
 }
 
 const realClock: Clock = {
@@ -30,6 +32,10 @@ const realClock: Clock = {
       const timer = setTimeout(done, ms);
       signal.addEventListener("abort", done, { once: true });
     }),
+  after: (ms, fn) => {
+    const timer = setTimeout(fn, ms);
+    return () => clearTimeout(timer);
+  },
 };
 
 export type EmbedActivity =
@@ -64,6 +70,8 @@ export interface EmbedderStatus {
 
 const STATE_FILE = "embed.json";
 const POWER_RECHECK_MS = 60_000;
+/** A slice this many busy budgets long is stuck on one unit, not just a slow one. */
+const STUCK_SLICE_FACTOR = 3;
 
 const RuntimeFile = z.object({
   pid: z.number().int().positive(),
@@ -122,8 +130,11 @@ export interface EmbedDutyDeps {
    * that only removes embedding work.
    */
   readonly maintain?: (b: Budget) => Promise<readonly JobReport[]>;
-  /** The pace now, asked before every rest so `memindex pace` takes effect without a restart. */
-  readonly pace?: () => Promise<EmbedPace>;
+  /**
+   * The persisted pace. Read before every rest so `memindex pace` takes effect without a restart;
+   * saved back to gentle once a full-pace backfill drains the backlog.
+   */
+  readonly pace?: { read(): Promise<EmbedPace>; save(pace: EmbedPace): Promise<void> };
   readonly clock?: Clock;
   readonly onState?: (r: EmbedRuntime) => void;
 }
@@ -161,16 +172,33 @@ export function runEmbedDuty(
     nudged = false;
   };
 
+  /** Runs `work` under one busy budget; a slice stuck past STUCK_SLICE_FACTOR budgets warns once, naming its unit. */
+  const budgeted = async <T>(what: string, since: number, work: (b: Budget) => Promise<T>): Promise<T> => {
+    const deadline = since + policy.busyMs;
+    let unit = "none started yet";
+    const stuckAfter = STUCK_SLICE_FACTOR * policy.busyMs;
+    const cancel = clock.after(stuckAfter, () =>
+      log.warn(`${what}: slice still running after ${stuckAfter / 1000} s; last unit started: ${unit}`),
+    );
+    try {
+      return await work({
+        deadline,
+        expired: () => signal.aborted || clock.now() >= deadline,
+        onUnit: (job, u) => {
+          unit = `${job} ${u}`;
+        },
+      });
+    } finally {
+      cancel();
+    }
+  };
+
   const slice = async (): Promise<JobReport> => {
     const since = clock.now();
     publish({ state: "running", since });
-    const deadline = since + policy.busyMs;
     let r: JobReport;
     try {
-      r = await embedBacklog(deps.store, deps.embedder, {
-        deadline,
-        expired: () => signal.aborted || clock.now() >= deadline,
-      });
+      r = await budgeted("embed", since, (b) => embedBacklog(deps.store, deps.embedder, b));
     } catch (e) {
       r = { id: "embed", done: 0, remaining: null, error: errorMessage(e) };
     }
@@ -189,10 +217,9 @@ export function runEmbedDuty(
   const maintainSlice = async (maintain: NonNullable<EmbedDutyDeps["maintain"]>): Promise<boolean> => {
     const since = clock.now();
     publish({ state: "maintaining", since });
-    const deadline = since + policy.busyMs;
     let reports: readonly JobReport[];
     try {
-      reports = await maintain({ deadline, expired: () => signal.aborted || clock.now() >= deadline });
+      reports = await budgeted("maintenance", since, maintain);
     } catch (e) {
       reports = [{ id: "maintain", done: 0, remaining: 0, error: errorMessage(e) }];
     }
@@ -206,17 +233,36 @@ export function runEmbedDuty(
 
   let maintaining = deps.maintain !== undefined;
   let pace = policy.pace;
+  let embeddedSinceIdle = false;
 
-  /** Gentle pace rests `restMs`; full pace goes straight on. An unreadable setting keeps the last one. */
-  const rest = async () => {
+  /** An unreadable setting keeps the last one. */
+  const readPace = async () => {
     try {
-      if (deps.pace) pace = await deps.pace();
+      if (deps.pace) pace = await deps.pace.read();
     } catch (e) {
       log.warn(`embed: pace setting unreadable, keeping ${pace}: ${errorMessage(e)}`);
     }
+  };
+
+  /** Gentle pace rests `restMs`; full pace goes straight on. */
+  const rest = async () => {
+    await readPace();
     if (pace === "full" || signal.aborted) return;
     publish({ state: "resting", until: clock.now() + policy.restMs });
     await clock.sleep(policy.restMs, signal);
+  };
+
+  /** Full pace is for one backfill: once it drains the backlog, the watcher goes back to gentle. */
+  const endBackfill = async () => {
+    await readPace();
+    if (pace !== "full" || !deps.pace) return;
+    try {
+      await deps.pace.save("gentle");
+      pace = "gentle";
+      log.info("embed: backlog empty, pace back to gentle (memindex pace full for the next backfill)");
+    } catch (e) {
+      log.warn(`embed: could not set the pace back to gentle: ${errorMessage(e)}`);
+    }
   };
 
   const loop = async () => {
@@ -241,10 +287,13 @@ export function runEmbedDuty(
       try {
         nudged = false;
         const r = await slice();
+        embeddedSinceIdle ||= r.done > 0;
         if (r.done > 0 && r.remaining !== 0 && !signal.aborted) {
           await rest();
           continue;
         }
+        if (embeddedSinceIdle && r.error === null && !signal.aborted) await endBackfill();
+        embeddedSinceIdle = false;
       } finally {
         release();
       }

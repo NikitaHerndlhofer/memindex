@@ -1,6 +1,17 @@
 import { Database } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  closeSync,
+  cpSync,
+  existsSync,
+  openSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  utimesSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { contentHash, type ItemDraft, isoTime, type Sighting } from "@memindex/model";
@@ -364,6 +375,155 @@ test("archived recording captures parse into a dictation draft", () => {
   expect(() => superwhisper.parseCapture?.({ format: "unknown-format", body: row })).toThrow(
     /unknown capture format/,
   );
+});
+
+/** Revision hashes the archive stores for the fixture rows, as written by every build before meta.json counted. */
+const STORED_HASHES: Record<string, string> = {
+  ABC111: "22283f99b1d59edbf58ac06ad006d384eb213bb006176e6d9690f5fd38e40c1d",
+  ABC222: "74c89776385b9df8586ceb5f2e07c3ac3949302d94a2a62727c4c1f4eb185115",
+  ABC333: "641dc8920275aac4bc04cce91c60b4d0b7cfbb361576a2c2d645ce5cf480c1a6",
+  ABC444: "c92017c33854e10a06558ff8f17909c3555e4899c2030919d58b0648824e0dac",
+  ABC555: "d9fa81ea283f66d66cce904922af845ff800d692323afcfcc9288d78f91d5554",
+  ABC666: "d11323f458407aa6c4f27869c7a17c773eef18686a0a84df4d775eec4cf63e5b",
+};
+
+const shortKey = (key: string) => key.slice("superwhisper:".length, "superwhisper:".length + 6);
+
+async function hashes(): Promise<Map<string, string>> {
+  return new Map(
+    (await collect(await superwhisper.scan(location, kit))).map((s) => [shortKey(s.key), s.revision.hash]),
+  );
+}
+
+async function scanAndCommit(): Promise<Map<string, string>> {
+  const result = await superwhisper.scan(location, kit);
+  const out = new Map((await collect(result)).map((s) => [shortKey(s.key), s.revision.hash]));
+  if (result.kind === "listing") commit(kit, location.id, result.commit);
+  kit.dispose();
+  return out;
+}
+
+function touchLater(path: string): void {
+  const later = new Date(Date.now() + 60_000);
+  utimesSync(path, later, later);
+}
+
+describe("superwhisper: meta.json is part of the revision", () => {
+  test("upgrading keeps the revision the archive already stores for every recording", async () => {
+    expect(Object.fromEntries(await hashes())).toEqual(STORED_HASHES);
+  });
+
+  test("diarization written into meta.json after the first read gives only that recording a new revision", async () => {
+    const before = await scanAndCommit();
+    const metaPath = join(dir, "superwhisper", "recordings", "1779000100", "meta.json");
+    const meta = JSON.parse(readFileSync(metaPath, "utf8"));
+    writeFileSync(metaPath, JSON.stringify({ ...meta, kind: "meeting", ...SEGMENTS_FOR_REVISION }));
+    touchLater(metaPath);
+    const result = await superwhisper.scan(location, kit);
+    expect(result.kind).toBe("listing");
+    const after = new Map((await collect(result)).map((s) => [shortKey(s.key), s.revision.hash]));
+    for (const [key, hash] of before) {
+      if (key === "ABC222") expect(after.get(key)).not.toBe(hash);
+      else expect(after.get(key)).toBe(hash);
+    }
+    if (result.kind === "listing") commit(kit, location.id, result.commit);
+    kit.dispose();
+    expect(await superwhisper.scan(location, kit)).toEqual({ kind: "unchanged" });
+    kit.dispose();
+    expect((await hashes()).get("ABC222")).toBe(after.get("ABC222"));
+  });
+
+  test("a recording first seen after the upgrade gets a new revision when its meta.json changes", async () => {
+    await scanAndCommit();
+    const folder = join(dir, "superwhisper", "recordings", "1779000600");
+    cpSync(join(dir, "superwhisper", "recordings", "1779000000"), folder, { recursive: true });
+    rewrite(
+      "INSERT INTO recording SELECT X'ABC77700000000000000000000000000', datetime, duration, modeName, modelKey, modelName, languageModelKey, languageModelName, recordingDevice, rawWordCount, llmWordCount, '1779000600' FROM recording WHERE folderName = '1779000000'",
+      [],
+    );
+    rewrite(
+      "INSERT INTO recording_fts SELECT X'ABC77700000000000000000000000000', llmResult, rawResult, result FROM recording_fts WHERE hex(recordingId) = ?",
+      [ID_111],
+    );
+    const first = await scanAndCommit();
+    expect(first.get("ABC777")).toBeDefined();
+    const metaPath = join(folder, "meta.json");
+    writeFileSync(metaPath, JSON.stringify({ ...JSON.parse(readFileSync(metaPath, "utf8")), speakers: [] }));
+    touchLater(metaPath);
+    const second = await hashes();
+    expect(second.get("ABC777")).not.toBe(first.get("ABC777"));
+    expect(second.get("ABC111")).toBe(first.get("ABC111"));
+  });
+});
+
+const SEGMENTS_FOR_REVISION = {
+  speakers: [{ number: 0, name: "Kim" }],
+  segments: [{ start: 1, end: 2, text: "Hi", speaker: 0, words: [] }],
+};
+
+describe("superwhisper: macOS Documents permission", () => {
+  let accessFile: string;
+  let recordings: string;
+  let gated: TestKit;
+
+  beforeEach(() => {
+    accessFile = join(dir, "state", "superwhisper-access.json");
+    recordings = join(dir, "superwhisper", "recordings");
+    gated = makeKit({
+      MEMINDEX_SUPERWHISPER_DB: location.path,
+      MEMINDEX_SUPERWHISPER_DIR: recordings,
+      MEMINDEX_SUPERWHISPER_ACCESS_FILE: accessFile,
+      MEMINDEX_SUPERWHISPER_ACCESS_WAIT_MS: "100",
+    });
+  });
+
+  afterEach(() => {
+    gated.dispose();
+    if (existsSync(recordings)) chmodSync(recordings, 0o755);
+  });
+
+  const report = () => JSON.parse(readFileSync(accessFile, "utf8")) as { state: string; pid: number };
+
+  async function until(state: string): Promise<void> {
+    for (const deadline = Date.now() + 3_000; Date.now() < deadline; await Bun.sleep(10))
+      if (existsSync(accessFile) && report().state === state) return;
+    throw new Error(`access report never became ${state}`);
+  }
+
+  test("the engine's watcher is never handed a path under the recordings folder", () => {
+    for (const p of superwhisper.triggers.watch(gated)) expect(p.startsWith(recordings)).toBe(false);
+    expect(superwhisper.triggers.pollEvery?.minutes).toBeGreaterThan(0);
+  });
+
+  test("while macOS holds the first read, a scan returns within the bound, ingests nothing and reports waiting", async () => {
+    rmSync(recordings, { recursive: true });
+    expect(Bun.spawnSync(["mkfifo", recordings]).exitCode).toBe(0);
+    let ticks = 0;
+    const tick = setInterval(() => ticks++, 10);
+    const started = Date.now();
+    const result = await superwhisper.scan(location, gated);
+    clearInterval(tick);
+    expect(Date.now() - started).toBeLessThan(2_000);
+    expect(ticks).toBeGreaterThan(3);
+    expect(result).toEqual({ kind: "unchanged" });
+    expect(report()).toMatchObject({ state: "waiting", pid: process.pid });
+
+    closeSync(openSync(recordings, "w"));
+    await until("granted");
+    rmSync(recordings);
+  });
+
+  test("denied access is reported and nothing is ingested", async () => {
+    chmodSync(recordings, 0o000);
+    expect(await superwhisper.scan(location, gated)).toEqual({ kind: "unchanged" });
+    expect(report()).toMatchObject({ state: "denied", pid: process.pid });
+  });
+
+  test("granted access is reported and the scan lists every recording", async () => {
+    const result = await superwhisper.scan(location, gated);
+    expect(await collect(result)).toHaveLength(6);
+    expect(report()).toMatchObject({ state: "granted", pid: process.pid });
+  });
 });
 
 test("datetime normalization: zone-less UTC and Z forms", () => {

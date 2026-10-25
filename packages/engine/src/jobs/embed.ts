@@ -53,6 +53,7 @@ export async function embedBacklog(
   const skipped: { unit: ContentHash; reason: string }[] = [];
   const limit = budget.limit ?? Number.POSITIVE_INFINITY;
   while (!budget.expired() && done < limit) {
+    budget.onUnit?.("embed", "backlog query");
     const pending = await store.vectors.backlog(space, {
       limit: Math.min(EMBED_BATCH, limit - done),
       ...(prefer.length > 0 ? { prefer } : {}),
@@ -68,6 +69,7 @@ export async function embedBacklog(
       break;
     }
     previous = fingerprint;
+    budget.onUnit?.("embed", `${pending.length} chunk(s) from ${pending[0]?.hash}`);
     try {
       const outcomes = await embedder.embed(pending.map((p) => p.embedText));
       const vectors: { hash: ContentHash; vector: Float32Array }[] = [];
@@ -116,7 +118,8 @@ export const vecGcJob: JobDef = {
   describe: "Delete vectors in the active space that no live chunk references",
   runByDefault: false,
   pending: async () => null,
-  async run(ctx) {
+  async run(ctx, budget) {
+    budget.onUnit?.("vec-gc", ctx.embedder.space.id);
     const removed = await ctx.store.vectors.gc(ctx.embedder.space);
     return { id: "vec-gc", done: removed, remaining: 0, error: null };
   },

@@ -27,6 +27,7 @@ async function* pages(store: WriteStore, filter: Filter, budget?: Budget): Async
       n++;
       afterKey = item.draft.key;
       yield item;
+      if (budget?.expired()) return;
     }
     if (n < PAGE) return;
   }
@@ -87,6 +88,7 @@ export const rechunkJob: JobDef = {
     const errors: string[] = [];
     for (const plugin of ctx.registry.all) {
       for await (const { item, chunker } of staleChunked(ctx, plugin, budget)) {
+        budget.onUnit?.("rechunk", item.draft.key);
         try {
           const res = await ctx.store.replaceChunks(
             item.draft.key,
@@ -141,6 +143,7 @@ async function reparseSource(
     budget,
   )) {
     if (!item.capture) continue;
+    budget.onUnit?.("reparse", item.draft.key);
     try {
       const parsed = parse(item.capture);
       const meta = plugin.meta.safeParse(parsed.meta);

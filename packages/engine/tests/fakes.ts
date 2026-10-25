@@ -150,7 +150,18 @@ export class FakeStore implements WriteStore {
       for await (const b of batches) n += await this.vectors.put(space, b);
       return n;
     },
-    gc: async () => 0,
+    gc: async () => {
+      const live = new Set<string>(
+        [...this.items.values()].flatMap((r) => r.chunks.filter((c) => c.embed).map((c) => c.contentHash)),
+      );
+      let n = 0;
+      for (const hash of this.vecs.keys()) {
+        if (live.has(hash)) continue;
+        this.vecs.delete(hash);
+        n++;
+      }
+      return n;
+    },
   };
 
   readonly ledger = {

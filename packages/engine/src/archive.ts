@@ -26,6 +26,7 @@ import {
   readEmbedPace,
   type SearchScope,
   type StoreSetting,
+  saveEmbedPace,
   storeConfig,
 } from "./config.ts";
 import { type EmbedderStatus, readEmbedRuntime, runEmbedDuty } from "./embed-duty.ts";
@@ -49,6 +50,7 @@ import {
   type JobStatus,
   jobStatuses,
   runJobs,
+  runMaintenance,
   selectJobs,
 } from "./jobs/index.ts";
 import { createLog, type Log } from "./log.ts";
@@ -363,8 +365,11 @@ class ArchiveImpl implements Archive {
         lockDir: this.p.lockDir,
         power: this.p.power,
         log: this.p.log,
-        maintain: (b) => runJobs(selectJobs(this.p.jobs, ["reparse", "rechunk"]), this.jobContext(), b),
-        pace: () => readEmbedPace(this.p.config.paths.configFile),
+        maintain: (b) => runMaintenance(this.p.jobs, this.jobContext(), b),
+        pace: {
+          read: () => readEmbedPace(this.p.config.paths.configFile),
+          save: (pace) => saveEmbedPace(this.p.config, pace),
+        },
       },
       stopEmbedding.signal,
     );

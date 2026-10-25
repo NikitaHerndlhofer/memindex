@@ -23,8 +23,13 @@ const PullEvent = z.object({
   completed: z.number().optional(),
 });
 
+/**
+ * Ollama serves bge-m3 one input at a time, first come first served, so a query embed waits behind
+ * every input already queued: batchSize × concurrency. Small requests bound that wait (~8 inputs, well
+ * under a second); two in flight keep the next one queued, so the GPU never idles between them.
+ */
 const DEFAULTS = {
-  batchSize: 32,
+  batchSize: 4,
   concurrency: 2,
   timeoutMs: 180_000,
   keepAlive: "15m",

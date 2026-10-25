@@ -186,6 +186,22 @@ describe("createOllamaEmbedder", () => {
     expect(out.map((v) => Math.round((v[0] ?? 0) / (v[1] ?? 1)))).toEqual(inputs.map(Number));
   });
 
+  test("by default a 64-chunk backfill batch keeps at most 8 inputs queued at Ollama, so a query waits behind few", async () => {
+    let queued = 0;
+    let peak = 0;
+    const host = serve(async (_, body) => {
+      queued += body?.input.length ?? 0;
+      peak = Math.max(peak, queued);
+      await Bun.sleep(5);
+      queued -= body?.input.length ?? 0;
+      return ok(body);
+    });
+    const e = createOllamaEmbedder({ host, model: "m", dim: 3 });
+    expect(await e.embed(Array.from({ length: 64 }, (_, i) => `chunk ${i}`))).toHaveLength(64);
+    expect(peak).toBeGreaterThan(0);
+    expect(peak).toBeLessThanOrEqual(8);
+  });
+
   test("pull streams progress events until success", async () => {
     const host = serve((req) => {
       expect(new URL(req.url).pathname).toBe("/api/pull");

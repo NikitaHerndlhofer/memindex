@@ -26,11 +26,13 @@ SKIPPED in `memindex doctor`, which then still exits 0.
 
 The watcher embeds in the background at a gentle pace: 30 s slices with 30 s rests, and not at all on
 battery. For a large backlog (a fresh install, or an upgrade that re-chunks the archive) switch to full
-speed, then back once `memindex status` shows the backlog empty:
+speed. Once the backlog is empty the watcher sets the pace back to gentle by itself:
 
 ```sh
-memindex pace full     # no rests; the GPU stays busy until the backlog is done
+memindex pace full     # no rests until the backlog is done, then gentle again
 memindex pace gentle   # the default
 ```
 
-The running watcher picks the change up after its current slice.
+The running watcher picks the change up after its current slice. Searches stay responsive during a
+full-pace backfill: the watcher sends Ollama small requests, so a query embed waits behind a few
+chunks, not a whole batch.

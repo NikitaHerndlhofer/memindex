@@ -14,12 +14,14 @@ export interface JobContext {
   readonly args: Readonly<Record<string, string>>;
 }
 
-/** Wall-clock budget. Jobs check it between batches; a batch in flight is always finished. */
+/** Wall-clock budget. Jobs check it between items or batches; one in flight is always finished. */
 export interface Budget {
   readonly deadline: number;
   /** Most units one job may converge in this run; jobs that can't stop at an exact count ignore it. */
   readonly limit?: number;
   expired(): boolean;
+  /** Told the unit a job starts on, so a slice that hangs can name it. */
+  readonly onUnit?: (job: string, unit: string) => void;
 }
 
 export function budget(ms: number, limit?: number): Budget {

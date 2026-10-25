@@ -33,7 +33,7 @@ const storeLabel = (store: MemindexConfig["store"]) => (store ? redactUrl(store.
 
 const PACE_TEXT: Record<EmbedPace, string> = {
   gentle: "gentle: embeds in 30 s slices with 30 s rests",
-  full: "full: embeds without rests (backfill); the GPU stays busy until the backlog is empty",
+  full: "full: embeds without rests (backfill) until the backlog is empty, then goes back to gentle",
 };
 
 export const paceCommand = defineCommand({

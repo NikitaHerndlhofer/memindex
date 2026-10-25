@@ -41,6 +41,20 @@ export async function jobStatuses(jobs: readonly JobDef[], ctx: JobContext): Pro
   );
 }
 
+/**
+ * The watcher's maintenance slice: reparse, rechunk, then vec-gc for the vectors they orphaned. gc scans
+ * every vector, so it waits until no reshaping pass was cut short instead of running every slice.
+ */
+export async function runMaintenance(
+  jobs: readonly JobDef[],
+  ctx: JobContext,
+  b: Budget,
+): Promise<readonly JobReport[]> {
+  const reshaped = await runJobs(selectJobs(jobs, ["reparse", "rechunk"]), ctx, b);
+  if (reshaped.some((r) => r.remaining === null)) return reshaped;
+  return [...reshaped, ...(await runJobs(selectJobs(jobs, ["vec-gc"]), ctx, b))];
+}
+
 /** Runs the selected jobs in order under one shared budget. */
 export async function runJobs(
   jobs: readonly JobDef[],
