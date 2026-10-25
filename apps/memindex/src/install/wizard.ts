@@ -17,6 +17,7 @@ import type { PlistTemplate } from "./launchd.ts";
 import { ensureOllama } from "./ollama.ts";
 import { installSkill, skillTargets } from "./skill.ts";
 import type { Task, Ui } from "./ui.ts";
+import { syncWatcherBin, type WatcherBinState, watcherBinPath } from "./watcher-bin.ts";
 
 export interface InstallPaths {
   readonly home: string;
@@ -24,6 +25,8 @@ export interface InstallPaths {
   readonly skillTrackFile: string;
   /** Where the watcher reports its macOS Documents permission (see documents.ts). */
   readonly superwhisperAccess: string;
+  /** The copy of the installed binary that launchd runs (see watcher-bin.ts). */
+  readonly watcherBin: string;
 }
 
 export function installPaths(config: MemindexConfig): InstallPaths {
@@ -33,6 +36,7 @@ export function installPaths(config: MemindexConfig): InstallPaths {
     watchLog: join(config.paths.logDir, "watch.log"),
     skillTrackFile: join(config.paths.configDir, "skills.json"),
     superwhisperAccess: join(config.paths.configDir, "superwhisper-access.json"),
+    watcherBin: watcherBinPath(home),
   };
 }
 
@@ -40,7 +44,7 @@ export function installPaths(config: MemindexConfig): InstallPaths {
 export interface InstallDeps {
   readonly paths: InstallPaths;
   readonly config: MemindexConfig;
-  /** Path launchd and hooks invoke; null in development, which skips both. */
+  /** Path hooks invoke and launchd's copy is taken from; null in development, which skips both. */
   readonly bin: string | null;
   readonly ui: Ui;
   readonly sh: (cmd: readonly string[], opts?: { readonly timeoutMs?: number }) => Promise<RunResult>;
@@ -325,6 +329,12 @@ async function ollama(d: InstallDeps, s: Steps): Promise<void> {
   }
 }
 
+const COPY_NOTE: Readonly<Record<WatcherBinState, (bin: string) => string>> = {
+  missing: (bin) => `copied from ${bin}`,
+  stale: (bin) => `replaced the stale copy from ${bin}`,
+  current: () => "unchanged",
+};
+
 async function watcher(d: InstallDeps, s: Steps): Promise<boolean> {
   const task = d.ui.task("Watcher (launchd)");
   try {
@@ -332,13 +342,14 @@ async function watcher(d: InstallDeps, s: Steps): Promise<boolean> {
       s.skip("watcher", "no stable memindex binary path (development run?); pass --bin", task);
       return false;
     }
+    const found = await syncWatcherBin(d.bin, d.paths.watcherBin);
     const plist = await d.launchd.install({
-      binPath: d.bin,
+      binPath: d.paths.watcherBin,
       home: d.paths.home,
       logPath: d.paths.watchLog,
       env: { [ACCESS_FILE_ENV]: d.paths.superwhisperAccess },
     });
-    s.ok("watcher", plist, task);
+    s.ok("watcher", `${plist}; runs ${d.paths.watcherBin} (${COPY_NOTE[found](d.bin)})`, task);
     return true;
   } catch (e) {
     s.fail("watcher", errorMessage(e), task);
@@ -347,9 +358,9 @@ async function watcher(d: InstallDeps, s: Steps): Promise<boolean> {
 }
 
 /**
- * macOS asks before the watcher first reads ~/Documents (Super Whisper's recordings), and asks again for
- * every new binary path, so every upgrade. Waiting for the new watcher's report puts that dialog on
- * screen while the person who ran install is still at the keyboard.
+ * macOS asks before the watcher first reads ~/Documents (Super Whisper's recordings); the stable copy
+ * keeps that one answer across upgrades. Waiting for the new watcher's report puts the dialog on screen
+ * while the person who ran install is still at the keyboard.
  */
 async function documents(d: InstallDeps, s: Steps, since: number): Promise<void> {
   const task = d.ui.task("Super Whisper recordings (macOS permission)");

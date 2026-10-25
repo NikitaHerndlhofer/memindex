@@ -1,9 +1,15 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import type { EmbedActivity, EmbedRuntime } from "@memindex/engine";
-import { doctorText, documentsCheck, embedderText, settleChecks } from "../src/commands/admin.ts";
+import {
+  doctorText,
+  documentsCheck,
+  embedderText,
+  settleChecks,
+  watcherBinCheck,
+} from "../src/commands/admin.ts";
 import { type AccessReport, readAccessReport } from "../src/install/documents.ts";
 
 const NOW = Date.parse("2026-10-24T23:00:00Z");
@@ -84,6 +90,54 @@ describe("doctor: deliberately skipped install steps", () => {
     expect(text).toContain("[FAIL   ] watcher (launchd) — not loaded");
     expect(text).toContain("fix: memindex install");
     expect(text).toContain("One or more checks failed.");
+  });
+});
+
+describe("doctor: the binary the watcher runs", () => {
+  let dir: string;
+  let copy: string;
+  let source: string;
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "memindex-watcher-bin-"));
+    copy = join(dir, "Library", "Application Support", "memindex", "bin", "memindex");
+    source = join(dir, "homebrew", "memindex");
+    mkdirSync(dirname(copy), { recursive: true });
+    mkdirSync(dirname(source), { recursive: true });
+    writeFileSync(source, "memindex 0.1.11");
+  });
+  afterEach(() => rmSync(dir, { recursive: true, force: true }));
+  const text = async (program: string | null) =>
+    doctorText(
+      settleChecks(
+        [await watcherBinCheck({ program, copy, source })].flatMap((c) => c ?? []),
+        [],
+      ),
+    );
+
+  test("a copy with the installed binary's bytes passes and names its path", async () => {
+    writeFileSync(copy, "memindex 0.1.11");
+    expect(await text(copy)).toContain(`[ok     ] watcher binary — ${copy} matches the installed ${source}`);
+  });
+
+  test("a copy left from before an upgrade fails with the fix memindex install", async () => {
+    writeFileSync(copy, "memindex 0.1.10");
+    const out = await text(copy);
+    expect(out).toContain(
+      `[FAIL   ] watcher binary — ${copy} is stale: it differs from the installed ${source}`,
+    );
+    expect(out).toContain("fix: memindex install");
+  });
+
+  test("a missing copy, or a plist that runs the Homebrew path itself, fails with the same fix", async () => {
+    expect(await text(copy)).toContain(`${copy} is missing`);
+    writeFileSync(copy, "memindex 0.1.11");
+    const old = await text("/opt/homebrew/bin/memindex");
+    expect(old).toContain("the watcher runs /opt/homebrew/bin/memindex, not the stable copy");
+    expect(old).toContain("fix: memindex install");
+  });
+
+  test("no plist: nothing to report beyond the watcher check", async () => {
+    expect(await watcherBinCheck({ program: null, copy, source })).toBeNull();
   });
 });
 

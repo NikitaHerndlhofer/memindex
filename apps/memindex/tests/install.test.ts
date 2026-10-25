@@ -1,19 +1,23 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import {
   existsSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
   readFileSync,
   rmSync,
+  statSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import type { EmbedHealth, PullProgress } from "@memindex/engine";
-import { PLIST_LABEL, renderPlist, writePlist } from "../src/install/launchd.ts";
+import { PLIST_LABEL, plistProgram, renderPlist, writePlist } from "../src/install/launchd.ts";
 import { ensureOllama, formatPull } from "../src/install/ollama.ts";
 import { installSkill, refreshSkills, skillStates, skillTargets } from "../src/install/skill.ts";
+import { syncWatcherBin, watcherBinPath, watcherBinState } from "../src/install/watcher-bin.ts";
 import { fromArray, render } from "../src/render.ts";
 
 let dir: string;
@@ -123,6 +127,12 @@ describe("launchd plist", () => {
     });
   });
 
+  test("reads back the binary an installed plist runs; none installed is null", async () => {
+    expect(plistProgram(dir)).toBeNull();
+    await writePlist({ binPath: "/a b/memindex & co", logPath: join(dir, "logs", "watch.log"), home: dir });
+    expect(plistProgram(dir)).toBe("/a b/memindex & co");
+  });
+
   test("extra environment reaches the watcher next to PATH and HOME", async () => {
     const path = await writePlist({
       binPath: "/opt/homebrew/bin/memindex",
@@ -138,6 +148,69 @@ describe("launchd plist", () => {
       HOME: dir,
       MEMINDEX_SUPERWHISPER_ACCESS_FILE: "/cfg/a&b.json",
     });
+  });
+});
+
+describe("watcher binary (a stable copy of the Homebrew binary)", () => {
+  const cellar = (version: string, bytes: string) => {
+    const path = join(dir, "Cellar", "memindex", version, "bin", "memindex");
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, bytes, { mode: 0o555 });
+    return path;
+  };
+  const brewLink = (target: string) => {
+    const link = join(dir, "homebrew", "bin", "memindex");
+    mkdirSync(dirname(link), { recursive: true });
+    rmSync(link, { force: true });
+    symlinkSync(target, link);
+    return link;
+  };
+
+  test("lives under Application Support, not at a versioned path", () => {
+    expect(watcherBinPath("/Users/me")).toBe("/Users/me/Library/Application Support/memindex/bin/memindex");
+  });
+
+  test("first install copies the binary behind the symlink as a real, executable file", async () => {
+    const source = brewLink(cellar("0.1.10", "build 0.1.10"));
+    const copy = watcherBinPath(dir);
+    expect(await watcherBinState(source, copy)).toBe("missing");
+    expect(await syncWatcherBin(source, copy)).toBe("missing");
+    expect(lstatSync(copy).isFile()).toBe(true);
+    expect(readFileSync(copy, "utf8")).toBe("build 0.1.10");
+    expect(statSync(copy).mode & 0o111).toBe(0o111);
+    expect(await watcherBinState(source, copy)).toBe("current");
+  });
+
+  test("a second install leaves the copy untouched", async () => {
+    const source = brewLink(cellar("0.1.10", "build 0.1.10"));
+    const copy = watcherBinPath(dir);
+    await syncWatcherBin(source, copy);
+    const before = statSync(copy);
+    expect(await syncWatcherBin(source, copy)).toBe("current");
+    const after = statSync(copy);
+    expect([after.ino, after.mtimeMs]).toEqual([before.ino, before.mtimeMs]);
+  });
+
+  test("after brew upgrade the copy is stale, and install replaces it in place with no leftovers", async () => {
+    const copy = watcherBinPath(dir);
+    await syncWatcherBin(brewLink(cellar("0.1.10", "build 0.1.10")), copy);
+    const upgraded = brewLink(cellar("0.1.11", "build 0.1.11, a different size"));
+    expect(await watcherBinState(upgraded, copy)).toBe("stale");
+    expect(await syncWatcherBin(upgraded, copy)).toBe("stale");
+    expect(readFileSync(copy, "utf8")).toBe("build 0.1.11, a different size");
+    expect(readdirSync(dirname(copy))).toEqual(["memindex"]);
+  });
+
+  test("same size, different bytes is stale; a symlink at the copy's path is replaced by a file", async () => {
+    const copy = watcherBinPath(dir);
+    const a = cellar("1", "AAAA");
+    await syncWatcherBin(a, copy);
+    expect(await watcherBinState(cellar("2", "BBBB"), copy)).toBe("stale");
+    rmSync(copy);
+    symlinkSync(a, copy);
+    expect(await watcherBinState(a, copy)).toBe("stale");
+    await syncWatcherBin(a, copy);
+    expect(lstatSync(copy).isFile()).toBe(true);
   });
 });
 

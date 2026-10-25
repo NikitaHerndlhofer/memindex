@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { run } from "../spawn.ts";
@@ -86,6 +87,14 @@ export async function writePlist(t: PlistTemplate): Promise<string> {
   await mkdir(dirname(t.logPath), { recursive: true });
   await writeFile(path, renderPlist(t), "utf8");
   return path;
+}
+
+/** The binary the installed plist runs; null without a plist. */
+export function plistProgram(home: string): string | null {
+  const path = plistPath(home);
+  if (!existsSync(path)) return null;
+  const r = run(["plutil", "-extract", "ProgramArguments.0", "raw", "-o", "-", path], { timeoutMs: 3_000 });
+  return r.exitCode === 0 ? r.stdout.trim() : null;
 }
 
 export async function installLaunchAgent(t: PlistTemplate): Promise<string> {

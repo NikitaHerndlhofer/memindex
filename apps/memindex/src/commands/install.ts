@@ -56,7 +56,8 @@ export const installCommand = defineCommand({
     },
     bin: {
       type: "string",
-      description: "Binary path to embed in launchd/hooks (default: Homebrew symlink or this binary)",
+      description:
+        "Binary path for hooks, copied for the launchd watcher (default: Homebrew symlink or this binary)",
     },
     "skip-ollama": { type: "boolean", description: "Don't start Ollama or pull the model" },
     "skip-watch": { type: "boolean", description: "Don't install the launchd watcher" },

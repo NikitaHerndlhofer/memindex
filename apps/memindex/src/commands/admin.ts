@@ -24,11 +24,13 @@ import { parseParams } from "../args.ts";
 import { action, log, out, skillTrackFile, withArchive } from "../context.ts";
 import { describeError, UsageError } from "../errors.ts";
 import { type AccessReport, accessNotice, readAccessReport } from "../install/documents.ts";
-import { launchAgentLoaded, PLIST_LABEL } from "../install/launchd.ts";
+import { launchAgentLoaded, PLIST_LABEL, plistProgram } from "../install/launchd.ts";
 import { formatPull } from "../install/ollama.ts";
 import { type SkillState, skillStates, skillTargets } from "../install/skill.ts";
+import { watcherBinState } from "../install/watcher-bin.ts";
 import { installPaths } from "../install/wizard.ts";
 import { fromArray, render } from "../render.ts";
+import { stableBinPath } from "../spawn.ts";
 import { VERSION } from "../version.ts";
 
 const storeLabel = (store: MemindexConfig["store"]) => (store ? redactUrl(store.url) : "(none)");
@@ -367,12 +369,46 @@ export async function runDoctor(
     detail: `${PLIST_LABEL} ${loaded ? "loaded" : "not loaded"}`,
     ...(loaded ? {} : { hint: "memindex install" }),
   });
-  const access = documentsCheck(await readAccessReport(installPaths(cfg).superwhisperAccess));
+  const paths = installPaths(cfg);
+  const bin = await watcherBinCheck({
+    program: plistProgram(paths.home),
+    copy: paths.watcherBin,
+    source: stableBinPath(),
+  });
+  if (bin) checks.push(bin);
+  const access = documentsCheck(await readAccessReport(paths.superwhisperAccess));
   if (access) checks.push(access);
   if (cfg.skippedSteps.includes("hooks"))
     checks.push({ name: "agent hooks", step: "hooks", ok: false, detail: "not installed" });
   const settled = settleChecks(checks, cfg.skippedSteps);
   return { ok: settled.every((c) => c.status !== "failed"), checks: settled };
+}
+
+/**
+ * Whether launchd runs the stable copy, and the copy is the installed binary. `program` is the plist's
+ * binary (null: no plist); `source` the installed binary (null in development: not compared).
+ */
+export async function watcherBinCheck(w: {
+  readonly program: string | null;
+  readonly copy: string;
+  readonly source: string | null;
+}): Promise<Probe | null> {
+  if (w.program === null) return null;
+  const probe = (ok: boolean, detail: string): Probe => ({
+    name: "watcher binary",
+    step: "watcher",
+    ok,
+    detail,
+    ...(ok ? {} : { hint: "memindex install" }),
+  });
+  if (w.program !== w.copy)
+    return probe(false, `the watcher runs ${w.program}, not the stable copy ${w.copy}`);
+  if (w.source === null) return probe(true, `${w.copy} (not compared: no installed binary)`);
+  const state = await watcherBinState(w.source, w.copy).catch(() => null);
+  if (state === "current") return probe(true, `${w.copy} matches the installed ${w.source}`);
+  if (state === "stale") return probe(false, `${w.copy} is stale: it differs from the installed ${w.source}`);
+  if (state === "missing") return probe(false, `${w.copy} is missing`);
+  return probe(false, `cannot compare ${w.copy} with the installed ${w.source}`);
 }
 
 /** The running watcher's macOS Documents permission for Super Whisper; null when there is nothing to report. */

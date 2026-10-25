@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import {
   type EmbedHealth,
   loadConfig,
@@ -27,6 +27,15 @@ beforeEach(() => {
 afterEach(() => rmSync(home, { recursive: true, force: true }));
 
 const ok: RunResult = { exitCode: 0, stdout: "", stderr: "" };
+
+/** Stands in for /opt/homebrew/bin/memindex; `bytes` is the installed build. */
+function brewBin(bytes = "memindex 0.1.10"): string {
+  const path = join(home, "homebrew", "bin", "memindex");
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, bytes);
+  return path;
+}
+const watcherCopy = () => join(home, "Library", "Application Support", "memindex", "bin", "memindex");
 const URL_ = "postgresql://memindex:s3cret@127.0.0.1:54329/memindex";
 
 function recordingUi(answer = true, texts: string[] = []): Ui & { lines: string[] } {
@@ -116,7 +125,7 @@ async function harness(
   const deps: InstallDeps = {
     paths: installPaths(config),
     config,
-    bin: over.bin === undefined ? "/opt/homebrew/bin/memindex" : over.bin,
+    bin: over.bin === undefined ? brewBin() : over.bin,
     ui,
     sh: async (cmd) => {
       commands.push(cmd.join(" "));
@@ -208,8 +217,8 @@ describe("memindex install wizard", () => {
     expect(h.migrated).toEqual([URL_]);
     expect(h.commands).toEqual(["ollama-pull"]);
     expect(h.ui.lines.some((l) => l.includes("s3cret"))).toBe(false);
-    expect(h.plists).toEqual(["/opt/homebrew/bin/memindex"]);
-    expect(h.hookBins).toEqual(["/opt/homebrew/bin/memindex"]);
+    expect(h.plists).toEqual([watcherCopy()]);
+    expect(h.hookBins).toEqual([join(home, "homebrew", "bin", "memindex")]);
     for (const p of [".cursor", ".claude"]) {
       expect(readFileSync(join(home, p, "skills", "memindex", "SKILL.md"), "utf8")).toBe("SKILL v1");
     }
@@ -381,6 +390,41 @@ describe("memindex install wizard", () => {
     expect(h.plists).toEqual([]);
     expect(h.hookBins).toEqual([]);
     expect(h.skipped).toEqual([["watcher", "hooks"]]);
+  });
+
+  test("launchd runs a stable copy of the installed binary; hooks keep the Homebrew path", async () => {
+    const h = await harness();
+    const results = await runInstall(h.deps, { ...WITH_URL, skip: ["ollama"] });
+    expect(readFileSync(watcherCopy(), "utf8")).toBe("memindex 0.1.10");
+    expect(h.plists).toEqual([watcherCopy()]);
+    expect(h.hookBins).toEqual([join(home, "homebrew", "bin", "memindex")]);
+    expect(detail(results, "watcher")).toContain(`runs ${watcherCopy()} (copied from `);
+  });
+
+  test("install twice: the copy is left as it is; after brew upgrade the next install replaces it", async () => {
+    const first = await harness();
+    await runInstall(first.deps, { ...WITH_URL, skip: ["ollama"] });
+    const before = statSync(watcherCopy());
+
+    const again = await harness();
+    const r2 = await runInstall(again.deps, { ...WITH_URL, skip: ["ollama"] });
+    expect(detail(r2, "watcher")).toContain(`runs ${watcherCopy()} (unchanged)`);
+    const after = statSync(watcherCopy());
+    expect([after.ino, after.mtimeMs]).toEqual([before.ino, before.mtimeMs]);
+
+    const upgraded = await harness();
+    brewBin("memindex 0.1.11");
+    const r3 = await runInstall(upgraded.deps, { ...WITH_URL, skip: ["ollama"] });
+    expect(detail(r3, "watcher")).toContain("(replaced the stale copy from ");
+    expect(readFileSync(watcherCopy(), "utf8")).toBe("memindex 0.1.11");
+    expect(upgraded.plists).toEqual([watcherCopy()]);
+  });
+
+  test("the installed binary cannot be copied: the watcher step fails and launchd is left alone", async () => {
+    const h = await harness({ bin: join(home, "nowhere", "memindex") });
+    const results = await runInstall(h.deps, { ...WITH_URL, skip: ["ollama"] });
+    expect(statuses(results)).toMatchObject({ watcher: "failed", skill: "ok" });
+    expect(h.plists).toEqual([]);
   });
 
   test("the watcher is told where to report its macOS Documents permission", async () => {
