@@ -342,9 +342,7 @@ Rules: use \`age_days\`, \`started_day\`, \`duration_s\` and \`source_gone\` ins
 FTS \`MATCH\`, no vector functions or literals (use \`--search\`); \`:name\` placeholders bind \`--param name=value\`
 (\`--param name\` alone binds NULL). Always add a \`LIMIT\` — full transcripts and tool outputs fill the context window.
 Find text with \`--search … --mode keyword|fuzzy\` (indexed), never \`text ILIKE '%…%'\`: that scans every chunk and
-hits the statement timeout on a large archive. Join \`hits\` to the views and aggregate in SQL instead.
-A slow query? Add \`--explain\` to \`memindex sql\` or \`memindex q\` for its EXPLAIN ANALYZE plan.
-Chat search covers messages, thinking and what the agent did (terminal commands, \`edited <path>\`, \`read <path>\`),
+hits the statement timeout on a large archive. Join \`hits\` to the views and aggregate in SQL instead.Chat search covers messages, thinking and what the agent did (terminal commands, \`edited <path>\`, \`read <path>\`),
 not bulk tool output: terminal output, file contents, page snapshots and search listings live only in
 \`turns.body\`. Find the moment with \`--search\`, then read that turn's body.
 
