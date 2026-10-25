@@ -10,7 +10,8 @@
  * Indexed is the conversation and what the agent did, not the bulk machine output it read: terminal output,
  * file contents, page snapshots and search listings are reachable through the turn's parts, not chunks.
  * Terminal calls index their description and command; code changes and file reads index as `edited <path>` /
- * `read <path>`. Tool names are Cursor's and Claude Code's.
+ * `read <path>`. Tool names are Cursor's and Claude Code's. A chunk that is a JSON payload or under 6 words
+ * (most condensed calls) stays keyword-searchable but isn't embedded: semantic search skips it anyway.
  */
 
 import { partsChunker as stockParts } from "@memindex/chunkers";
@@ -81,4 +82,5 @@ export const partsChunker = stockParts({
     Delete: { marker: "deleted" },
   },
   scrub: true,
+  embedOnlyProse: true,
 });

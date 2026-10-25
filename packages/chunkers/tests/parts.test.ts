@@ -203,6 +203,38 @@ test("keywordOnly kinds are never embedded, and never split however long", () =>
   ]);
 });
 
+test("embedOnlyProse: tool JSON and fragments under 6 words are keyword-only, prose is embedded", () => {
+  const proseOnly = partsChunker({ owner: "test", name: "parts", tokens: bgeM3, embedOnlyProse: true });
+  const draft = item(
+    turn("b", [
+      { kind: "tool_result", text: '{"rejected":{},"merge":true}', toolName: "mcp_x" },
+      { kind: "text", text: "go on then, please" },
+      { kind: "text", text: "Retry the deploy after the migration." },
+    ]),
+  );
+  const out = proseOnly.chunk(draft);
+  expect(out.map((c) => [c.text, c.embed])).toEqual([
+    ['{"rejected":{},"merge":true}', false],
+    ["go on then, please", false],
+    ["Retry the deploy after the migration.", true],
+  ]);
+  expect(plain(out.map(({ embed: _, ...c }) => c))).toEqual(
+    plain(chat.chunk(draft).map(({ embed: _, ...c }) => c)),
+  );
+  expect(proseOnly.id).not.toBe(chat.id);
+  expect(partsChunker({ owner: "test", name: "parts", tokens: bgeM3, embedOnlyProse: false }).id).toBe(
+    chat.id,
+  );
+});
+
+test("embedOnlyProse judges each piece of a split part by its own text", () => {
+  const proseOnly = partsChunker({ owner: "test", name: "parts", tokens: bgeM3, embedOnlyProse: true });
+  const log = `["build","started"]\n${lines(400, (i) => `12:00:${String(i % 60).padStart(2, "0")} WARN dropped request ${i}`)}`;
+  const out = proseOnly.chunk(item(turn("b", [{ kind: "tool_result", text: log, toolName: "Shell" }])));
+  expect(out.length).toBeGreaterThan(2);
+  expect(out.map((c) => c.embed)).toEqual(out.map((_, i) => i > 0));
+});
+
 test("recursiveTextChunker: one strategy for every part, headers counted inside the budget", () => {
   const c = recursiveTextChunker({
     owner: "test",

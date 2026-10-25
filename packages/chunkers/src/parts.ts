@@ -11,7 +11,8 @@
  *   { language }   a fixed language table
  * Pieces overlap by `overlapTokens`, keep the raw piece as `text` and embed `[<kind>[ <tool>] i/n]\n…`, which
  * fits in `maxTokens`. Keyword-only parts are never split. Before any of that, `tools` condenses or drops
- * tool parts and `scrub` cleans the text (see tools.ts).
+ * tool parts and `scrub` cleans the text (see tools.ts). With `embedOnlyProse`, each chunk (whole part or
+ * piece) that isn't prose is keyword-only.
  *
  * `recursiveTextChunker` is the same machinery with one strategy for every part: plain unstructured text.
  */
@@ -28,6 +29,7 @@ import {
 import { type StockIdentity, stockId } from "./config.ts";
 import { argsLanguage, fenceLanguage } from "./language.ts";
 import { pieceEmbedText } from "./pieces.ts";
+import { isProse } from "./prose.ts";
 import { DIFF_SEPARATORS, LINE_SEPARATORS, languageSeparators, PROSE_SEPARATORS } from "./split.ts";
 import {
   checkBudget,
@@ -90,6 +92,8 @@ export interface PartsChunkerOptions extends StockIdentity, BudgetOptions {
   readonly tools?: ToolTable;
   /** Drop terminal colour codes and replace base64 payloads before chunking. Default false. */
   readonly scrub?: boolean;
+  /** Embed only chunks whose text is prose (see prose.ts); the rest are keyword-only. Default false. */
+  readonly embedOnlyProse?: boolean;
 }
 
 export interface RecursiveTextChunkerOptions extends StockIdentity, BudgetOptions {
@@ -105,6 +109,7 @@ interface Resolved {
   readonly keywordOnly: readonly PartKind[];
   readonly tools: ToolTable;
   readonly scrub: boolean;
+  readonly embedOnlyProse: boolean;
 }
 
 /** Language hints for "fenced-code" / "tool-output" parts. */
@@ -166,8 +171,9 @@ function piecesChunker(id: Chunker["id"], counter: TokenCounter, r: Resolved): C
             toolName: part.toolName ?? null,
             embed: !keywordOnly.has(part.kind),
           };
+          const embeds = (text: string) => base.embed && (!r.embedOnlyProse || isProse(text));
           if (!base.embed || fits(budget, part.text)) {
-            out.push(chunkDraft(item.key, { ...base, sub: 0, text: part.text }));
+            out.push(chunkDraft(item.key, { ...base, sub: 0, text: part.text, embed: embeds(part.text) }));
             return;
           }
           const strategy = r.split[part.kind];
@@ -182,7 +188,13 @@ function piecesChunker(id: Chunker["id"], counter: TokenCounter, r: Resolved): C
           );
           pieces.forEach((text, sub) => {
             out.push(
-              chunkDraft(item.key, { ...base, sub, text, embedText: embed(text, sub, pieces.length) }),
+              chunkDraft(item.key, {
+                ...base,
+                sub,
+                text,
+                embedText: embed(text, sub, pieces.length),
+                embed: embeds(text),
+              }),
             );
           });
         });
@@ -193,7 +205,11 @@ function piecesChunker(id: Chunker["id"], counter: TokenCounter, r: Resolved): C
 }
 
 function resolve(
-  o: BudgetOptions & { readonly tools?: ToolTable; readonly scrub?: boolean },
+  o: BudgetOptions & {
+    readonly tools?: ToolTable;
+    readonly scrub?: boolean;
+    readonly embedOnlyProse?: boolean;
+  },
   split: (kind: PartKind) => SplitStrategy,
 ): Resolved {
   const maxTokens = o.maxTokens ?? DEFAULT_MAX_TOKENS;
@@ -207,14 +223,16 @@ function resolve(
     keywordOnly: [...(o.keywordOnly ?? ["transcript_raw"])].sort(),
     tools: Object.fromEntries(Object.entries(o.tools ?? {}).filter(([, mode]) => mode !== "full")),
     scrub: o.scrub ?? false,
+    embedOnlyProse: o.embedOnlyProse ?? false,
   };
 }
 
 export function partsChunker(options: PartsChunkerOptions): Chunker {
   const table = { ...DEFAULT_PART_SPLITS, ...options.split };
   const r = resolve(options, (k) => table[k] ?? options.defaultSplit ?? "prose");
-  const { tools, scrub, ...base } = r;
-  const config = Object.keys(tools).length > 0 || scrub ? { ...base, tools, scrub } : base;
+  const { tools, scrub, embedOnlyProse, ...base } = r;
+  const condensing = Object.keys(tools).length > 0 || scrub ? { ...base, tools, scrub } : base;
+  const config = embedOnlyProse ? { ...condensing, embedOnlyProse } : condensing;
   return piecesChunker(
     stockId(options, PARTS_STOCK_VERSION, { stock: "parts", ...config }),
     options.tokens,
