@@ -64,8 +64,8 @@ MEMINDEX_STORE=postgres://…pooler.supabase.com:5432/postgres memindex migrate 
 Agents that have database credentials but not the binary can call the same search directly:
 
 ```sql
-SELECT * FROM memindex.search('rate limiter', :query_embedding, 'bge-m3@1024', 'hybrid',
-                              '{"sources": ["cursor"]}', 20);
+SELECT * FROM memindex.search_results('rate limiter', :query_embedding, 'bge-m3@1024', 'hybrid',
+                                      '{"sources": ["cursor"]}', 20);
 ```
 
 ## Content model
@@ -86,11 +86,13 @@ SELECT * FROM memindex.search('rate limiter', :query_embedding, 'bge-m3@1024', '
 - Items carry promoted cross-source columns (`kind`, `title`, `origin`, `started_at`,
   `parent_key`, `supersede_key`); everything else is per-plugin `meta` (jsonb, zod-typed),
   exposed through generated `<source>_items` facet views. Adding a plugin needs no migration.
-- `capture`: insert-only raw source record per revision, for plugins with `capture: "always"`
-  (Super Whisper). The `reparse` job replays captures when a plugin's `parserVersion` is bumped.
-  Super Whisper has two capture formats: `superwhisper-row` (a live read: row, meta.json, audio
-  facts) and `superwhisper-archive` (a snake_case copy of the row for recordings Super Whisper has
-  since deleted). Both parse to the same draft shape.
+- `capture`: insert-only raw source record per revision and the fidelity it was read at, for plugins
+  with `capture: "always"` (Super Whisper). The `reparse` job replays the capture read at the item's
+  own revision and fidelity when a plugin's `parserVersion` is bumped; ingest re-reads an item that
+  has only captures of lower fidelity. Super Whisper has two capture formats: `superwhisper-row` (a
+  live read at fidelity 1: row, meta.json, audio facts) and `superwhisper-archive` (fidelity 0, a
+  snake_case copy of the row from the archive import, without meta.json). A recording both imported
+  and read live keeps both, and its items replay the live one.
 
 ### Chunking
 
@@ -198,8 +200,13 @@ list that everything else derives from.
 
 - View contract: `items`, `items_all`, `turns`, `chunks`, `observations`, `<source>_items`, with
   precomputed `started_day`, `age_days`, `duration_s`, `source_gone`.
-- `hits` is `memindex.search(...)` called with bound parameters. Recipes are compiled into the
-  binary; the skill lists recipe names and the view contract.
+- `hits` is `memindex.search_results(...)` called with bound parameters: `memindex.search`'s ranked
+  chunks shaped into one list of items and moments. A chat moment is one agent response (a user message
+  to the next), a recording moment one passage with its processed, raw and speaker-turn versions folded
+  in. An item comes back whole when 3+ strong moments spread over it, when it is a one-turn recording, or
+  when a meeting's title or summary matched; otherwise its best moments (at most 3) come back on their
+  own with the prompt that led in and the next prose reply. Recipes are compiled into the binary; the
+  skill lists recipe names and the view contract.
 
 ## Migrations and data updates
 

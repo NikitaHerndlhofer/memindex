@@ -60,12 +60,19 @@ export const ITEM_COLUMNS: readonly ColumnDoc[] = [
 
 const HIT_MEANS = {
   rank: "1 = best",
-  score: "mode-specific, higher is better",
+  score: "1 = the best single moment; an item adds up to 0.75 for its 2nd and 3rd moments",
   via: "keyword | fuzzy | semantic | hybrid",
-  chunk_id: "the matching chunk",
+  chunk_id: "the best matching chunk",
   item_key: "its item",
-  turn_key: "its turn",
+  turn_key: "the best moment's turn",
   snippet: "matched text excerpt",
+  unit: "item (the whole chat or recording) | moment (one exchange or passage)",
+  about: "items: title plus AI summary head or first user message",
+  context:
+    'moments: JSON {"prompt", "reply"} (turn_key, ord, who, text): the message that led in and the next prose reply',
+  moments: "items: JSON list of the best 3 moments (turn_key, ord, chunk_id, kind, score, versions, text)",
+  versions:
+    "chunks folded into the best moment (versions of one recording passage, or chunks of one agent response)",
 } as const satisfies Record<(typeof HIT_COLUMNS)[number], string>;
 
 const ITEM = { cols: ["item_key"], to: "items" } as const;
@@ -166,7 +173,7 @@ export const VIEW_CONTRACT: readonly ViewDoc[] = [
   },
   {
     name: "hits",
-    note: "Only with --search: the ranked chunks.",
+    note: "Only with --search: one ranked list of items and moments, at most 3 rows per item.",
     columns: HIT_COLUMNS.map((name) => ({ name, means: HIT_MEANS[name] })),
     joins: [{ cols: ["chunk_id"], to: "chunks" }, TURN, ITEM],
   },
@@ -362,25 +369,29 @@ words. Pulling raw chunks into the main context fills the window and loses the s
 
 1. The main agent dispatches a **subagent** (Task tool) with the question; it does not pull raw
    chunks into the main chat.
-2. The subagent runs \`memindex q semantic "<question>"\` (the primary mode for "where did we discuss X"),
-   or \`best-moment\` / \`rank-items\` to rank whole items. It reads the top hits, expands each with
-   \`context\` (turns around the hit) or \`thread\` (the whole item) — **multiple turns around the hit,
-   not an isolated chunk** — and **summarizes** a focused answer with citations (\`item_key\`,
-   turn \`ord\` ranges, \`origin\`, \`started_day\`).
+2. The subagent runs \`memindex q search "<question>" --json\`. Each row is an \`item\` (the whole chat
+   or recording is the answer: read \`about\` and its \`moments\`) or a \`moment\` (one exchange: read
+   \`snippet\` and \`context\`, the prompt that led in and the next prose reply). It expands what it
+   needs with \`context\` (turns around \`chunk_id\`), \`thread-page\` (a long item from an \`ord\`) or
+   \`thread\`, and **summarizes** a focused answer with citations (\`item_key\`, turn \`ord\` ranges,
+   \`origin\`, \`started_day\`).
 3. The main agent uses the summary; for more detail it dispatches another subagent with a narrower query.
 
-\`keyword\` / \`fuzzy\` / \`hybrid\` serve exact tokens (function names, error strings, file paths,
-typos); \`semantic\` is the default for conceptual recall. Combine filters freely: \`--source\`,
+\`hybrid\` (the \`search\` default) covers both exact tokens and conceptual recall; \`keyword\` / \`fuzzy\`
+narrow to exact tokens (function names, error strings, file paths, typos), \`semantic\` to paraphrases
+and other languages. Combine filters freely: \`--source\`,
 \`--kind meeting\`, \`--since 30d\`.
 
 ## Reading results
 
-- \`hits.score\` is mode-specific (for keyword the share of the query's words the chunk holds, 1 when
-  all of them; trigram similarity for fuzzy; 1 − cosine distance for semantic; fused RRF for hybrid).
-  Compare ranks, not raw scores, across modes.
+- \`unit = item\` when the evidence spreads over the item (3+ strong moments), for a one-turn recording,
+  or when a meeting's title or summary matched. Otherwise each of the item's best moments is its own row.
+- \`hits.score\` ranks within one result list (1 = its best possible single moment, items up to 1.75);
+  it is not a relevance probability. Compare ranks, not scores, across searches and modes.
 - A chunk of kind \`title\` is the item's name (a meeting's AI title, a chat's name) on its first turn:
   a hit on it means the whole item is about the query.
-- For semantic hits, score < ~0.45 is usually noise: say "weak match" and try other phrasing or keyword.
+- \`versions > 1\` on a recording: the passage exists as processed text and verbatim raw (or a speaker
+  turn); quote \`transcript_raw\` for exact words.
 - A meeting's \`transcript\` chunks are the LLM summary when the mode ran an LLM; \`transcript_raw\`
   chunks hold the verbatim words. Quote verbatim text for exact wording.
 - \`source_gone = 1\` means the source app deleted it; the archive is now the only copy.

@@ -139,6 +139,14 @@ describe("moments", () => {
     expect(s.momentPrecision).toBe(0.5);
   });
 
+  test("an item result lands on a listed turn when one of its moments is that turn", () => {
+    const item = row("chat", { turnKey: "t9", momentTurns: ["t9", "t1"] });
+    const s = scoreQuery(q, ranked(item, row("chat", { turnKey: "t5", momentTurns: ["t5"] })), none);
+    expect(s.momentHit5).toBe(true);
+    expect(s.momentPrecision).toBe(0.5);
+    expect(s.top[0]?.moment).toBe(true);
+  });
+
   test("precision is undefined until a row lands on an item with turns; no turns listed means no moment metric", () => {
     const s = scoreQuery(q, ranked(row("other")), none);
     expect(s.momentHit5).toBe(false);

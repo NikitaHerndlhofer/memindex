@@ -149,6 +149,8 @@ export const turn = memindex
       // The views expose timestamps as memindex.iso(...) text; an ORDER BY on them only uses an index
       // on that same expression.
       index("turn_at_iso_idx").on(sql`memindex.iso(${t.at})`).where(sql`memindex.iso(${t.at}) IS NOT NULL`),
+      // Search groups a chat hit under the user message that started its agent response.
+      index("turn_user_ord_idx").on(t.itemKey, t.ord).where(sql`${t.role} = 'user'`),
       writerAll(),
     ],
   )
@@ -193,6 +195,8 @@ export const chunk = memindex
         "cascade",
       ),
       index("chunk_item_idx").on(t.itemKey),
+      // Search context: an item's next prose reply, summary head or neighbouring speaker turn by ord.
+      index("chunk_item_kind_ord_idx").on(t.itemKey, t.kind, t.ord),
       index("chunk_source_started_idx").on(t.source, t.startedAt),
       index("chunk_kind_started_iso_idx").on(t.kind, sql`memindex.iso(${t.startedAt})`),
       index("chunk_content_hash_idx").on(t.contentHash),
@@ -274,7 +278,10 @@ export const jobRun = memindex
   )
   .enableRLS();
 
-/** Raw source record per revision. json (not jsonb) keeps the bytes as captured. */
+/**
+ * Raw source record per revision and the fidelity it was read at, so a richer read of the same
+ * revision (live over archive) is kept beside the poorer one. json (not jsonb) keeps the bytes as captured.
+ */
 export const capture = memindex
   .table(
     "capture",
@@ -283,6 +290,7 @@ export const capture = memindex
         .notNull()
         .references(() => item.itemKey),
       revHash: text("rev_hash").notNull(),
+      revFidelity: integer("rev_fidelity").notNull(),
       producerId: text("producer_id")
         .notNull()
         .references(() => producer.producerId),
@@ -291,7 +299,7 @@ export const capture = memindex
       capturedAt: tstz("captured_at").notNull().defaultNow(),
       body: json("body").$type<unknown>().notNull(),
     },
-    (t) => [primaryKey({ columns: [t.itemKey, t.revHash] }), writerAll()],
+    (t) => [primaryKey({ columns: [t.itemKey, t.revHash, t.revFidelity] }), writerAll()],
   )
   .enableRLS();
 

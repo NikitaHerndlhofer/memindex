@@ -104,12 +104,10 @@ export const superwhisper: SourcePlugin<SuperWhisperMeta> = {
   chunkers: { default: dictationChunker, meeting: speakerChunker },
   /**
    * 1: one turn `u` (transcript + transcript_raw) for every recording.
-   * 2: meetings with diarized segments get speaker turns `s<n>` plus the summary as turn `u`, which also
-   *    keeps the raw transcript. Not bumped for the raw part: the store keeps the first capture of a
-   *    revision, so meetings imported from the archive and later read live hold an archive capture
-   *    without meta.json, and replaying it would drop their speaker turns.
+   * 2: meetings with diarized segments get speaker turns `s<n>` plus the summary as turn `u`.
+   * 3: a diarized meeting's turn `u` also keeps the raw transcript.
    */
-  parserVersion: 2,
+  parserVersion: 3,
   capture: "always",
 
   async locations(kit) {

@@ -117,6 +117,8 @@ export interface ResultRow {
   readonly startedDay: string | null;
   /** What the result's turn says; null when the row names no turn. */
   readonly text: string | null;
+  /** Turns of the moments an item result carries; it lands on a turn when any of them is that turn. */
+  readonly momentTurns?: readonly string[];
 }
 
 const TOOL_JSON = /^(\{\s*"|\{\s*\}|\[\s*[{"[\]])/;
@@ -190,7 +192,7 @@ export function scoreQuery(
       title: r.title,
       grade: e?.grade ?? 0,
       family: e ? familyOf(e) : norm && forkTitles.has(norm) ? `title:${norm}` : r.itemKey,
-      moment: Boolean(e?.turns && r.turnKey !== null && e.turns.includes(r.turnKey)),
+      moment: Boolean(e?.turns?.some((t) => t === r.turnKey || r.momentTurns?.includes(t))),
       junk: isJunk(r.text),
       contaminated: !e && contaminated.has(r.itemKey),
     };
@@ -325,8 +327,10 @@ interface CliRun {
 /** Runs the memindex CLI with these args and stdin; the caller picks the binary and environment. */
 export type Runner = (args: readonly string[], stdin: string) => Promise<CliRun>;
 
+// to_jsonb(h) reads `moments` where the binary has it and yields NULL on older binaries.
 const HITS_SQL = `SELECT h.rank, h.item_key, h.turn_key, i.title, i.kind, i.started_day::text AS started_day,
-  left(t.body, 4000) AS text
+  left(t.body, 4000) AS text,
+  jsonb_path_query_array(to_jsonb(h), '$.moments[*].turn_key') AS moment_turns
 FROM hits h JOIN items i ON i.item_key = h.item_key
 LEFT JOIN turns t ON t.item_key = h.item_key AND t.turn_key = h.turn_key
 ORDER BY h.rank`;
@@ -356,6 +360,7 @@ function toRows(raw: readonly Record<string, unknown>[]): ResultRow[] {
     kind: str(r.kind),
     startedDay: str(r.started_day),
     text: str(r.text),
+    momentTurns: typeof r.moment_turns === "string" ? JSON.parse(r.moment_turns) : [],
   }));
 }
 

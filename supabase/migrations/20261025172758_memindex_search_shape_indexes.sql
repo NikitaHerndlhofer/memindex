@@ -1,0 +1,2 @@
+CREATE INDEX "chunk_item_kind_ord_idx" ON "memindex"."chunk" USING btree ("item_key","kind","ord");--> statement-breakpoint
+CREATE INDEX "turn_user_ord_idx" ON "memindex"."turn" USING btree ("item_key","ord") WHERE "memindex"."turn"."role" = 'user';

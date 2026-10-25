@@ -17,7 +17,7 @@ import {
   type TurnKey,
   type VectorSpace,
 } from "@memindex/model";
-import { and, asc, eq, gt, inArray, ne, type SQL, sql } from "drizzle-orm";
+import { and, asc, eq, gt, inArray, lt, ne, type SQL, sql } from "drizzle-orm";
 import {
   diffChunks,
   type ItemSnapshot,
@@ -172,7 +172,7 @@ export class PgReadStore implements ReadStore {
     if (hits && !isHitList(hits)) {
       prefix = [...searchArgs(hits)];
       cte =
-        "hits AS (SELECT * FROM memindex.search($1::text, $2::extensions.halfvec, $3::text, $4::text, $5::jsonb, $6::int, $7::int))";
+        "hits AS (SELECT * FROM memindex.search_results($1::text, $2::extensions.halfvec, $3::text, $4::text, $5::jsonb, $6::int, $7::int))";
     } else if (hits) {
       const list = hits;
       prefix = [
@@ -189,7 +189,7 @@ export class PgReadStore implements ReadStore {
         ),
       ];
       cte =
-        "hits AS (SELECT * FROM jsonb_to_recordset($1::jsonb) AS h(rank int, score float8, via text, chunk_id text, item_key text, turn_key text, snippet text))";
+        "hits AS (SELECT h.*, 'moment'::text AS unit, NULL::text AS about, NULL::jsonb AS context, NULL::jsonb AS moments, 1 AS versions FROM jsonb_to_recordset($1::jsonb) AS h(rank int, score float8, via text, chunk_id text, item_key text, turn_key text, snippet text))";
     }
     const bound = bindNamedParams(body, opts.params ?? {}, prefix.length);
     body = bound.text;
@@ -248,7 +248,8 @@ export class PgReadStore implements ReadStore {
     if (f.afterKey) conds.push(gt(item.itemKey, f.afterKey));
     if (f.parserBelow !== undefined) {
       conds.push(
-        sql`EXISTS (SELECT 1 FROM memindex.capture c WHERE c.item_key = ${item.itemKey} AND c.rev_hash = ${item.revHash} AND c.parser_version < ${f.parserBelow}::int)`,
+        lt(item.parserVersion, f.parserBelow),
+        sql`EXISTS (SELECT 1 FROM memindex.capture c WHERE c.item_key = ${item.itemKey} AND c.rev_hash = ${item.revHash} AND c.rev_fidelity = ${item.revFidelity})`,
       );
     }
     const heads = await this.db
@@ -271,7 +272,9 @@ export class PgReadStore implements ReadStore {
       .orderBy(asc(itemTag.tag));
     const caps = await this.db.select().from(capture).where(inArray(capture.itemKey, keys));
     for (const h of heads) {
-      const cap = caps.find((c) => c.itemKey === h.itemKey && c.revHash === h.revHash);
+      const cap = caps.find(
+        (c) => c.itemKey === h.itemKey && c.revHash === h.revHash && c.revFidelity === h.revFidelity,
+      );
       yield {
         source: h.source as SourceId,
         revision: { fidelity: h.revFidelity, at: h.revAt, hash: h.revHash },
@@ -440,6 +443,7 @@ export class PgWriteStore extends PgReadStore implements WriteStore {
           at: item.revAt,
           hash: item.revHash,
           producer: item.revProducer,
+          captureLags: sql<boolean>`coalesce((SELECT max(c.rev_fidelity) FROM memindex.capture c WHERE c.item_key = item.item_key AND c.rev_hash = item.rev_hash) < item.rev_fidelity, false)`,
         })
         .from(item)
         .where(
@@ -451,15 +455,13 @@ export class PgWriteStore extends PgReadStore implements WriteStore {
       const byKey = new Map(heads.map((h) => [h.itemKey, h]));
       for (const s of batch) {
         const h = byKey.get(s.key);
-        if (
-          !h ||
-          compareRevision(
-            { ...s.revision, producer: this.producer },
-            { fidelity: h.fidelity, at: h.at, hash: h.hash, producer: h.producer as ProducerId },
-          ) === "newer"
-        ) {
-          out.push(s.key);
-        }
+        const order = h
+          ? compareRevision(
+              { ...s.revision, producer: this.producer },
+              { fidelity: h.fidelity, at: h.at, hash: h.hash, producer: h.producer as ProducerId },
+            )
+          : "newer";
+        if (order === "newer" || (order === "same" && h?.captureLags)) out.push(s.key);
       }
     }
     return out;
@@ -504,6 +506,8 @@ export class PgWriteStore extends PgReadStore implements WriteStore {
         }
         const plan = planItemWrite(snap, write, this.producer);
         if (plan.kind !== "apply") {
+          if (plan.kind === "same" && write.capture)
+            await insertCapture(tx, d.key, write.revision, this.producer, write.parserVersion, write.capture);
           await upsertObservations(tx, this.producer, [write]);
           return plan.kind === "same" ? { kind: "same" } : { kind: "stale", stored: plan.stored };
         }
@@ -912,12 +916,13 @@ async function insertCapture(
     .values({
       itemKey: key,
       revHash: rev.hash,
+      revFidelity: rev.fidelity,
       producerId: producer,
       format: cap.format,
       parserVersion,
       body: cap.body,
     })
-    .onConflictDoNothing({ target: [capture.itemKey, capture.revHash] });
+    .onConflictDoNothing({ target: [capture.itemKey, capture.revHash, capture.revFidelity] });
 }
 
 /** Latest started_at (tie: greatest key) is live; the rest point at it. Order-independent. */

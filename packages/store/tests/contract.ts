@@ -31,6 +31,7 @@ import {
 } from "@memindex/model";
 import {
   facetColumn,
+  HIT_COLUMNS,
   type Hit,
   type ItemWrite,
   openStore,
@@ -402,6 +403,57 @@ export function runStoreContract(name: string, backend: () => ContractBackend): 
         await expect(b.admin("DELETE FROM memindex.capture")).rejects.toThrow(/insert-only/);
         const [stored] = await collect(w.streamItems({ limit: 10 }));
         expect(stored?.capture).toEqual(capture);
+      });
+
+      const archived = { format: "superwhisper-archive", body: { row: "archived" } };
+      const live = { format: "superwhisper-row", body: { row: "live", metaJson: { segments: ["s"] } } };
+
+      test("a capture read at a higher fidelity joins the poorer one of its revision, and the item replays it", async () => {
+        const w = await writer();
+        const d = draftOf(SW, "fid", [turnOf("u", "spoken")]);
+        await w.apply(writeOf(SW, L1, d, rev("h", 0), { capture: archived }));
+        expect((await collect(w.streamItems({ limit: 10 })))[0]?.capture).toEqual(archived);
+        expect((await w.apply(writeOf(SW, L1, d, rev("h", 1), { capture: live }))).kind).toBe("applied");
+        expect((await w.apply(writeOf(SW, L1, d, rev("h", 0), { capture: archived }))).kind).toBe("stale");
+        expect(await w.apply(writeOf(SW, L1, d, rev("h", 1), { capture: live }))).toEqual({ kind: "same" });
+        expect(
+          await b.admin("SELECT format, rev_fidelity FROM memindex.capture ORDER BY rev_fidelity"),
+        ).toEqual([
+          { format: "superwhisper-archive", rev_fidelity: 0 },
+          { format: "superwhisper-row", rev_fidelity: 1 },
+        ]);
+        expect((await collect(w.streamItems({ limit: 10 })))[0]?.capture).toEqual(live);
+      });
+
+      test("an item whose captures lag its fidelity is re-read until a read at that fidelity fills it in", async () => {
+        const w = await writer();
+        const d = draftOf(SW, "lag", [turnOf("u", "spoken")]);
+        const current = draftOf(SW, "current", [turnOf("u", "spoken")]);
+        await w.apply(writeOf(SW, L1, current, rev("h", 1), { capture: live }));
+        await w.apply(writeOf(SW, L1, d, rev("h", 0), { capture: archived }));
+        await w.apply(writeOf(SW, L1, d, rev("h", 1)));
+        const sighted = [sightingOf(d.key, rev("h", 1))];
+        expect(await w.triage(SW, L1, [...sighted, sightingOf(current.key, rev("h", 1))])).toEqual([d.key]);
+        expect(await w.triage(SW, L1, [sightingOf(d.key, rev("h", 0))])).toEqual([]);
+        const lagging = async (f: { parserBelow?: number } = {}) =>
+          (await collect(w.streamItems({ limit: 10, ...f }))).find((i) => i.draft.key === d.key);
+        expect((await lagging())?.capture).toBeNull();
+        expect(await lagging({ parserBelow: 9 })).toBeUndefined();
+
+        expect(await w.apply(writeOf(SW, L1, d, rev("h", 1), { capture: live }))).toEqual({ kind: "same" });
+        expect(await w.triage(SW, L1, sighted)).toEqual([]);
+        expect((await lagging({ parserBelow: 9 }))?.capture).toEqual(live);
+      });
+
+      test("an item reparsed at the current parser version is no longer below it", async () => {
+        const w = await writer();
+        const d = draftOf(SW, "rep", [turnOf("u", "spoken")]);
+        await w.apply(writeOf(SW, L1, d, rev("h"), { capture: live, parserVersion: 1 }));
+        expect((await collect(w.streamItems({ limit: 10, parserBelow: 2 }))).map((i) => i.draft.key)).toEqual(
+          [d.key],
+        );
+        expect((await w.apply(writeOf(SW, L1, d, rev("h"), { parserVersion: 2 }))).kind).toBe("applied");
+        expect(await collect(w.streamItems({ limit: 10, parserBelow: 2 }))).toEqual([]);
       });
 
       test("concurrent applies of one item from two handles serialize and converge", async () => {
@@ -1011,6 +1063,87 @@ export function runStoreContract(name: string, backend: () => ContractBackend): 
         );
         expect(typed[0]).toMatchObject({ meta: "{}", tags: "[]", yes: 1, big: 1 });
         expect(typeof typed[0]?.age_days).toBe("number");
+      });
+
+      test("hits are items and moments: spread chats whole, one exchange with its context, versions folded", async () => {
+        const w = await writer();
+        const say = (
+          key: string,
+          role: TurnDraft["role"],
+          kind: "text" | "tool_call",
+          text: string,
+        ): TurnDraft => ({
+          key: turnKey(key),
+          role,
+          at: null,
+          speaker: null,
+          parts: [{ kind, text }],
+        });
+        const spread = draftOf(CUR, "spread", [
+          say("u0", "user", "text", "how do we tune the cormorant cache"),
+          say("a1", "assistant", "text", "The cormorant cache now evicts after ten minutes."),
+          say("u2", "user", "text", "is the cormorant cache warm on boot"),
+          say("a3", "assistant", "text", "Yes, the cormorant cache is primed at startup."),
+          say("u4", "user", "text", "and the cormorant cache size"),
+          say("a5", "assistant", "text", "It holds about a thousand cormorant entries."),
+        ]);
+        const exchange = draftOf(CUR, "exchange", [
+          say("u0", "user", "text", "check the deploy logs please"),
+          say("a1", "assistant", "tool_call", '{"command":"grep cormorant deploy.log"}'),
+          say("a2", "assistant", "text", "Found it: the deploy failed on a missing secret."),
+          say("u3", "user", "text", "thanks, now the docs"),
+        ]);
+        const passage =
+          "we watched the cormorant dive off the harbour wall for most of the morning before lunch";
+        const dictation = draftOf(SW, "versions", [
+          {
+            key: turnKey("u"),
+            role: "speaker",
+            at: null,
+            speaker: null,
+            parts: [
+              {
+                kind: "transcript",
+                text: `We watched the cormorant dive off the harbour wall for most of the morning, before lunch.`,
+              },
+              { kind: "transcript_raw", text: passage },
+            ],
+          },
+        ]);
+        for (const d of [spread, exchange, dictation])
+          await w.apply(writeOf(d.key.startsWith("superwhisper:") ? SW : CUR, L1, d, rev("1")));
+
+        const got = await rows(
+          w.run("SELECT * FROM hits ORDER BY rank", {
+            hits: { via: "keyword", text: "cormorant", filter: { source: [CUR, SW] }, k: 10 },
+          }),
+        );
+        expect(Object.keys(got[0] ?? {})).toEqual([...HIT_COLUMNS]);
+        const byItem = new Map(got.map((r) => [r.item_key, r]));
+        expect(got.length).toBe(3);
+
+        const whole = byItem.get(spread.key);
+        expect(whole?.unit).toBe("item");
+        expect(whole?.about).toBe("spread: how do we tune the cormorant cache");
+        expect(JSON.parse(String(whole?.moments)).length).toBe(3);
+
+        const moment = byItem.get(exchange.key);
+        expect(moment).toMatchObject({ unit: "moment", turn_key: "a1", about: null, moments: null });
+        const context = JSON.parse(String(moment?.context));
+        expect(context.prompt).toMatchObject({
+          turn_key: "u0",
+          who: "user",
+          text: "check the deploy logs please",
+        });
+        expect(context.reply).toMatchObject({
+          turn_key: "a2",
+          who: "assistant",
+          text: "Found it: the deploy failed on a missing secret.",
+        });
+
+        const recording = byItem.get(dictation.key);
+        expect(recording).toMatchObject({ unit: "item", versions: 2 });
+        expect(JSON.parse(String(recording?.moments)).length).toBe(1);
       });
 
       test("read-only, timeout, maxRows marker", async () => {

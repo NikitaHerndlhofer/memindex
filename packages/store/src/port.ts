@@ -62,8 +62,8 @@ export interface ReadStore {
   search(req: StoreSearch): Promise<readonly Hit[]>;
   /**
    * Consumer SQL over the view contract in a READ ONLY transaction with a statement timeout.
-   * When `hits` is given it is prepended as a `hits` CTE: a search request becomes the backend's
-   * own search call with bound parameters (so the same SQL runs outside the binary); a Hit list
+   * When `hits` is given it is prepended as a `hits` CTE (HIT_COLUMNS): a search request becomes the
+   * backend's own items-and-moments search with bound parameters (so the same SQL runs outside the binary); a Hit list
    * is bound as one parameter. `:name` params are bound by a string/comment-aware scanner.
    */
   run(sql: string, opts: RunOptions): AsyncIterable<Row>;
@@ -113,12 +113,25 @@ export interface RankedChunk {
 
 export type HitVia = "keyword" | "fuzzy" | "semantic" | "hybrid";
 
-/** The `hits` relation. */
+/** A ranked chunk from `search`. Given to `run` as a list, each one is a `hits` row of unit `moment`. */
 export interface Hit extends RankedChunk {
   readonly via: HitVia;
 }
 
-export const HIT_COLUMNS = ["rank", "score", "via", "chunk_id", "item_key", "turn_key", "snippet"] as const;
+export const HIT_COLUMNS = [
+  "rank",
+  "score",
+  "via",
+  "chunk_id",
+  "item_key",
+  "turn_key",
+  "snippet",
+  "unit",
+  "about",
+  "context",
+  "moments",
+  "versions",
+] as const;
 
 export interface RunOptions {
   readonly hits?: StoreSearch | readonly Hit[];
@@ -144,7 +157,8 @@ export interface WriteStore extends ReadStore {
   /**
    * Record sightings for this producer at this location (seen_at, revision, locator,
    * attachments; clears gone_at if the item came back). Returns the keys whose content must be
-   * read: unknown items, or items whose stored revision is older than the sighting's.
+   * read: unknown items, items whose stored revision is older than the sighting's, and items at the
+   * sighting's revision whose captures were all read at a lower fidelity than that revision.
    * Idempotent; batched.
    */
   triage(source: SourceId, location: LocationId, sightings: readonly Sighting[]): Promise<readonly ItemKey[]>;
@@ -152,9 +166,11 @@ export interface WriteStore extends ReadStore {
   /**
    * The write. One transaction per item under the item lock:
    *   lock → load head + turn/chunk hashes → planItemWrite (pure, shared) →
-   *   stale|same: refresh the observation only → apply: upsert item/turns/chunks, delete turns
-   *   and chunks absent from the draft (items are never deleted), insert the capture if given,
-   *   recompute the supersedence group, write the observation → commit.
+   *   stale: refresh the observation only → same: also insert the capture if given → apply: upsert
+   *   item/turns/chunks, delete turns and chunks absent from the draft (items are never deleted),
+   *   insert the capture if given, recompute the supersedence group, write the observation → commit.
+   * Captures are insert-only, one per (revision, fidelity): a richer read of the same revision is
+   * kept beside the poorer one, never instead of it.
    * Vectors are untouched: keyed by content hash, unchanged text keeps its vector.
    * A crash anywhere commits nothing; the next triage still says "newer".
    */
@@ -273,7 +289,7 @@ export interface StoredItem {
   readonly chunker: ChunkerId;
   readonly parserVersion: number;
   readonly supersededBy: ItemKey | null;
-  /** Latest capture for the stored revision, when the source keeps captures. */
+  /** The capture read at the stored revision and its fidelity; null when there is none to replay. */
   readonly capture: Capture | null;
 }
 
@@ -281,7 +297,7 @@ export interface StreamFilter {
   readonly source?: SourceId;
   /** Items whose chunks were not produced by this chunker id. */
   readonly staleChunker?: ChunkerId;
-  /** Items with a capture whose parser version is below this. */
+  /** Items parsed by a parser version below this that have a `capture` to replay. */
   readonly parserBelow?: number;
   readonly afterKey?: ItemKey;
   readonly limit: number;

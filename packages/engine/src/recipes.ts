@@ -30,7 +30,8 @@ export interface Recipe {
 
 const limit = (n: number): RecipeParam => ({ type: "int", summary: "max rows", default: String(n) });
 
-const SEARCH_SQL = `SELECT h.rank, h.via, i.source, i.kind, i.started_day, i.title, i.origin, h.item_key, h.chunk_id, h.snippet
+const SEARCH_SQL = `SELECT h.rank, h.unit, i.source, i.kind, i.started_day, i.title, i.origin, h.item_key, h.chunk_id,
+       h.snippet, h.about, h.context, h.moments
 FROM hits h JOIN items i ON i.item_key = h.item_key
 ORDER BY h.rank
 LIMIT :limit`;
@@ -173,10 +174,15 @@ WHERE c.kind = :kind
 ORDER BY c.started_at DESC, c.chunk_id
 LIMIT :limit`,
   },
-  searchRecipe("search", "hybrid", "Ranked chunks across all sources (hybrid by default; --mode to change)", {
-    lesson:
-      "`--search` adds `hits` (ranked chunks, `rank` 1 = best); join `items` on `item_key` for the metadata.",
-  }),
+  searchRecipe(
+    "search",
+    "hybrid",
+    "Ranked items and moments across all sources (hybrid by default; --mode to change)",
+    {
+      lesson:
+        "`--search` adds `hits` (ranked items and moments, `rank` 1 = best); join `items` on `item_key` for the metadata.",
+    },
+  ),
   searchRecipe("semantic", "semantic", "Semantic search: conceptual recall, paraphrases, cross-lingual"),
   searchRecipe("keyword", "keyword", "Keyword search (stemmed): exact tokens, function names, error strings"),
   searchRecipe("fuzzy", "fuzzy", "Trigram search: substrings, typos, glued identifiers (≥3 chars)"),
@@ -216,7 +222,7 @@ LIMIT :limit`,
   },
   {
     name: "rank-items",
-    summary: "Rank whole items (recordings, chats) by their best chunks",
+    summary: "Rank whole items (recordings, chats) by their best results",
     group: "search",
     params: { limit: limit(10) },
     search: { defaultMode: "semantic" },
