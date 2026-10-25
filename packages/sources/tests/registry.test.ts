@@ -15,8 +15,8 @@ import { buildRegistry, SOURCES, type SourcePlugin } from "../src/index.ts";
 import { makeKit } from "./helpers.ts";
 
 const IDS = {
-  dictation: "superwhisper.dictation@1+0b15d0",
-  speaker: "superwhisper.speaker@2+b93db1",
+  dictation: "superwhisper.dictation@2+823365",
+  speaker: "superwhisper.speaker@2+e7752a",
   parts: "agent-chat.parts@2+d93840",
 };
 
@@ -68,7 +68,7 @@ test("rejects unknown ids, duplicate sources, clashing chunker ids, and capture 
   expect(() => buildRegistry([sw, sw])).toThrow(/duplicate source id: superwhisper/);
   const impostor: Chunker = { id: sw.chunkers.default.id, chunk: () => [] };
   expect(() => buildRegistry([sw, { ...cur, chunkers: { default: impostor } }])).toThrow(
-    /chunker id superwhisper\.dictation@1\+[0-9a-f]{6} is already taken/,
+    /chunker id superwhisper\.dictation@2\+[0-9a-f]{6} is already taken/,
   );
   expect(() =>
     buildRegistry([{ ...cur, chunkers: { default: cur.chunkers.default, meeting: sw.chunkers.default } }]),

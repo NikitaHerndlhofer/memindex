@@ -8,6 +8,8 @@ export const dictation = transcriptChunker({
   name: "dictation",
   tokens: bgeM3,
   embedPrefix: "[{meta.mode}] ",
+  kindPrefixes: { transcript_raw: "[{meta.mode} raw] " },
+  keywordOnly: [],
 });
 export const meeting = speakerTurnChunker({
   owner: "test",

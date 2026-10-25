@@ -104,7 +104,10 @@ export const superwhisper: SourcePlugin<SuperWhisperMeta> = {
   chunkers: { default: dictationChunker, meeting: speakerChunker },
   /**
    * 1: one turn `u` (transcript + transcript_raw) for every recording.
-   * 2: meetings with diarized segments get speaker turns `s<n>` plus the summary as turn `u`.
+   * 2: meetings with diarized segments get speaker turns `s<n>` plus the summary as turn `u`, which also
+   *    keeps the raw transcript. Not bumped for the raw part: the store keeps the first capture of a
+   *    revision, so meetings imported from the archive and later read live hold an archive capture
+   *    without meta.json, and replaying it would drop their speaker turns.
    */
   parserVersion: 2,
   capture: "always",
@@ -146,8 +149,9 @@ export const superwhisper: SourcePlugin<SuperWhisperMeta> = {
   skillNotes: [
     "Super Whisper: one item per recording (`superwhisper:<recording uuid hex>`), kind `dictation` or `meeting`.",
     "Turn `u` has two parts: `transcript` (LLM output when the mode ran one — for meetings that is the summary)",
-    "and `transcript_raw` (verbatim speech, keyword-searchable only). Diarized meetings instead have turn `u`",
-    "with only the summary, then one turn per speaker run (`s<n>`, `speaker` = the label from Super Whisper).",
+    "and `transcript_raw` (verbatim speech, embedded with a `[<mode> raw]` prefix, no chunks when identical to",
+    "the transcript). Diarized meetings have turn `u` with the summary (when the mode ran an LLM) and the raw",
+    "transcript, then one turn per speaker run (`s<n>`, `speaker` = the label from Super Whisper).",
     "Reprocessings of the same audio share a supersede group; default views show only the newest.",
   ].join("\n"),
 };

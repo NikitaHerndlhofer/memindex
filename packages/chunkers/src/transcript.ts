@@ -1,10 +1,12 @@
 /**
  * `transcriptChunker`: unstructured transcripts (dictations). Per turn, per part:
- *   - an embedded part whose `<embedPrefix><text>` fits in `maxTokens` is ONE chunk; a longer one becomes
+ *   - an embedded part whose `<prefix><text>` fits in `maxTokens` is ONE chunk; a longer one becomes
  *     windows cut at speaker labels first, then paragraphs, lines and sentence ends, overlapping by
- *     `overlapTokens`, each embedding `<embedPrefix><window>` within `maxTokens`;
- *   - `keywordOnly` kinds are keyword/fuzzy only, one chunk whatever their length, and dropped when
- *     identical to an embedded part of the same turn.
+ *     `overlapTokens`, each embedding `<prefix><window>` within `maxTokens`. The prefix is the part kind's
+ *     `kindPrefixes` entry, else `embedPrefix`;
+ *   - `keywordOnly` kinds are keyword/fuzzy only, one chunk whatever their length;
+ *   - a part whose trimmed text equals an embedded part's adds no chunks: a keyword-only part when any
+ *     embedded part of the turn matches, an embedded part when an earlier one does.
  */
 
 import {
@@ -27,7 +29,7 @@ import {
   type TokenCounter,
 } from "./tokens.ts";
 
-export const TRANSCRIPT_STOCK_VERSION = 1;
+export const TRANSCRIPT_STOCK_VERSION = 2;
 
 /** Super Whisper's diarization labels, `Speaker 1:` and `[Speaker 1]:`, as a regex source. */
 export const SPEAKER_LABEL = String.raw`(?:Speaker|SPEAKER) \d+:|\[(?:Speaker|SPEAKER) \d+\]:`;
@@ -43,6 +45,8 @@ export interface TranscriptChunkerOptions extends StockIdentity {
   readonly speakerLabel?: string | null;
   /** Embed prefix template (see `prefixTemplate`). Default "". */
   readonly embedPrefix?: string;
+  /** Per part kind, an embed prefix template used instead of `embedPrefix`. Default {}. */
+  readonly kindPrefixes?: Readonly<Partial<Record<PartKind, string>>>;
   /** Part kinds that are never embedded. Default ["transcript_raw"]. */
   readonly keywordOnly?: readonly PartKind[];
 }
@@ -70,21 +74,29 @@ export function transcriptChunker(options: TranscriptChunkerOptions): Chunker {
     overlapTokens: options.overlapTokens ?? DEFAULT_OVERLAP_TOKENS,
     speakerLabel: options.speakerLabel === undefined ? SPEAKER_LABEL : options.speakerLabel,
     embedPrefix: options.embedPrefix ?? "",
+    kindPrefixes: { ...options.kindPrefixes } as Record<string, string>,
     keywordOnly: [...(options.keywordOnly ?? ["transcript_raw"])].sort(),
   };
   checkBudget(config.maxTokens, config.overlapTokens);
-  const prefix = prefixTemplate(config.embedPrefix);
+  const defaultPrefix = prefixTemplate(config.embedPrefix);
+  const kindPrefixes = new Map(
+    Object.entries(config.kindPrefixes).map(([kind, template]) => [kind, prefixTemplate(template)]),
+  );
   const separators = transcriptSeparators(config.speakerLabel);
   const keywordOnly = new Set<PartKind>(config.keywordOnly);
 
   const turnChunks = (item: ItemDraft, turn: TurnDraft, budget: TokenBudget): ChunkDraft[] => {
-    const pre = prefix(item, turn);
-    const embeddedTexts = new Set(turn.parts.filter((p) => !keywordOnly.has(p.kind)).map((p) => p.text));
+    const embeddedTexts = new Set(
+      turn.parts.filter((p) => !keywordOnly.has(p.kind)).map((p) => p.text.trim()),
+    );
+    const embeddedSoFar = new Set<string>();
     const out: ChunkDraft[] = [];
     turn.parts.forEach((part, partIdx) => {
       const embed = !keywordOnly.has(part.kind);
-      if (!embed && embeddedTexts.has(part.text)) return;
-      if (part.text.trim().length === 0) return;
+      const trimmed = part.text.trim();
+      if (trimmed.length === 0 || (embed ? embeddedSoFar : embeddedTexts).has(trimmed)) return;
+      if (embed) embeddedSoFar.add(trimmed);
+      const pre = (kindPrefixes.get(part.kind) ?? defaultPrefix)(item, turn);
       const texts = embed ? transcriptWindows(part.text, pre, separators, budget) : [part.text];
       texts.forEach((text, sub) => {
         out.push(

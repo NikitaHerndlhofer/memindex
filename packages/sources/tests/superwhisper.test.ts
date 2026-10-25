@@ -176,33 +176,31 @@ describe("superwhisper read", () => {
     expect(kinds.get(`superwhisper:${ID_111}`)).toBe("dictation");
   });
 
-  test("diarized meetings: summary turn `u`, then one turn per consecutive speaker run", async () => {
+  const SEGMENTS = {
+    speakers: [
+      { number: 0, name: "Kim" },
+      { number: 1, name: "Speaker 2" },
+      { number: 2, name: "Kim" },
+    ],
+    segments: [
+      { start: 0.5, end: 0.9, text: "Before", words: [] },
+      { start: 1, end: 2, text: "Hi", speaker: 0, words: [] },
+      { start: 2, end: 3, text: " there.", speaker: 2, words: [] },
+      { start: 3, end: 4, text: "Hello", speaker: 1, words: [] },
+      { start: 4, end: 5, text: "   ", speaker: 0, words: [] },
+      { start: 5, end: 6, text: "again.", words: [] },
+      { start: 6, end: 7, text: "Ok.", speaker: 3, words: [] },
+    ],
+  };
+
+  test("diarized meetings: turn `u` with summary and raw transcript, then one turn per speaker run", async () => {
     const metaPath = join(dir, "superwhisper", "recordings", "1779000100", "meta.json");
     const meta = JSON.parse(readFileSync(metaPath, "utf8"));
     writeFileSync(metaPath, JSON.stringify({ ...meta, kind: "meeting" }));
     const v1 = await readMeeting();
-    const summaryText = v1.turns[0]?.parts[0]?.text;
-    writeFileSync(
-      metaPath,
-      JSON.stringify({
-        ...meta,
-        kind: "meeting",
-        speakers: [
-          { number: 0, name: "Kim" },
-          { number: 1, name: "Speaker 2" },
-          { number: 2, name: "Kim" },
-        ],
-        segments: [
-          { start: 0.5, end: 0.9, text: "Before", words: [] },
-          { start: 1, end: 2, text: "Hi", speaker: 0, words: [] },
-          { start: 2, end: 3, text: " there.", speaker: 2, words: [] },
-          { start: 3, end: 4, text: "Hello", speaker: 1, words: [] },
-          { start: 4, end: 5, text: "   ", speaker: 0, words: [] },
-          { start: 5, end: 6, text: "again.", words: [] },
-          { start: 6, end: 7, text: "Ok.", speaker: 3, words: [] },
-        ],
-      }),
-    );
+    const [summaryText, rawText] = v1.turns[0]?.parts.map((p) => p.text) ?? [];
+    expect(rawText).not.toBe(summaryText);
+    writeFileSync(metaPath, JSON.stringify({ ...meta, kind: "meeting", ...SEGMENTS }));
     const s = (await collect(await superwhisper.scan(location, kit))).find((x) => x.key.includes("ABC222"));
     const r = await superwhisper.read(s as Sighting, location, kit);
     if (!r) throw new Error("no draft");
@@ -215,7 +213,10 @@ describe("superwhisper read", () => {
         role: "speaker",
         at: d.startedAt,
         speaker: null,
-        parts: [{ kind: "transcript", text: summaryText }],
+        parts: [
+          { kind: "transcript", text: summaryText },
+          { kind: "transcript_raw", text: rawText },
+        ],
       },
       {
         key: "s0",
@@ -241,8 +242,29 @@ describe("superwhisper read", () => {
     ] as never);
     expect(superwhisper.parseCapture?.(JSON.parse(JSON.stringify(r.capture)))).toEqual(d);
 
-    const dictationSummary = dictationChunker.chunk(v1).filter((c) => c.embed);
-    expect(speakerChunker.chunk(d).filter((c) => c.turnKey === "u")).toEqual(dictationSummary);
+    const u = speakerChunker.chunk(d).filter((c) => c.turnKey === "u");
+    expect(u).toEqual(dictationChunker.chunk(v1) as never);
+    expect(u.map((c) => [c.kind, c.embed])).toEqual([
+      ["transcript", true],
+      ["transcript_raw", true],
+    ]);
+  });
+
+  test("a diarized meeting without an LLM summary keeps only the raw transcript on turn `u`", async () => {
+    const metaPath = join(dir, "superwhisper", "recordings", "1779000100", "meta.json");
+    const meta = JSON.parse(readFileSync(metaPath, "utf8"));
+    writeFileSync(metaPath, JSON.stringify({ ...meta, kind: "meeting", ...SEGMENTS }));
+    rewrite("UPDATE recording_fts SET llmResult = NULL WHERE hex(recordingId) = ?", [
+      "ABC222".padEnd(32, "0"),
+    ]);
+    const d = await readMeeting();
+    const u = d.turns.find((t) => t.key === "u");
+    expect(u?.parts.map((p) => p.kind)).toEqual(["transcript_raw"]);
+    expect(d.turns.map((t) => t.key)).toEqual(["u", "s0", "s3", "s6"] as never);
+    const rawChunks = speakerChunker.chunk(d).filter((c) => c.kind === "transcript_raw");
+    expect(rawChunks.length).toBeGreaterThan(0);
+    const { mode } = d.meta as { mode: string };
+    for (const c of rawChunks) expect(c.embedText).toBe(`[${mode} raw] ${c.text}`);
   });
 
   test("a meeting without speaker segments keeps the single `u` turn and chunks like a dictation", async () => {

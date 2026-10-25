@@ -76,7 +76,7 @@ SELECT * FROM memindex.search('rate limiter', :query_embedding, 'bge-m3@1024', '
 | --------------------------------------- | ---------------- | -------------------------------------------------------- | ------------------------------------------------------------ |
 | Cursor / Claude Code chat (structured)  | one conversation | one per message, keyed by the source's bubble or line id | text, thinking, code, tool_call, tool_result, diff, subagent |
 | Super Whisper dictation (unstructured)  | one recording    | one turn `u`                                             | best transcript, raw transcript                              |
-| Super Whisper meeting (semi-structured) | one recording    | one per speaker segment when present, else `u`           | transcript                                                   |
+| Super Whisper meeting (semi-structured) | one recording    | `u`, plus one per speaker segment when present           | `u`: summary, raw transcript; speakers: transcript           |
 - `ItemKey = "<source>:<native>"`: `superwhisper:<recording_id_hex>`, `cursor:<composerId>`.
 - `TurnKey` is source-native, never a position, so inserting a message mid-chat changes nothing
   else. Archived Cursor chats whose source had no message ids use `archive:<n>`; a live read of the
@@ -106,7 +106,7 @@ configures a stock chunker from `@memindex/chunkers` or implements `Chunker` its
   as a `TokenCounter`; `@memindex/tokenizer` counts exactly what Ollama counts (BOS and EOS
   included) from bge-m3's SentencePiece model, embedded in the binary. Splitting stays
   structure-aware and only the size test is tokens; pieces overlap by `overlapTokens` (default
-  64). Keyword-only parts (raw transcripts) are never split or budgeted.
+  64). Keyword-only parts are never split or budgeted.
 - **Ids are derived, never hand-bumped.** A stock chunker's id is
   `<owner>.<name>@<stockVersion>+<hash of resolved options>`, and the resolved options include the
   tokenizer's id and the budget, so changing an option, the tokenizer or a stock algorithm
@@ -116,11 +116,11 @@ configures a stock chunker from `@memindex/chunkers` or implements `Chunker` its
   outdated are stale, and the `rechunk` job converts them. Archived chats are stored under
   `archive.chunks@1`, which no plugin declares, so `rechunk` moves them to `agent-chat.parts@2`.
 
-| In-tree chunker                              | Stock factory        | Behavior                                                                                                                                                                                                     |
-| -------------------------------------------- | -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `agent-chat.parts@2+…` (cursor, claude-code) | `partsChunker`       | One chunk per part, so tool output never shares a vector with prose. Parts over 512 tokens split with 64 overlap: code by language, tool output by lines, diffs by hunks, prose by paragraphs then sentences |
-| `superwhisper.dictation@1+…` (dictation)     | `transcriptChunker`  | The body whole when `[{meta.mode}] body` fits 512 tokens, else windows cut at speaker labels, then paragraphs and sentence ends, with 64 overlap. Raw transcripts are keyword-only                           |
-| `superwhisper.speaker@2+…` (meeting)         | `speakerTurnChunker` | The summary uses the dictation chunker; speaker turns from `meta.json` embed as `[speaker] text`, turns over 512 tokens window at sentence ends, tiny turns are keyword-only                                 |
+| In-tree chunker                              | Stock factory        | Behavior                                                                                                                                                                                                                                                         |
+| -------------------------------------------- | -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `agent-chat.parts@2+…` (cursor, claude-code) | `partsChunker`       | One chunk per part, so tool output never shares a vector with prose. Parts over 512 tokens split with 64 overlap: code by language, tool output by lines, diffs by hunks, prose by paragraphs then sentences                                                     |
+| `superwhisper.dictation@2+…` (dictation)     | `transcriptChunker`  | The body whole when `[{meta.mode}] body` fits 512 tokens, else windows cut at speaker labels, then paragraphs and sentence ends, with 64 overlap. The raw transcript chunks the same way under `[{meta.mode} raw] `, and adds nothing when identical to the body |
+| `superwhisper.speaker@2+…` (meeting)         | `speakerTurnChunker` | The summary uses the dictation chunker; speaker turns from `meta.json` embed as `[speaker] text`, turns over 512 tokens window at sentence ends, tiny turns are keyword-only                                                                                     |
 
 ## Multi-producer correctness
 

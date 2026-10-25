@@ -290,20 +290,19 @@ export function parseCapture(capture: Capture): ItemDraft<SuperWhisperMeta> {
   const kind = itemKind(row, meta.success ? meta.data.kind : undefined);
   const speakers = kind === "meeting" ? speakerTurns(metaJson, startedAt) : [];
   const summary = row.llmResult?.trim() ? row.llmResult : null;
+  const rawPart = { kind: "transcript_raw", text: raw } as const;
   const whole: TurnDraft = {
     key: turnKey("u"),
     role: "speaker",
     at: startedAt,
     speaker: null,
-    parts: [
-      { kind: "transcript", text: transcript },
-      { kind: "transcript_raw", text: raw },
-    ],
+    parts: [{ kind: "transcript", text: transcript }, rawPart],
   };
-  const summaryTurn: TurnDraft[] = summary
-    ? [{ ...whole, parts: [{ kind: "transcript", text: summary }] }]
-    : [];
-  const turns = speakers.length === 0 ? [whole] : [...summaryTurn, ...speakers];
+  const summaryTurn: TurnDraft = {
+    ...whole,
+    parts: summary ? [{ kind: "transcript", text: summary }, rawPart] : [rawPart],
+  };
+  const turns = speakers.length === 0 ? [whole] : [summaryTurn, ...speakers];
 
   return {
     key: itemKey("superwhisper", row.recordingIdHex),

@@ -95,7 +95,11 @@ function inputs(): ItemDraft[] {
       })),
     ),
     item("dictation", [
-      { key: "u", speaker: null, parts: texts.map((text) => ({ kind: "transcript", text })) },
+      {
+        key: "u",
+        speaker: null,
+        parts: texts.map((text, i) => ({ kind: i % 2 ? "transcript_raw" : "transcript", text })),
+      },
     ]),
     item(
       "meeting",
@@ -117,6 +121,8 @@ function chunkers(maxTokens: number): Chunker[] {
     maxTokens,
     overlapTokens,
     embedPrefix: "[{meta.mode}] ",
+    kindPrefixes: { transcript_raw: "[{meta.mode} raw] " },
+    keywordOnly: [],
   });
   return [
     partsChunker({ owner: "test", name: "parts", tokens: bgeM3, maxTokens, overlapTokens }),
