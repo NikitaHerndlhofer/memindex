@@ -20,6 +20,7 @@ import { redactUrl } from "../packages/engine/src/config.ts";
 import { readEmbedRuntime } from "../packages/engine/src/embed-duty.ts";
 import { MIGRATIONS } from "../packages/store/src/migrations.gen.ts";
 import { measureFreeSpace, shortfalls } from "./disk-headroom.ts";
+import { BASELINE_PATH, formatSummary, loadGolden, runEval, type Summary } from "./search-eval.ts";
 
 export type Verdict = "VERIFIED" | "NOT VERIFIED" | "INCONCLUSIVE";
 
@@ -35,6 +36,7 @@ const CLAUSE_IDS = [
   "embed",
   "search-scoped",
   "search-latency",
+  "search-quality",
   "read-only",
   "idle-cpu",
 ] as const;
@@ -945,6 +947,39 @@ const searchLatency: Clause = {
   },
 };
 
+/** No quality thresholds are agreed yet, so this clause reports the scores next to the recorded baseline. */
+const searchQuality: Clause = {
+  id: "search-quality",
+  title: "search quality on the golden set (scripts/search-eval), compared with the recorded baseline",
+  requires: ["schema"],
+  async run(h) {
+    const ollama = await ollamaHasModel();
+    if (ollama) return { verdict: "INCONCLUSIVE", evidence: `Ollama ${ollama}; hybrid search needs it` };
+    await warmEmbedder();
+    const report = await runEval(loadGolden(), (args, stdin) => h.cli(args, { stdin, timeoutMs: 120_000 }), {
+      mode: "hybrid",
+      limit: 10,
+      runs: 1,
+      only: null,
+    });
+    const baseline = existsSync(BASELINE_PATH)
+      ? (JSON.parse(readFileSync(BASELINE_PATH, "utf8")) as { version: string; at: string; summary: Summary })
+      : null;
+    const drift = report.missingGoldenKeys.length
+      ? `; ${report.missingGoldenKeys.length} golden key(s) no longer in the archive${sample([...report.missingGoldenKeys])}`
+      : "";
+    return {
+      verdict: "INCONCLUSIVE",
+      evidence: `${formatSummary(report.summary)}${drift}; baseline ${
+        baseline
+          ? `memindex ${baseline.version} (${baseline.at.slice(0, 10)}): ${formatSummary(baseline.summary)}`
+          : "none recorded"
+      }; no thresholds agreed yet`,
+      data: { report, baseline },
+    };
+  },
+};
+
 const readOnly: Clause = {
   id: "read-only",
   title: "memindex sql refuses writes",
@@ -1076,6 +1111,7 @@ const CLAUSES: readonly Clause[] = [
   embed,
   searchScoped,
   searchLatency,
+  searchQuality,
   readOnly,
   idleCpu,
 ];
