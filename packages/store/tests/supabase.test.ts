@@ -8,10 +8,19 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { contentHash } from "@memindex/model";
+import {
+  type ChunkDraft,
+  chunkDraft,
+  contentHash,
+  type ItemDraft,
+  sourceId,
+  titleChunk,
+} from "@memindex/model";
 import postgres from "postgres";
+import { planItemWrite } from "../src/core/plan.ts";
 import {
   ensureExtensionsSearchPath,
+  type ItemWrite,
   materializeSupabaseProject,
   migrateStore,
   openStore,
@@ -19,7 +28,22 @@ import {
   type StoreConfig,
   StoreError,
 } from "../src/index.ts";
-import { type ContractBackend, type LedgerBreak, P1, runStoreContract, SPACE, vecNear } from "./contract.ts";
+import { MIGRATIONS } from "../src/migrations.gen.ts";
+import {
+  type ContractBackend,
+  CUR,
+  chunksOf,
+  draftOf,
+  L1,
+  type LedgerBreak,
+  P1,
+  rev,
+  runStoreContract,
+  SPACE,
+  turnOf,
+  vecNear,
+  writeOf,
+} from "./contract.ts";
 
 const URL_ = process.env.MEMINDEX_TEST_PG_URL ?? "postgres://postgres:postgres@127.0.0.1:54422/postgres";
 const cfg: StoreConfig = { backend: "postgres", url: URL_ };
@@ -300,6 +324,156 @@ console.log(JSON.stringify(await migrateStore({ backend: "postgres", url: proces
     } finally {
       rmSync(dir, { recursive: true, force: true });
       await admin.unsafe(`DROP DATABASE IF EXISTS ${db} WITH (FORCE)`);
+    }
+  }, 120_000);
+});
+
+describe("memindex_text_once: an archive written by the previous release", () => {
+  const db = `memindex_text_once_${process.pid}`;
+  const url = (() => {
+    const u = new URL(URL_);
+    u.pathname = `/${db}`;
+    return u.toString();
+  })();
+  const SW = sourceId("superwhisper");
+  const once = MIGRATIONS.find((m) => m.name === "memindex_text_once");
+  const named = draftOf(
+    CUR,
+    "named",
+    [turnOf("a", "can you check the deploy", "", "then tag it"), turnOf("b", "sure")],
+    {
+      title: "(2) Deploy checklist",
+    },
+  );
+  const dictation = draftOf(SW, "dictated", [turnOf("u", "ship the fix today")], { title: null });
+  const prefixed = (d: ItemDraft): ChunkDraft[] =>
+    chunksOf(d).map((c) => chunkDraft(d.key, { ...c, embedPrefix: "[Universal] " }));
+
+  /** The previous release's rows: turn.body beside turn.parts, chunk.embed_text when it differs from text. */
+  async function writeAsPreviousRelease(s: postgres.Sql, write: ItemWrite): Promise<void> {
+    const plan = planItemWrite(null, write, P1);
+    if (plan.kind !== "apply") throw new Error("expected a plan to apply");
+    const d = write.draft;
+    await s`INSERT INTO memindex.item (item_key, source, kind, title, origin, started_at, ended_at, parent_key,
+              supersede_key, meta, rev_fidelity, rev_at, rev_hash, rev_producer, chunker, parser_version)
+            VALUES (${d.key}, ${write.source}, ${d.kind}, ${d.title}, ${d.origin}, ${d.startedAt}, ${d.endedAt},
+              ${d.parentKey}, ${d.supersedeKey}, ${s.json({})}, ${write.revision.fidelity}, ${write.revision.at},
+              ${write.revision.hash}, ${P1}, ${write.chunker}, ${write.parserVersion})`;
+    for (const t of plan.upsertTurns)
+      await s`INSERT INTO memindex.turn (item_key, turn_key, ord, role, at, speaker, body, parts, parts_hash)
+              VALUES (${d.key}, ${t.draft.key}, ${t.ord}, ${t.draft.role}, ${t.draft.at}, ${t.draft.speaker},
+                ${t.draft.parts.map((p) => p.text).join("\n\n")}, ${s.json(t.parts as never)}, ${t.partsHash})`;
+    for (const { draft: c, chunkHash, ord } of plan.chunks.upsert)
+      await s`INSERT INTO memindex.chunk (chunk_id, item_key, turn_key, source, started_at, ord, part_idx, sub, kind,
+                tool_name, text, embed_text, content_hash, chunk_hash, embed)
+              VALUES (${c.id}, ${d.key}, ${c.turnKey}, ${write.source}, ${d.startedAt}, ${ord}, ${c.partIdx}, ${c.sub},
+                ${c.kind}, ${c.toolName}, ${c.text}, ${c.embedText === c.text ? null : c.embedText}, ${c.contentHash},
+                ${chunkHash}, ${c.embed})`;
+  }
+
+  beforeAll(async () => {
+    await admin.unsafe(`DROP DATABASE IF EXISTS ${db} WITH (FORCE)`);
+    await admin.unsafe(`CREATE DATABASE ${db}`);
+  });
+  afterAll(async () => {
+    await admin.unsafe(`DROP DATABASE IF EXISTS ${db} WITH (FORCE)`);
+  });
+
+  test("keeps every body and content hash, rewrites a copy's title chunk as ingest writes it, drops the copies", async () => {
+    expect(once).toBeDefined();
+    const cfgOnce: StoreConfig = { backend: "postgres", url };
+    await ensureExtensionsSearchPath(cfgOnce);
+    const dir = mkdtempSync(join(tmpdir(), "memindex-before-text-once-"));
+    try {
+      materializeSupabaseProject(dir, Number(new URL(url).port));
+      for (const f of readdirSync(join(dir, "supabase", "migrations")))
+        if (f >= `${once?.version}`) rmSync(join(dir, "supabase", "migrations", f));
+      const up = Bun.spawnSync(["supabase", "migration", "up", "--db-url", url, "--workdir", dir], {
+        stderr: "pipe",
+      });
+      expect(up.exitCode, up.stderr.toString()).toBe(0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+
+    const writes = [
+      writeOf(CUR, L1, named, rev("1", 1, 1)),
+      { ...writeOf(SW, L1, dictation, rev("1", 1, 1)), chunks: prefixed(dictation) },
+    ];
+    const s = postgres(url, { max: 1, onnotice: () => {} });
+    try {
+      await s`INSERT INTO memindex.producer (producer_id, host, binary_version) VALUES (${P1}, 'test', 'previous')`;
+      for (const w of writes) await writeAsPreviousRelease(s, w);
+      const backfill = MIGRATIONS.find((m) => m.name === "memindex_title_chunks");
+      await s.unsafe(backfill?.sql ?? "");
+      const bodies = await s`SELECT item_key, turn_key, body FROM memindex.turns ORDER BY item_key, ord`;
+      expect((await s`SELECT text FROM memindex.chunk WHERE kind = 'title'`).map((r) => r.text)).toEqual([
+        "(2) Deploy checklist",
+      ]);
+
+      expect((await migrateStore(cfgOnce)).state).toBe("current");
+
+      expect(await s`SELECT item_key, turn_key, body FROM memindex.turns ORDER BY item_key, ord`).toEqual(
+        bodies,
+      );
+      expect(bodies.map((r) => r.body)).toEqual([
+        "can you check the deploy\n\n\n\nthen tag it",
+        "sure",
+        "ship the fix today",
+      ]);
+      const columns = await s`SELECT table_name, column_name FROM information_schema.columns
+        WHERE table_schema = 'memindex' AND table_name IN ('turn', 'chunk')
+          AND column_name IN ('body', 'embed_text', 'embed_prefix')`;
+      expect(columns.map((r) => `${r.table_name}.${r.column_name}`)).toEqual(["chunk.embed_prefix"]);
+      const chunks = await s`SELECT kind, text, embed_prefix, content_hash,
+          encode(sha256(convert_to(coalesce(embed_prefix, '') || text, 'UTF8')), 'hex') AS rehash
+        FROM memindex.chunk ORDER BY kind, text COLLATE "C"`;
+      for (const c of chunks) expect(c.rehash).toBe(c.content_hash);
+      expect(chunks.map((c) => [c.kind, c.text, c.embed_prefix])).toEqual([
+        ["text", "", null],
+        ["text", "can you check the deploy", null],
+        ["text", "ship the fix today", "[Universal] "],
+        ["text", "sure", null],
+        ["text", "then tag it", null],
+        ["title", "Deploy checklist", null],
+      ]);
+    } finally {
+      await s.end();
+    }
+
+    const w = await openStore(cfgOnce, {
+      mode: "write",
+      producer: P1,
+      binaryVersion: "test",
+      facets: new Map(),
+      vectorSpace: SPACE,
+    });
+    try {
+      const title = titleChunk(named);
+      if (!title) throw new Error("no title chunk");
+      const again = [
+        { ...writeOf(CUR, L1, named, rev("2", 1, 2)), chunks: [title, ...chunksOf(named)] },
+        { ...writeOf(SW, L1, dictation, rev("2", 1, 2)), chunks: prefixed(dictation) },
+      ];
+      for (const write of again)
+        expect(await w.apply(write)).toEqual({
+          kind: "applied",
+          turnsChanged: 0,
+          chunksAdded: 0,
+          chunksRemoved: 0,
+        });
+      expect((await w.vectors.backlog(SPACE, { limit: 10 })).map((p) => p.embedText).sort()).toEqual(
+        [
+          "",
+          "Deploy checklist",
+          "[Universal] ship the fix today",
+          "can you check the deploy",
+          "sure",
+          "then tag it",
+        ].sort(),
+      );
+    } finally {
+      await w.close();
     }
   }, 120_000);
 });

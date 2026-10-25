@@ -192,7 +192,7 @@ function piecesChunker(id: Chunker["id"], counter: TokenCounter, r: Resolved): C
                 ...base,
                 sub,
                 text,
-                embedText: embed(text, sub, pieces.length),
+                embedPrefix: embed("", sub, pieces.length),
                 embed: embeds(text),
               }),
             );

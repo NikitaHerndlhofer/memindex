@@ -6,6 +6,7 @@
 import {
   type ChunkDraft,
   compareRevision,
+  embedPrefix,
   type Part,
   type ProducerId,
   type Revision,
@@ -35,7 +36,6 @@ export interface PlannedTurn {
   readonly draft: TurnDraft;
   readonly ord: number;
   readonly partsHash: string;
-  readonly body: string;
   readonly parts: readonly StoredPart[];
 }
 
@@ -44,6 +44,8 @@ export interface PlannedChunk {
   readonly chunkHash: string;
   /** Its turn's ord. */
   readonly ord: number;
+  /** chunk.embed_prefix: what the embedded text adds in front of `text`, NULL for nothing. */
+  readonly embedPrefix: string | null;
 }
 
 export interface ChunkDiff {
@@ -126,8 +128,9 @@ export function diffChunks(
     seen.add(c.id);
     const ord = turnOrd.get(c.turnKey);
     if (ord === undefined) throw new Error(`chunk ${c.id} references unknown turn ${c.turnKey}`);
+    const prefix = embedPrefix(c);
     const h = chunkHash(c);
-    if (current.get(c.id) !== h) upsert.push({ draft: c, chunkHash: h, ord });
+    if (current.get(c.id) !== h) upsert.push({ draft: c, chunkHash: h, ord, embedPrefix: prefix || null });
   }
   const del = [...current.keys()].filter((id) => !seen.has(id));
   return { upsert, delete: del };
@@ -162,7 +165,6 @@ export function planItemWrite(
         draft: t,
         ord,
         partsHash: h,
-        body: t.parts.map((p) => p.text).join("\n\n"),
         parts: storedParts(t.parts),
       });
     } else if (head.ord !== ord) reorderTurns.push({ key: t.key, ord });

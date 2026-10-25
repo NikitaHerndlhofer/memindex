@@ -30,7 +30,7 @@ const STRATA: readonly { name: string; where: string }[] = [
   { name: "cursor text", where: "source = 'cursor' AND kind = 'text'" },
   { name: "cursor tool_call", where: "source = 'cursor' AND kind = 'tool_call'" },
   { name: "cursor tool_result", where: "source = 'cursor' AND kind = 'tool_result'" },
-  { name: "cyrillic", where: "coalesce(embed_text, text) ~ '[А-Яа-яЁё]{4}'" },
+  { name: "cyrillic", where: "(coalesce(embed_prefix, '') || text) ~ '[А-Яа-яЁё]{4}'" },
   { name: "claude-code", where: "source = 'claude-code'" },
   { name: "superwhisper transcript", where: "source = 'superwhisper' AND kind = 'transcript'" },
   { name: "superwhisper raw", where: "source = 'superwhisper' AND kind = 'transcript_raw'" },
@@ -58,8 +58,8 @@ async function sample(): Promise<{ stratum: string; text: string }[]> {
     const out: { stratum: string; text: string }[] = [];
     for (const s of STRATA) {
       const rows = (await sql.unsafe(
-        `SELECT coalesce(embed_text, text) AS t FROM memindex.chunk TABLESAMPLE SYSTEM (5) REPEATABLE (7)
-         WHERE ${s.where} AND length(coalesce(embed_text, text)) BETWEEN 1 AND 6000 LIMIT ${per}`,
+        `SELECT coalesce(embed_prefix, '') || text AS t FROM memindex.chunk TABLESAMPLE SYSTEM (5) REPEATABLE (7)
+         WHERE ${s.where} AND length(coalesce(embed_prefix, '') || text) BETWEEN 1 AND 6000 LIMIT ${per}`,
       )) as { t: string }[];
       for (const r of rows) out.push({ stratum: s.name, text: r.t });
     }

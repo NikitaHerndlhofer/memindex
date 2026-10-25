@@ -134,6 +134,13 @@
       "when": 1792955539681,
       "tag": "20261025191219_memindex_bounded_vec_gc",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1792964090847,
+      "tag": "20261025213450_memindex_text_once",
+      "breakpoints": true
     }
   ]
 }

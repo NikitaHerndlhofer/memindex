@@ -618,7 +618,7 @@ export class PgWriteStore extends PgReadStore implements WriteStore {
     const exclude = opts.exclude ?? [];
     type Pass = "titles" | "prefer" | "rest";
     const pending = (pass: Pass, limit: number, skip: readonly string[]) => sql`
-      SELECT DISTINCT ON (c.content_hash) c.content_hash, coalesce(c.embed_text, c.text) AS embed_text
+      SELECT DISTINCT ON (c.content_hash) c.content_hash, coalesce(c.embed_prefix, '') || c.text AS embed_text
       FROM memindex.chunk c JOIN memindex.item i ON i.item_key = c.item_key
       WHERE c.embed AND i.superseded_by IS NULL
         ${pass === "titles" ? sql`AND c.kind = 'title'` : sql``}
@@ -835,7 +835,6 @@ async function upsertTurns(tx: Exec, key: ItemKey, turns: readonly PlannedTurn[]
           role: t.draft.role,
           at: t.draft.at === null ? null : new Date(t.draft.at),
           speaker: t.draft.speaker,
-          body: t.body,
           parts: t.parts,
           partsHash: t.partsHash,
         })),
@@ -847,7 +846,6 @@ async function upsertTurns(tx: Exec, key: ItemKey, turns: readonly PlannedTurn[]
           role: sql`excluded.role`,
           at: sql`excluded.at`,
           speaker: sql`excluded.speaker`,
-          body: sql`excluded.body`,
           parts: sql`excluded.parts`,
           partsHash: sql`excluded.parts_hash`,
         },
@@ -866,7 +864,7 @@ async function upsertChunks(
     await tx
       .insert(chunk)
       .values(
-        batch.map(({ draft: c, chunkHash, ord }) => ({
+        batch.map(({ draft: c, chunkHash, ord, embedPrefix }) => ({
           chunkId: c.id,
           itemKey: key,
           turnKey: c.turnKey,
@@ -878,7 +876,7 @@ async function upsertChunks(
           kind: c.kind,
           toolName: c.toolName,
           text: c.text,
-          embedText: c.embedText === c.text ? null : c.embedText,
+          embedPrefix,
           contentHash: c.contentHash,
           chunkHash,
           embed: c.embed,
@@ -895,7 +893,7 @@ async function upsertChunks(
           kind: sql`excluded.kind`,
           toolName: sql`excluded.tool_name`,
           text: sql`excluded.text`,
-          embedText: sql`excluded.embed_text`,
+          embedPrefix: sql`excluded.embed_prefix`,
           contentHash: sql`excluded.content_hash`,
           chunkHash: sql`excluded.chunk_hash`,
           embed: sql`excluded.embed`,

@@ -167,7 +167,10 @@ export interface ChunkDraft {
   readonly kind: ChunkKind;
   readonly toolName: string | null;
   readonly text: string;
-  /** Invariant: contentHash === sha256(embedText). Construct with `chunkDraft`. */
+  /**
+   * Invariants: embedText === <embed prefix> + text, so the store keeps only the prefix beside `text`;
+   * contentHash === sha256(embedText). Construct with `chunkDraft`.
+   */
   readonly embedText: string;
   readonly contentHash: ContentHash;
   /** false ⇒ keyword/fuzzy only (raw transcripts). Never enters the embed backlog. */
@@ -176,15 +179,23 @@ export interface ChunkDraft {
 
 export function chunkDraft(
   item: ItemKey,
-  c: Omit<ChunkDraft, "id" | "contentHash" | "embedText"> & { readonly embedText?: string },
+  c: Omit<ChunkDraft, "id" | "contentHash" | "embedText"> & { readonly embedPrefix?: string },
 ): ChunkDraft {
-  const embedText = c.embedText ?? c.text;
+  const { embedPrefix = "", ...rest } = c;
+  const embedText = `${embedPrefix}${c.text}`;
   return {
-    ...c,
+    ...rest,
     id: chunkId(item, c.turnKey, c.partIdx, c.sub),
     embedText,
     contentHash: contentHash(embedText),
   };
+}
+
+/** What `embedText` adds in front of `text`. Throws for a draft that breaks that invariant. */
+export function embedPrefix(c: ChunkDraft): string {
+  if (!c.embedText.endsWith(c.text))
+    throw new Error(`chunk ${c.id}: embedText must be a prefix followed by text`);
+  return c.embedText.slice(0, c.embedText.length - c.text.length);
 }
 
 /** Pure and deterministic: the same draft yields the same chunks, byte for byte. */
@@ -202,8 +213,8 @@ const COPY_COUNTER = /^\(\d+\)\s+/;
  * The item's title as a chunk on its first turn, so search finds an item by its name (an AI meeting title,
  * a chat's name) and lands on where it starts. None when the title only repeats the first turn's opening
  * words (Super Whisper titles a recording without one by its first 80 characters). A copy's "(n) " counter
- * (Cursor names a duplicated chat "(2) <title>") is shown but not embedded, so a chat and its copies share
- * one content hash and search collapses them. Mirrored in SQL by the `memindex_title_chunks` backfill.
+ * (Cursor names a duplicated chat "(2) <title>") is dropped, so a chat and its copies share one content
+ * hash and search collapses them; the item's own title keeps it.
  */
 export function titleChunk(item: ItemDraft): ChunkDraft | null {
   const title = item.title?.trim();
@@ -223,8 +234,7 @@ export function titleChunk(item: ItemDraft): ChunkDraft | null {
     sub: 0,
     kind: "title",
     toolName: null,
-    text: title,
-    embedText: title.replace(COPY_COUNTER, ""),
+    text: title.replace(COPY_COUNTER, ""),
     embed: true,
   });
 }

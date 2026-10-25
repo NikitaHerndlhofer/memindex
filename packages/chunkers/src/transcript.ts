@@ -107,7 +107,7 @@ export function transcriptChunker(options: TranscriptChunkerOptions): Chunker {
             kind: part.kind,
             toolName: part.toolName ?? null,
             text,
-            embedText: embed ? `${pre}${text}` : text,
+            embedPrefix: embed ? pre : "",
             embed,
           }),
         );

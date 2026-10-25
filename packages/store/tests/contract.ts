@@ -42,8 +42,6 @@ import {
   StoreError,
   type WriteStore,
 } from "../src/index.ts";
-import { MIGRATIONS } from "../src/migrations.gen.ts";
-
 export type LedgerBreak = "tampered" | "gap" | "behind" | "ahead";
 
 export interface ContractBackend {
@@ -377,6 +375,55 @@ export function runStoreContract(name: string, backend: () => ContractBackend): 
           }),
         );
         expect(turns.map((t) => t.turn_key)).toEqual(["a", "x", "b", "c"]);
+      });
+
+      test("a turn's body is its parts' text joined by a blank line", async () => {
+        const w = await writer();
+        const d = draftOf(CUR, "body", [turnOf("a", "first part", "", "third\npart\n"), turnOf("b", "only")]);
+        await w.apply(writeOf(CUR, L1, d, rev("1", 1, 1)));
+        const turns = await rows(
+          w.run("SELECT turn_key, body FROM turns WHERE item_key = :k ORDER BY ord", {
+            params: { k: d.key },
+          }),
+        );
+        expect(turns).toEqual([
+          { turn_key: "a", body: "first part\n\n\n\nthird\npart\n" },
+          { turn_key: "b", body: "only" },
+        ]);
+      });
+
+      test("a chunk embeds its embed prefix followed by its text, under the hash of that, and shows the text", async () => {
+        const w = await writer();
+        const d = draftOf(SW, "prefixed", [turnOf("u", "ship the fix today")]);
+        const [part] = chunksOf(d);
+        if (!part) throw new Error("no chunk");
+        const prefixed = chunkDraft(d.key, { ...part, embedPrefix: "[Universal] " });
+        await w.apply({ ...writeOf(SW, L1, d, rev("1")), chunks: [prefixed] });
+        expect(await w.vectors.backlog(SPACE, { limit: 10 })).toEqual([
+          {
+            hash: contentHash("[Universal] ship the fix today"),
+            embedText: "[Universal] ship the fix today",
+          },
+        ]);
+        expect(
+          await rows(
+            w.run("SELECT text, content_hash FROM chunks WHERE item_key = :k", { params: { k: d.key } }),
+          ),
+        ).toEqual([
+          { text: "ship the fix today", content_hash: contentHash("[Universal] ship the fix today") },
+        ]);
+
+        const broken = draftOf(SW, "broken", [turnOf("u", "ship the fix today")]);
+        const [bp] = chunksOf(broken);
+        if (!bp) throw new Error("no chunk");
+        const write = {
+          ...writeOf(SW, L1, broken, rev("1")),
+          chunks: [{ ...bp, embedText: "ship the fix [x]" }],
+        };
+        await expect(w.apply(write)).rejects.toThrow(/prefix followed by text/);
+        expect(
+          await rows(w.run("SELECT 1 FROM items WHERE item_key = :k", { params: { k: broken.key } })),
+        ).toEqual([]);
       });
 
       test("explain yields the EXPLAIN ANALYZE plan of the same statement, with its params bound", async () => {
@@ -893,28 +940,6 @@ export function runStoreContract(name: string, backend: () => ContractBackend): 
         expect(first.map((p) => p.embedText).sort()).toEqual(
           Array.from({ length: 6 }, (_, n) => `Backlog title ${n}`).sort(),
         );
-      });
-
-      test("the archive backfill writes the title chunk ingest writes, so re-ingesting a migrated item changes nothing", async () => {
-        const w = await writer();
-        const named = draftOf(CUR, "named", [turnOf("a", "can you check the deploy"), turnOf("b", "sure")], {
-          title: "(2) Deploy checklist",
-        });
-        const echo = draftOf(SW, "echo", [turnOf("u", "so what do we ship this quarter")], {
-          title: "so what do we ship",
-        });
-        await w.apply(writeOf(CUR, L1, named, rev("1", 1, 1)));
-        await w.apply(writeOf(SW, L1, echo, rev("1")));
-        const backfill = MIGRATIONS.find((m) => m.name === "memindex_title_chunks");
-        expect(backfill).toBeDefined();
-        await b.admin(backfill?.sql ?? "");
-        await b.admin(backfill?.sql ?? "");
-        const titles = await rows(
-          w.run("SELECT item_key, turn_key, text FROM chunks WHERE kind = 'title'", {}),
-        );
-        expect(titles).toEqual([{ item_key: named.key, turn_key: "a", text: "(2) Deploy checklist" }]);
-        const again = await w.apply(withTitle(writeOf(CUR, L1, named, rev("2", 1, 2))));
-        expect(again).toEqual({ kind: "applied", turnsChanged: 0, chunksAdded: 0, chunksRemoved: 0 });
       });
 
       test("an item is found by its title in every mode and lands on its first turn", async () => {

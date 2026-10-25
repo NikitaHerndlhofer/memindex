@@ -138,8 +138,7 @@ export const turn = memindex
       role: text("role").notNull(),
       at: tstz("at"),
       speaker: text("speaker"),
-      /** Concatenated part text, for the `turns` view. */
-      body: text("body").notNull(),
+      /** The turn's only copy of its text; the `turns` view derives `body` from it (memindex.turn_body). */
       parts: jsonb("parts").$type<unknown>().notNull(),
       /** sha256 of the canonical turn (role, at, speaker, parts): the turn diff key. */
       partsHash: text("parts_hash").notNull(),
@@ -174,8 +173,8 @@ export const chunk = memindex
       kind: text("kind").notNull(),
       toolName: text("tool_name"),
       text: text("text").notNull(),
-      /** NULL when the embedded text equals `text`. */
-      embedText: text("embed_text"),
+      /** The embedded text is embed_prefix || text; NULL when it is `text` alone. */
+      embedPrefix: text("embed_prefix"),
       contentHash: text("content_hash").notNull(),
       /** Fingerprint of every stored chunk field: the chunk diff key (text can change while embedText doesn't). */
       chunkHash: text("chunk_hash").notNull(),

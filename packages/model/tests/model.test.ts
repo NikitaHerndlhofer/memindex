@@ -8,6 +8,7 @@ import {
   chunkItem,
   compareRevision,
   contentHash,
+  embedPrefix,
   type ItemDraft,
   isoTime,
   itemKey,
@@ -63,21 +64,25 @@ describe("keys", () => {
     expect(chunkId(k, turnKey("b1"), 0, 0)).toHaveLength(24);
   });
 
-  test("content hash equals sha256 of embed text", () => {
+  test("embed text is the embed prefix followed by the text; content hash is sha256 of it", () => {
     expect(contentHash("hello")).toBe(
       "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824" as ReturnType<typeof contentHash>,
     );
-    const c = chunkDraft(itemKey("superwhisper", "u1"), {
+    const base = {
       turnKey: turnKey("u"),
       partIdx: 0,
       sub: 0,
       kind: "transcript",
       toolName: null,
       text: "hi",
-      embedText: "[Default] hi",
       embed: true,
-    });
+    } as const;
+    const c = chunkDraft(itemKey("superwhisper", "u1"), { ...base, embedPrefix: "[Default] " });
+    expect([c.embedText, embedPrefix(c)]).toEqual(["[Default] hi", "[Default] "]);
     expect(c.contentHash).toBe(contentHash("[Default] hi"));
+    const plain = chunkDraft(itemKey("superwhisper", "u1"), base);
+    expect([plain.embedText, embedPrefix(plain), plain.contentHash]).toEqual(["hi", "", contentHash("hi")]);
+    expect(() => embedPrefix({ ...c, embedText: "hi [Default]" })).toThrow(/prefix followed by text/);
   });
 });
 
@@ -172,10 +177,11 @@ describe("title chunks", () => {
     expect(chunkItem(chunker, draft(null)).map((c) => c.kind)).toEqual(["transcript", "transcript"]);
   });
 
-  test("a copy's '(n) ' counter is shown but not embedded, so a chat and its copies share a content hash", () => {
+  test("a copy's '(n) ' counter is dropped, so a chat and its copies share a content hash", () => {
     const copy = titleChunk(draft("(2) Self serve pods milestone"));
     const original = titleChunk(draft("Self serve pods milestone"));
-    expect(copy?.text).toBe("(2) Self serve pods milestone");
+    expect(copy?.text).toBe("Self serve pods milestone");
     expect(copy?.contentHash).toBe(original?.contentHash as ContentHash);
+    expect(copy?.contentHash).toBe(contentHash("Self serve pods milestone"));
   });
 });
