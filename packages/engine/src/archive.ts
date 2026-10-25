@@ -362,6 +362,7 @@ class ArchiveImpl implements Archive {
         lockDir: this.p.lockDir,
         power: this.p.power,
         log: this.p.log,
+        maintain: (b) => runJobs(selectJobs(this.p.jobs, ["reparse", "rechunk"]), this.jobContext(), b),
       },
       stopEmbedding.signal,
     );

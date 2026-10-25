@@ -170,7 +170,7 @@ LIMIT :limit`,
     sql: `SELECT c.chunk_id, c.item_key, i.source, i.started_day, substr(c.text, 1, 200) AS preview
 FROM chunks c JOIN items i ON i.item_key = c.item_key
 WHERE c.kind = :kind
-ORDER BY i.started_at DESC, c.chunk_id
+ORDER BY c.started_at DESC, c.chunk_id
 LIMIT :limit`,
   },
   searchRecipe("search", "hybrid", "Ranked chunks across all sources (hybrid by default; --mode to change)", {

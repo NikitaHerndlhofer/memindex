@@ -144,7 +144,13 @@ export const turn = memindex
       /** sha256 of the canonical turn (role, at, speaker, parts): the turn diff key. */
       partsHash: text("parts_hash").notNull(),
     },
-    (t) => [primaryKey({ columns: [t.itemKey, t.turnKey] }), writerAll()],
+    (t) => [
+      primaryKey({ columns: [t.itemKey, t.turnKey] }),
+      // The views expose timestamps as memindex.iso(...) text; an ORDER BY on them only uses an index
+      // on that same expression.
+      index("turn_at_iso_idx").on(sql`memindex.iso(${t.at})`).where(sql`memindex.iso(${t.at}) IS NOT NULL`),
+      writerAll(),
+    ],
   )
   .enableRLS();
 
@@ -188,6 +194,7 @@ export const chunk = memindex
       ),
       index("chunk_item_idx").on(t.itemKey),
       index("chunk_source_started_idx").on(t.source, t.startedAt),
+      index("chunk_kind_started_iso_idx").on(t.kind, sql`memindex.iso(${t.startedAt})`),
       index("chunk_content_hash_idx").on(t.contentHash),
       index("chunk_tsv_idx").using("gin", t.tsv),
       index("chunk_trgm_idx").using(

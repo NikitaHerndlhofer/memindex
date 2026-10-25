@@ -9,6 +9,7 @@ import {
   deferReason,
   EMBED_DEFAULTS,
   type EmbedActivity,
+  type EmbedDutyDeps,
   type EmbedPolicy,
   type EmbedRuntime,
   loadConfig,
@@ -128,6 +129,7 @@ function startDuty(opts: {
   clock: Clock;
   policy?: Partial<EmbedPolicy>;
   power?: () => Promise<PowerState>;
+  maintain?: EmbedDutyDeps["maintain"];
   stopWhen?: (a: EmbedActivity, states: EmbedRuntime[]) => boolean;
 }) {
   const controller = new AbortController();
@@ -141,6 +143,7 @@ function startDuty(opts: {
       power: opts.power ?? (async () => AC),
       clock: opts.clock,
       log: recordingLog(),
+      ...(opts.maintain ? { maintain: opts.maintain } : {}),
       onState: (r) => {
         states.push(r);
         if (opts.stopWhen?.(r.activity, states)) controller.abort();
@@ -340,6 +343,49 @@ describe("power awareness", () => {
     expect(fc.sleeps[0]).toEqual({ at: 0, ms: 60_000 });
     expect(at[0]).toBe(60_000);
     expect(store.vecs.size).toBe(10);
+  });
+
+  test("maintenance runs first in rested slices, on battery too, until nothing is left; then embedding", async () => {
+    const store = await seeded(3);
+    const fc = fakeClock(EMBED_DEFAULTS.idleRecheckMs);
+    let left = 2;
+    const budgets: number[] = [];
+    const duty = startDuty({
+      store,
+      embedder: fakeEmbedder(),
+      clock: fc.clock,
+      power: async () => BATTERY,
+      maintain: async (b) => {
+        budgets.push(b.deadline - fc.now());
+        left--;
+        return [{ id: "rechunk", done: 1, remaining: left === 0 ? 0 : null, error: null }];
+      },
+      stopWhen: (a) => a.state === "deferred",
+    });
+    await duty.done;
+    expect(kinds(duty.states)).toEqual(["maintaining", "resting", "maintaining", "deferred"]);
+    expect(budgets).toEqual([EMBED_DEFAULTS.busyMs, EMBED_DEFAULTS.busyMs]);
+    expect(fc.sleeps[0]).toEqual({ at: 0, ms: EMBED_DEFAULTS.restMs });
+    expect(fc.sleeps[1]).toEqual({ at: EMBED_DEFAULTS.restMs, ms: 60_000 });
+  });
+
+  test("maintenance that converges nothing stops instead of looping", async () => {
+    const store = await seeded(1);
+    const fc = fakeClock(EMBED_DEFAULTS.idleRecheckMs);
+    let calls = 0;
+    const duty = startDuty({
+      store,
+      embedder: fakeEmbedder(),
+      clock: fc.clock,
+      maintain: async () => {
+        calls++;
+        return [{ id: "rechunk", done: 0, remaining: 3, error: "x: boom" }];
+      },
+      stopWhen: (a) => a.state === "idle",
+    });
+    await duty.done;
+    expect(calls).toBe(1);
+    expect(kinds(duty.states)).toEqual(["maintaining", "running", "idle"]);
   });
 
   test("onBattery: run embeds on battery", async () => {

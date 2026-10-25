@@ -4,6 +4,23 @@ services:
   postgres:
     image: pgvector/pgvector:pg17
     restart: unless-stopped
+    # Image defaults (128MB shared_buffers, 4MB work_mem) leave a multi-GB archive's indexes on disk.
+    # Sized for Docker Desktop's default 8 GB VM; scale with it.
+    command:
+      - postgres
+      - -c
+      - shared_buffers=2GB
+      - -c
+      - effective_cache_size=5GB
+      - -c
+      - work_mem=32MB
+      - -c
+      - maintenance_work_mem=512MB
+      - -c
+      - random_page_cost=1.1
+      - -c
+      - effective_io_concurrency=200
+    shm_size: 2gb
     environment:
       POSTGRES_USER: memindex
       POSTGRES_PASSWORD: memindex

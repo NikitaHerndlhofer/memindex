@@ -1,0 +1,2 @@
+CREATE INDEX "chunk_kind_started_iso_idx" ON "memindex"."chunk" USING btree ("kind",memindex.iso("started_at"));--> statement-breakpoint
+CREATE INDEX "turn_at_iso_idx" ON "memindex"."turn" USING btree (memindex.iso("at")) WHERE memindex.iso("memindex"."turn"."at") IS NOT NULL;

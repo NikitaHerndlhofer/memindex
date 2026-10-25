@@ -65,6 +65,13 @@ async function* staleChunked(
 const reparsable = (ctx: JobContext): SourcePlugin[] =>
   ctx.registry.all.filter((p) => p.capture === "always" && p.parseCapture !== undefined);
 
+/**
+ * A pass that ran to the end leaves only the items that failed; one cut short by the budget can't say
+ * without re-streaming every stale item, which costs as much as the pass.
+ */
+const leftAfter = (budget: Budget, errors: readonly string[]): number | null =>
+  budget.expired() ? null : errors.length;
+
 const rechunkPending = (ctx: JobContext) =>
   countMatching(concat(ctx.registry.all.map((p) => staleChunked(ctx, p))));
 
@@ -93,7 +100,7 @@ export const rechunkJob: JobDef = {
         }
       }
     }
-    return { id: "rechunk", done, remaining: await rechunkPending(ctx), error: summarize(errors) };
+    return { id: "rechunk", done, remaining: leftAfter(budget, errors), error: summarize(errors) };
   },
 };
 
@@ -114,7 +121,7 @@ export const reparseJob: JobDef = {
       const n = await reparseSource(ctx, plugin, budget, errors);
       done += n;
     }
-    return { id: "reparse", done, remaining: await reparseJob.pending(ctx), error: summarize(errors) };
+    return { id: "reparse", done, remaining: leftAfter(budget, errors), error: summarize(errors) };
   },
 };
 

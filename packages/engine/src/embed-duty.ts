@@ -6,7 +6,7 @@ import { z } from "zod";
 import type { EmbedPolicy } from "./config.ts";
 import { errorMessage } from "./ingest.ts";
 import { EMBED_LOCK, embedBacklog } from "./jobs/embed.ts";
-import type { JobReport } from "./jobs/types.ts";
+import type { Budget, JobReport } from "./jobs/types.ts";
 import { lockHolder, pidAlive, tryLock } from "./lock.ts";
 import type { Log } from "./log.ts";
 import { type DeferReason, deferReason, type PowerProbe } from "./power.ts";
@@ -33,6 +33,7 @@ const realClock: Clock = {
 };
 
 export type EmbedActivity =
+  | { readonly state: "maintaining"; readonly since: number }
   | { readonly state: "running"; readonly since: number }
   | { readonly state: "resting"; readonly until: number }
   | { readonly state: "deferred"; readonly reason: DeferReason }
@@ -68,6 +69,7 @@ const RuntimeFile = z.object({
   pid: z.number().int().positive(),
   at: z.number(),
   activity: z.discriminatedUnion("state", [
+    z.object({ state: z.literal("maintaining"), since: z.number() }),
     z.object({ state: z.literal("running"), since: z.number() }),
     z.object({ state: z.literal("resting"), until: z.number() }),
     z.object({ state: z.literal("deferred"), reason: z.enum(["on battery", "low power mode"]) }),
@@ -114,6 +116,12 @@ export interface EmbedDutyDeps {
   readonly lockDir: string | null;
   readonly power: PowerProbe;
   readonly log: Log;
+  /**
+   * Re-parse / re-chunk under a slice budget, run until it reports nothing left. It runs before any
+   * embedding, so stale chunks are never embedded, and on battery too: it's a one-off after an upgrade
+   * that only removes embedding work.
+   */
+  readonly maintain?: (b: Budget) => Promise<readonly JobReport[]>;
   readonly clock?: Clock;
   readonly onState?: (r: EmbedRuntime) => void;
 }
@@ -176,8 +184,36 @@ export function runEmbedDuty(
     return r;
   };
 
+  const maintainSlice = async (maintain: NonNullable<EmbedDutyDeps["maintain"]>): Promise<boolean> => {
+    const since = clock.now();
+    publish({ state: "maintaining", since });
+    const deadline = since + policy.busyMs;
+    let reports: readonly JobReport[];
+    try {
+      reports = await maintain({ deadline, expired: () => signal.aborted || clock.now() >= deadline });
+    } catch (e) {
+      reports = [{ id: "maintain", done: 0, remaining: 0, error: errorMessage(e) }];
+    }
+    for (const r of reports) {
+      if (r.error) log.warn(`${r.id}: ${r.error}`);
+      if (r.done > 0)
+        log.info(`${r.id}: ${r.done} item(s) in ${((clock.now() - since) / 1000).toFixed(1)} s`);
+    }
+    return reports.some((r) => r.done > 0 && r.remaining !== 0);
+  };
+
+  let maintaining = deps.maintain !== undefined;
+
   const loop = async () => {
     while (!signal.aborted) {
+      if (maintaining && deps.maintain) {
+        maintaining = await maintainSlice(deps.maintain);
+        if (maintaining && !signal.aborted) {
+          publish({ state: "resting", until: clock.now() + policy.restMs });
+          await clock.sleep(policy.restMs, signal);
+        }
+        continue;
+      }
       const why = deferReason(policy.onBattery, await deps.power());
       if (why) {
         publish({ state: "deferred", reason: why });

@@ -71,6 +71,8 @@ const clockTime = (ms: number) => new Date(ms).toTimeString().slice(0, 8);
 
 function activityText(a: EmbedActivity, now: number): string {
   switch (a.state) {
+    case "maintaining":
+      return `re-parsing / re-chunking since ${clockTime(a.since)}, then embedding`;
     case "running":
       return `running since ${clockTime(a.since)}`;
     case "resting":

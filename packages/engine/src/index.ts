@@ -45,6 +45,7 @@ export {
 export {
   type Clock,
   type EmbedActivity,
+  type EmbedDutyDeps,
   type EmbedderStatus,
   type EmbedRuntime,
   type EmbedSlice,
