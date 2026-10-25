@@ -2,16 +2,20 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { readEmbedPace } from "../src/config.ts";
 import {
   ensureProducerId,
   loadConfig,
   redactUrl,
+  saveEmbedPace,
   saveSkippedSteps,
   saveStore,
   storeConfig,
   watchSources,
 } from "../src/index.ts";
 import { recordingLog } from "./fakes.ts";
+
+const PRODUCER_UUID = "a2a46098-5d55-4d52-a026-aababe7a87ee";
 
 let dir: string;
 beforeEach(() => {
@@ -104,6 +108,7 @@ describe("config", () => {
   test("embed policy: defaults, partial overrides from the file, invalid values fail loudly", async () => {
     const env = { HOME: dir, MEMINDEX_CONFIG_DIR: dir };
     expect((await loadConfig(env)).embed).toEqual({
+      pace: "gentle",
       busyMs: 30_000,
       restMs: 30_000,
       idleRecheckMs: 300_000,
@@ -111,6 +116,7 @@ describe("config", () => {
     });
     writeFileSync(join(dir, "config.json"), JSON.stringify({ embed: { restMs: 90_000, onBattery: "run" } }));
     expect((await loadConfig(env)).embed).toEqual({
+      pace: "gentle",
       busyMs: 30_000,
       restMs: 90_000,
       idleRecheckMs: 300_000,
@@ -120,6 +126,24 @@ describe("config", () => {
     await expect(loadConfig(env)).rejects.toThrow(/config\.json is invalid/);
     writeFileSync(join(dir, "config.json"), JSON.stringify({ embed: { busyMs: 0 } }));
     await expect(loadConfig(env)).rejects.toThrow(/config\.json is invalid/);
+  });
+
+  test("pace: saving full keeps every other field; saving gentle drops the key again", async () => {
+    const env = { HOME: dir, MEMINDEX_CONFIG_DIR: dir };
+    const file = join(dir, "config.json");
+    writeFileSync(file, JSON.stringify({ producerId: PRODUCER_UUID, embed: { onBattery: "run" } }));
+    await saveEmbedPace(await loadConfig(env), "full");
+    expect(JSON.parse(readFileSync(file, "utf8"))).toEqual({
+      producerId: PRODUCER_UUID,
+      embed: { onBattery: "run", pace: "full" },
+    });
+    expect(await readEmbedPace(file)).toBe("full");
+    await saveEmbedPace(await loadConfig(env), "gentle");
+    expect(JSON.parse(readFileSync(file, "utf8"))).toEqual({
+      producerId: PRODUCER_UUID,
+      embed: { onBattery: "run" },
+    });
+    expect(await readEmbedPace(file)).toBe("gentle");
   });
 
   test("invalid config files fail loudly with the path", async () => {

@@ -23,6 +23,7 @@ import {
   ensureProducerId,
   loadConfig,
   type MemindexConfig,
+  readEmbedPace,
   type SearchScope,
   type StoreSetting,
   storeConfig,
@@ -363,6 +364,7 @@ class ArchiveImpl implements Archive {
         power: this.p.power,
         log: this.p.log,
         maintain: (b) => runJobs(selectJobs(this.p.jobs, ["reparse", "rechunk"]), this.jobContext(), b),
+        pace: () => readEmbedPace(this.p.config.paths.configFile),
       },
       stopEmbedding.signal,
     );

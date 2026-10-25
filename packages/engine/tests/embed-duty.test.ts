@@ -130,6 +130,7 @@ function startDuty(opts: {
   policy?: Partial<EmbedPolicy>;
   power?: () => Promise<PowerState>;
   maintain?: EmbedDutyDeps["maintain"];
+  pace?: EmbedDutyDeps["pace"];
   stopWhen?: (a: EmbedActivity, states: EmbedRuntime[]) => boolean;
 }) {
   const controller = new AbortController();
@@ -144,6 +145,7 @@ function startDuty(opts: {
       clock: opts.clock,
       log: recordingLog(),
       ...(opts.maintain ? { maintain: opts.maintain } : {}),
+      ...(opts.pace ? { pace: opts.pace } : {}),
       onState: (r) => {
         states.push(r);
         if (opts.stopWhen?.(r.activity, states)) controller.abort();
@@ -228,6 +230,49 @@ describe("duty cycle", () => {
     expect(duty.states[1]?.activity).toEqual({ state: "resting", until: 60_000 });
     expect(fc.sleeps.at(-1)).toEqual({ at: 140_000, ms: EMBED_DEFAULTS.idleRecheckMs });
     expect(store.vecs.size).toBe(1000);
+  });
+
+  test("full pace goes slice to slice without resting; the setting is re-read before every rest", async () => {
+    const store = await seeded(1000);
+    const fc = fakeClock(EMBED_DEFAULTS.idleRecheckMs);
+    const { embedder } = timedEmbedder(fc.advance, fc.now);
+    let pace: "gentle" | "full" = "full";
+    let asked = 0;
+    const duty = startDuty({
+      store,
+      embedder,
+      clock: fc.clock,
+      pace: async () => {
+        asked++;
+        if (asked === 2) pace = "gentle";
+        return pace;
+      },
+    });
+    while (fc.sleeps.at(-1)?.ms !== EMBED_DEFAULTS.idleRecheckMs) await Bun.sleep(1);
+    duty.stop();
+    await duty.done;
+    expect(kinds(duty.states)).toEqual(["running", "running", "resting", "running", "idle"]);
+    expect(fc.sleeps.filter((s) => s.ms === EMBED_DEFAULTS.restMs)).toEqual([{ at: 60_000, ms: 30_000 }]);
+    expect(store.vecs.size).toBe(1000);
+  });
+
+  test("an unreadable pace keeps the last one", async () => {
+    const store = await seeded(1000);
+    const fc = fakeClock(EMBED_DEFAULTS.idleRecheckMs);
+    const { embedder } = timedEmbedder(fc.advance, fc.now);
+    const duty = startDuty({
+      store,
+      embedder,
+      clock: fc.clock,
+      policy: { pace: "full" },
+      pace: async () => {
+        throw new Error("config is not valid JSON");
+      },
+    });
+    while (fc.sleeps.at(-1)?.ms !== EMBED_DEFAULTS.idleRecheckMs) await Bun.sleep(1);
+    duty.stop();
+    await duty.done;
+    expect(kinds(duty.states)).toEqual(["running", "running", "running", "idle"]);
   });
 
   test("an empty backlog costs one query per wake: new chunks or the slow timer, never a loop", async () => {

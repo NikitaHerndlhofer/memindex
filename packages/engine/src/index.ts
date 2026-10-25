@@ -24,6 +24,8 @@ export {
 } from "./archive.ts";
 export {
   EMBED_DEFAULTS,
+  EMBED_PACES,
+  type EmbedPace,
   type EmbedPolicy,
   type Env,
   ensureProducerId,
@@ -38,6 +40,7 @@ export {
   type SearchScope,
   type SkippableStep,
   type StoreSetting,
+  saveEmbedPace,
   saveSkippedSteps,
   saveStore,
   storeConfig,

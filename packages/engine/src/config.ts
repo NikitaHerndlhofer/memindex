@@ -31,8 +31,13 @@ export interface SearchScope {
   readonly from: "env" | "config" | null;
 }
 
+export const EMBED_PACES = ["gentle", "full"] as const;
+export type EmbedPace = (typeof EMBED_PACES)[number];
+
 /** How the watcher spends GPU time on the embed backlog. */
 export interface EmbedPolicy {
+  /** "gentle" rests `restMs` after every slice; "full" goes straight to the next (a backfill). */
+  readonly pace: EmbedPace;
   /** Longest stretch of embedding before a rest. */
   readonly busyMs: number;
   /** Rest after a slice that left work behind; nothing embeds meanwhile. */
@@ -44,6 +49,7 @@ export interface EmbedPolicy {
 }
 
 export const EMBED_DEFAULTS: EmbedPolicy = {
+  pace: "gentle",
   busyMs: 30_000,
   restMs: 30_000,
   idleRecheckMs: 5 * 60_000,
@@ -103,6 +109,7 @@ const ConfigFile = z
       .optional(),
     embed: z
       .object({
+        pace: z.enum(EMBED_PACES).optional(),
         busyMs: z.number().int().min(1_000).optional(),
         restMs: z.number().int().min(0).optional(),
         idleRecheckMs: z.number().int().min(10_000).optional(),
@@ -230,6 +237,19 @@ export async function saveSkippedSteps(cfg: MemindexConfig, steps: readonly Skip
     cfg.paths.configFile,
     steps.length > 0 ? { ...file, skippedSteps: [...steps] } : file,
   );
+}
+
+/** The pace as the config file says now; the running watcher reads it before every rest. */
+export async function readEmbedPace(configFile: string): Promise<EmbedPace> {
+  return (await readConfigFile(configFile)).embed?.pace ?? EMBED_DEFAULTS.pace;
+}
+
+export async function saveEmbedPace(cfg: MemindexConfig, pace: EmbedPace): Promise<void> {
+  const file = await readConfigFile(cfg.paths.configFile);
+  const { pace: _, ...embed } = file.embed ?? {};
+  const next = pace === EMBED_DEFAULTS.pace ? embed : { ...embed, pace };
+  const { embed: __, ...rest } = file;
+  await writeConfigFile(cfg.paths.configFile, Object.keys(next).length > 0 ? { ...rest, embed: next } : rest);
 }
 
 async function writeConfigFile(path: string, data: ConfigFile): Promise<void> {

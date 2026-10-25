@@ -1,8 +1,10 @@
 import {
   type ArchiveStatus,
   checkEmbedder,
+  EMBED_PACES,
   type EmbedActivity,
   type EmbedderStatus,
+  type EmbedPace,
   type EmbedSlice,
   loadConfig,
   type MemindexConfig,
@@ -13,6 +15,7 @@ import {
   redactUrl,
   type SkippableStep,
   type StoreProbe,
+  saveEmbedPace,
   storeConfig,
 } from "@memindex/engine";
 import { defineCommand } from "citty";
@@ -28,6 +31,31 @@ import { VERSION } from "../version.ts";
 
 const storeLabel = (store: MemindexConfig["store"]) => (store ? redactUrl(store.url) : "(none)");
 
+const PACE_TEXT: Record<EmbedPace, string> = {
+  gentle: "gentle: embeds in 30 s slices with 30 s rests",
+  full: "full: embeds without rests (backfill); the GPU stays busy until the backlog is empty",
+};
+
+export const paceCommand = defineCommand({
+  meta: {
+    name: "pace",
+    description: "Show or set how fast the watcher embeds: gentle (default) or full (for a backfill)",
+  },
+  args: { pace: { type: "positional", required: false, description: "gentle | full" } },
+  run: action(async ({ args }) => {
+    const cfg = await loadConfig();
+    if (args.pace === undefined) {
+      out(`${PACE_TEXT[cfg.embed.pace]}\n`);
+      return 0;
+    }
+    const pace = z.enum(EMBED_PACES).safeParse(args.pace);
+    if (!pace.success) throw new UsageError(`pace must be gentle or full, not ${JSON.stringify(args.pace)}`);
+    await saveEmbedPace(cfg, pace.data);
+    out(`${PACE_TEXT[pace.data]}\nThe watcher switches after its current slice; no restart needed.\n`);
+    return 0;
+  }),
+});
+
 function serverText(p: StoreProbe): string {
   const ext = p.extensions.map(
     (x) => `${x.name} ${x.installed ?? "not installed"}${x.problem ? ` (${x.problem})` : ""}`,
@@ -40,6 +68,7 @@ function statusText(
   server: StoreProbe,
   skills: readonly { path: string; state: SkillState }[],
   watcher: boolean,
+  pace: EmbedPace,
 ): string {
   const lines = [
     `memindex ${VERSION}`,
@@ -49,6 +78,7 @@ function statusText(
     `producer  ${s.producer ?? "(read-only)"}`,
     `embed     ${s.embed.ok ? `ok (${s.embed.model})` : `${s.embed.reason}: ${s.embed.detail}`}`,
     `embedder  ${embedderText(s.embedder, Date.now())}`,
+    `pace      ${PACE_TEXT[pace]} (memindex pace gentle|full)`,
     `sources   ${s.sources.map((x) => `${x.id}${x.enabled ? "" : " (disabled)"}`).join(", ")}`,
     `search    ${searchScopeText(s.search)}`,
   ];
@@ -131,7 +161,7 @@ export const statusCommand = defineCommand({
               null,
               2,
             )}\n`
-          : statusText(status, server, skills, watcher),
+          : statusText(status, server, skills, watcher, archive.config.embed.pace),
       );
     });
     return 0;

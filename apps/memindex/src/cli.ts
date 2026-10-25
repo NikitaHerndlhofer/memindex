@@ -1,7 +1,14 @@
 #!/usr/bin/env bun
 import { defineCommand, runMain } from "citty";
 import { LogLevels } from "consola";
-import { doctorCommand, jobsCommand, migrateCommand, pathCommand, statusCommand } from "./commands/admin.ts";
+import {
+  doctorCommand,
+  jobsCommand,
+  migrateCommand,
+  paceCommand,
+  pathCommand,
+  statusCommand,
+} from "./commands/admin.ts";
 import { hookCommand, ingestCommand, watchCommand } from "./commands/ingest.ts";
 import { installCommand, installSkillCommand } from "./commands/install.ts";
 import { qCommand, sqlCommand } from "./commands/query.ts";
@@ -17,6 +24,7 @@ export const COMMANDS = {
   status: statusCommand,
   migrate: migrateCommand,
   jobs: jobsCommand,
+  pace: paceCommand,
   watch: watchCommand,
   install: installCommand,
   "install-skill": installSkillCommand,

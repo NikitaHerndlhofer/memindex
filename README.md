@@ -21,3 +21,16 @@ memindex install --url postgresql://memindex:memindex@127.0.0.1:54329/memindex
 `memindex doctor` and `memindex status` show the database, its extension versions and the schema.
 Steps you turn off with `memindex install --skip-ollama`, `--skip-watch` or `--skip-hooks` show as
 SKIPPED in `memindex doctor`, which then still exits 0.
+
+## Embedding pace
+
+The watcher embeds in the background at a gentle pace: 30 s slices with 30 s rests, and not at all on
+battery. For a large backlog (a fresh install, or an upgrade that re-chunks the archive) switch to full
+speed, then back once `memindex status` shows the backlog empty:
+
+```sh
+memindex pace full     # no rests; the GPU stays busy until the backlog is done
+memindex pace gentle   # the default
+```
+
+The running watcher picks the change up after its current slice.

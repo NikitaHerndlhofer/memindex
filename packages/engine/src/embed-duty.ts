@@ -3,7 +3,7 @@ import { join } from "node:path";
 import type { Embedder } from "@memindex/embed";
 import type { WriteStore } from "@memindex/store";
 import { z } from "zod";
-import type { EmbedPolicy } from "./config.ts";
+import type { EmbedPace, EmbedPolicy } from "./config.ts";
 import { errorMessage } from "./ingest.ts";
 import { EMBED_LOCK, embedBacklog } from "./jobs/embed.ts";
 import type { Budget, JobReport } from "./jobs/types.ts";
@@ -122,6 +122,8 @@ export interface EmbedDutyDeps {
    * that only removes embedding work.
    */
   readonly maintain?: (b: Budget) => Promise<readonly JobReport[]>;
+  /** The pace now, asked before every rest so `memindex pace` takes effect without a restart. */
+  readonly pace?: () => Promise<EmbedPace>;
   readonly clock?: Clock;
   readonly onState?: (r: EmbedRuntime) => void;
 }
@@ -203,15 +205,25 @@ export function runEmbedDuty(
   };
 
   let maintaining = deps.maintain !== undefined;
+  let pace = policy.pace;
+
+  /** Gentle pace rests `restMs`; full pace goes straight on. An unreadable setting keeps the last one. */
+  const rest = async () => {
+    try {
+      if (deps.pace) pace = await deps.pace();
+    } catch (e) {
+      log.warn(`embed: pace setting unreadable, keeping ${pace}: ${errorMessage(e)}`);
+    }
+    if (pace === "full" || signal.aborted) return;
+    publish({ state: "resting", until: clock.now() + policy.restMs });
+    await clock.sleep(policy.restMs, signal);
+  };
 
   const loop = async () => {
     while (!signal.aborted) {
       if (maintaining && deps.maintain) {
         maintaining = await maintainSlice(deps.maintain);
-        if (maintaining && !signal.aborted) {
-          publish({ state: "resting", until: clock.now() + policy.restMs });
-          await clock.sleep(policy.restMs, signal);
-        }
+        if (maintaining) await rest();
         continue;
       }
       const why = deferReason(policy.onBattery, await deps.power());
@@ -230,8 +242,7 @@ export function runEmbedDuty(
         nudged = false;
         const r = await slice();
         if (r.done > 0 && r.remaining !== 0 && !signal.aborted) {
-          publish({ state: "resting", until: clock.now() + policy.restMs });
-          await clock.sleep(policy.restMs, signal);
+          await rest();
           continue;
         }
       } finally {
