@@ -13,7 +13,8 @@
     "lint:knip": "knip",
     "format": "biome format --write .",
     "postinstall": "bun packages/tokenizer/scripts/fetch.ts",
-    "check:tokenizer": "bun scripts/check-tokenizer.ts"
+    "check:tokenizer": "bun scripts/check-tokenizer.ts",
+    "release": "bun scripts/release.ts"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.4.15",
