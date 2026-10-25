@@ -8,6 +8,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } fr
 import {
   type Capture,
   type ChunkDraft,
+  type ContentHash,
   chunkDraft,
   chunkerId,
   contentHash,
@@ -166,6 +167,18 @@ async function rows(it: AsyncIterable<Row>): Promise<Row[]> {
   const out: Row[] = [];
   for await (const r of it) out.push(r);
   return out;
+}
+
+/** One whole gc pass over SPACE; returns the vectors it deleted. */
+async function gcAll(w: WriteStore): Promise<number> {
+  let deleted = 0;
+  let after: ContentHash | undefined;
+  do {
+    const step = await w.vectors.gc(SPACE, { limit: 1000, ...(after ? { after } : {}) });
+    deleted += step.deleted;
+    after = step.next ?? undefined;
+  } while (after);
+  return deleted;
 }
 
 async function expectStoreError(
@@ -601,9 +614,49 @@ export function runStoreContract(name: string, backend: () => ContractBackend): 
         expect((await w.stats()).embedBacklog[SPACE.id]).toBe(0);
 
         await w.apply(writeOf(CUR, L1, draftOf(CUR, "va", [turnOf("a", "alpha rewritten")]), rev("2")));
-        expect(await w.vectors.gc(SPACE)).toBe(1);
-        expect(await w.vectors.gc(SPACE)).toBe(0);
+        expect(await gcAll(w)).toBe(1);
+        expect(await gcAll(w)).toBe(0);
         expect(await w.vectors.backlogSize(SPACE)).toBe(1);
+      });
+
+      test("gc examines at most `limit` vectors per call, resumes after `next`, and keeps referenced vectors", async () => {
+        const w = await writer();
+        const ds = ["one", "two"].map((n) => draftOf(CUR, `gc-${n}`, [turnOf("a", `gc kept ${n}`)]));
+        for (const d of ds) await w.apply(writeOf(CUR, L1, d, rev("1")));
+        const kept = await w.vectors.backlog(SPACE, { limit: 10 });
+        const orphans = Array.from({ length: 6 }, (_, i) => contentHash(`gc orphan ${i}`));
+        await w.vectors.put(SPACE, [
+          ...kept.map((p) => ({ hash: p.hash, vector: vecNear(0) })),
+          ...orphans.map((hash) => ({ hash, vector: vecNear(1) })),
+        ]);
+
+        const steps: { deleted: number; next: string | null }[] = [];
+        let after: ContentHash | undefined;
+        do {
+          const step = await w.vectors.gc(SPACE, { limit: 3, ...(after ? { after } : {}) });
+          steps.push(step);
+          after = step.next ?? undefined;
+        } while (after);
+        expect(steps.length).toBe(3);
+        expect(steps.every((s) => s.deleted <= 3)).toBe(true);
+        expect(steps.map((s) => s.next === null)).toEqual([false, false, true]);
+        expect(steps.reduce((n, s) => n + s.deleted, 0)).toBe(6);
+        expect(await w.vectors.backlogSize(SPACE)).toBe(0);
+        expect(await w.vectors.gc(SPACE, { limit: 100 })).toEqual({ deleted: 0, next: null });
+      });
+
+      test("one gc call deletes at most `limit` orphans and reports that more remain", async () => {
+        const w = await writer();
+        const orphans = Array.from({ length: 5 }, (_, i) => contentHash(`gc lone orphan ${i}`));
+        await w.vectors.put(
+          SPACE,
+          orphans.map((hash) => ({ hash, vector: vecNear(2) })),
+        );
+        const first = await w.vectors.gc(SPACE, { limit: 2 });
+        expect(first.deleted).toBe(2);
+        expect(first.next).not.toBeNull();
+        const left = await b.admin(`SELECT count(*)::int AS n FROM memindex.chunk_vector`);
+        expect(left[0]?.n).toBe(3);
       });
 
       test("bulkPut drops and rebuilds the vector index; a crash mid-load is repaired on the next open", async () => {
@@ -1369,7 +1422,7 @@ export function runStoreContract(name: string, backend: () => ContractBackend): 
         }
         expect(await collect(w.streamItems({ limit: 100, staleChunker: CHUNKER }))).toEqual([]);
         expect(await w.vectors.backlogSize(SPACE)).toBe(0);
-        expect(await w.vectors.gc(SPACE)).toBe(0);
+        expect(await gcAll(w)).toBe(0);
       });
 
       test("cursors and jobs are producer-scoped", async () => {

@@ -12,9 +12,11 @@ import {
   parseOptions,
   percentile,
   pickWord,
+  qualityVerdict,
   requiredParams,
   UsageError,
 } from "./acceptance.ts";
+import { QUALITY_GATE, type Summary } from "./search-eval.ts";
 
 const DB = "postgres://postgres:secret@127.0.0.1:54322/x";
 
@@ -64,6 +66,54 @@ describe("verdicts", () => {
     expect(line.startsWith("NOT VERIFIED")).toBe(true);
     expect(line).toContain("embed");
     expect(line.endsWith("backlog 5 -> 5")).toBe(true);
+  });
+});
+
+describe("search-quality", () => {
+  /** A summary scoring exactly the gate's baseline on every gated metric. */
+  const baseline = (): Summary => {
+    const s: Record<string, unknown> = {
+      queries: 22,
+      mrr: 0.86,
+      momentHit5: 0.68,
+      momentPrecision: 0.76,
+      distinctItems5: 5,
+      latencyP50Ms: 400,
+      latencyP95Ms: 600,
+      n: { recall5: 22, momentHit5: 19, momentPrecision: 16 },
+      byIntent: {},
+    };
+    for (const t of QUALITY_GATE.thresholds) s[t.metric] = t.baseline;
+    return s as unknown as Summary;
+  };
+
+  test("the baseline itself, and a score exactly at a bound, are VERIFIED", () => {
+    expect(qualityVerdict(baseline()).verdict).toBe("VERIFIED");
+    const atBounds = baseline() as unknown as Record<string, number>;
+    for (const t of QUALITY_GATE.thresholds) atBounds[t.metric] = t.limit;
+    const r = qualityVerdict(atBounds as unknown as Summary);
+    expect(r.verdict).toBe("VERIFIED");
+    expect(r.evidence).toContain(QUALITY_GATE.from);
+  });
+
+  test("a floor broken or a ceiling exceeded is NOT VERIFIED and names each breach", () => {
+    const r = qualityVerdict({ ...baseline(), ndcg5: 0.4, junkRate: 0.3 });
+    expect(r.verdict).toBe("NOT VERIFIED");
+    expect(r.evidence).toContain("nDCG@5 0.40 below floor");
+    expect(r.evidence).toContain("junk 0.30 above ceiling");
+    expect(r.evidence).not.toContain("recall@5 0.59 below");
+  });
+
+  test("an unscored metric is INCONCLUSIVE, never a pass", () => {
+    const r = qualityVerdict({ ...baseline(), recall5: Number.NaN });
+    expect(r.verdict).toBe("INCONCLUSIVE");
+    expect(r.evidence).toContain("recall@5 not scored");
+  });
+
+  test("every shipped bound sits strictly on the safe side of its baseline", () => {
+    expect(QUALITY_GATE.thresholds.length).toBeGreaterThanOrEqual(7);
+    for (const t of QUALITY_GATE.thresholds)
+      expect(t.bound === "min" ? t.limit < t.baseline : t.limit > t.baseline).toBe(true);
   });
 });
 

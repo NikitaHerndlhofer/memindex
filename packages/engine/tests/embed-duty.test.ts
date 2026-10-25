@@ -682,6 +682,44 @@ describe("watcher maintenance", () => {
     expect(store.vecs.size).toBe(3);
   });
 
+  /** A store with 3 referenced vectors plus `n` that nothing references; records every gc call. */
+  async function withOrphans(n: number) {
+    const store = new FakeStore();
+    await (await open(store, 3)).ingest({ embed: { budgetMs: 5_000 } });
+    for (let i = 0; i < n; i++) store.vecs.set(`orphan-${String(i).padStart(5, "0")}`, new Float32Array(4));
+    const calls: { limit: number; after: string | undefined; next: string | null }[] = [];
+    const gc = store.vectors.gc;
+    store.vectors.gc = async (space, opts) => {
+      const step = await gc(space, opts);
+      calls.push({ limit: opts.limit, after: opts.after, next: step.next });
+      return step;
+    };
+    return { store, calls };
+  }
+
+  test("vec-gc walks the whole space in bounded steps, each resuming where the last stopped", async () => {
+    const { store, calls } = await withOrphans(4_500);
+    const ctx = bumped(store, fakePlugin({ entries: many(3) }));
+    const [r] = await runJobs(selectJobs(JOBS, ["vec-gc"]), ctx, budget(5_000));
+    expect(r).toEqual({ id: "vec-gc", done: 4_500, remaining: 0, error: null });
+    expect(store.vecs.size).toBe(3);
+    expect(calls.length).toBeGreaterThan(1);
+    expect(calls.every((c) => c.limit < 4_503)).toBe(true);
+    expect(calls.slice(1).map((c) => c.after)).toEqual(calls.slice(0, -1).map((c) => c.next ?? undefined));
+    expect(calls.at(-1)?.next).toBeNull();
+  });
+
+  test("vec-gc stops between steps when the budget runs out and reports the pass unfinished", async () => {
+    const { store, calls } = await withOrphans(4_500);
+    const ctx = bumped(store, fakePlugin({ entries: many(3) }));
+    const b: Budget = { deadline: 0, expired: () => calls.length > 0 };
+    const [r] = await runJobs(selectJobs(JOBS, ["vec-gc"]), ctx, b);
+    expect(calls.length).toBe(1);
+    expect(r?.remaining).toBeNull();
+    expect(r?.done).toBe(4_503 - store.vecs.size);
+    expect(store.vecs.size).toBeGreaterThan(3);
+  });
+
   /** Each write costs one second of `t`; the budget is 30 s. */
   function secondPerWrite(store: FakeStore) {
     let t = 0;

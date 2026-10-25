@@ -28,6 +28,7 @@ import {
 import type {
   ApplyOutcome,
   ChunkFilter,
+  GcStep,
   Hit,
   ItemWrite,
   JobRecord,
@@ -375,7 +376,7 @@ export class PgWriteStore extends PgReadStore implements WriteStore {
       put: (space, vectors) => this.putVectors(space, vectors),
       bulkPut: (space, batches, opts) =>
         this.bulkPutVectors(space, batches, opts?.maintenanceWorkMem ?? "1GB"),
-      gc: (space) => this.gc(space),
+      gc: (space, opts) => this.gc(space, opts),
     };
     this.ledger = {
       getCursor: (source, location, name) => this.getCursor(source, location, name),
@@ -705,9 +706,18 @@ export class PgWriteStore extends PgReadStore implements WriteStore {
     return n;
   }
 
-  private async gc(space: VectorSpace): Promise<number> {
-    const [r] = await this.db.execute(sql`SELECT memindex.vec_gc(${space.id}::text) AS n`);
-    return v.num(v.rec(r, "gc"), "n");
+  private async gc(
+    space: VectorSpace,
+    opts: { readonly limit: number; readonly after?: ContentHash },
+  ): Promise<GcStep> {
+    if (!Number.isInteger(opts.limit) || opts.limit < 1)
+      throw new Error(`gc limit must be a positive integer, got ${opts.limit}`);
+    const [r] = await this.db.execute(
+      sql`SELECT deleted, next_after FROM memindex.vec_gc_step(${space.id}::text, ${opts.after ?? ""}::text, ${opts.limit}::int)`,
+    );
+    const row = v.rec(r, "gc");
+    const next = v.strOrNull(row, "next_after");
+    return { deleted: v.num(row, "deleted"), next: next === null ? null : (next as ContentHash) };
   }
 
   // ─── ledger ───────────────────────────────────────────────────────────────────

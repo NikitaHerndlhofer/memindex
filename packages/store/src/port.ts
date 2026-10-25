@@ -252,8 +252,17 @@ export interface VectorRepo {
       | Iterable<readonly { readonly hash: ContentHash; readonly vector: Float32Array }[]>,
     opts?: { readonly maintenanceWorkMem?: string },
   ): Promise<number>;
-  /** Delete vectors no live chunk references. */
-  gc(space: VectorSpace): Promise<number>;
+  /**
+   * One step of a gc pass over `space` in content-hash order: examines at most `limit` vectors after
+   * `after` and deletes those no embeddable chunk references at statement time. Resume from `next`;
+   * null once the pass has reached the end.
+   */
+  gc(space: VectorSpace, opts: { readonly limit: number; readonly after?: ContentHash }): Promise<GcStep>;
+}
+
+export interface GcStep {
+  readonly deleted: number;
+  readonly next: ContentHash | null;
 }
 
 export interface PendingEmbed {

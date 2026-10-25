@@ -122,6 +122,12 @@ export const MIGRATIONS: readonly EmbeddedMigration[] = [
     sha256: "6329d1e8afd78e2419a3b7c7240bbbbecf1042bd95623c8404eeec9a48c7d170",
     sql: "-- memindex superwhisper rescan (custom): the Super Whisper scan skips everything while its database file\n-- is unchanged. Clearing that cursor makes the first ingest after this migration re-read every recording,\n-- so recordings whose only stored capture is the archive import (no meta.json) get their live capture\n-- and the parser-3 replay without waiting for the next new recording.\nDELETE FROM memindex.cursor WHERE source = 'superwhisper' AND name = 'source_mtime_ns';\n",
   },
+  {
+    version: "20261025191219",
+    name: "memindex_bounded_vec_gc",
+    sha256: "06267c10749c046c3f6070c6463d153c78b2115121db87d55c18c9caef0ca491",
+    sql: "-- memindex bounded vec gc (custom): vec_gc deletes every orphan in one statement, and even with none\n-- left it anti-joins every vector of the space (0.8 s on a 274k-vector archive). One step instead walks\n-- the next `lim` vectors after `after` in primary-key order and deletes those no embeddable chunk\n-- references at statement time; the caller resumes from `next_after` until it is NULL.\n\nCREATE OR REPLACE FUNCTION memindex.vec_gc_step(space text, after text, lim int)\nRETURNS TABLE (deleted int, next_after text)\nLANGUAGE sql VOLATILE SECURITY DEFINER\nSET search_path = memindex, extensions, pg_temp\nAS $$\n  WITH w AS (\n    SELECT v.content_hash FROM memindex.chunk_vector v\n    WHERE v.space = vec_gc_step.space AND v.content_hash > vec_gc_step.after\n    ORDER BY v.content_hash\n    LIMIT vec_gc_step.lim\n  ), gone AS (\n    DELETE FROM memindex.chunk_vector v USING w\n    WHERE v.space = vec_gc_step.space AND v.content_hash = w.content_hash\n      AND NOT EXISTS (SELECT 1 FROM memindex.chunk c WHERE c.content_hash = w.content_hash AND c.embed)\n    RETURNING 1\n  )\n  SELECT (SELECT count(*)::int FROM gone),\n         CASE WHEN (SELECT count(*) FROM w) = vec_gc_step.lim THEN (SELECT max(w.content_hash) FROM w) END\n$$;\n\nREVOKE ALL ON FUNCTION memindex.vec_gc_step(text, text, int) FROM PUBLIC;\nGRANT EXECUTE ON FUNCTION memindex.vec_gc_step(text, text, int) TO memindex_writer;\n",
+  },
 ];
 
 /** supabase/config.toml, for `memindex install`'s local stack. */

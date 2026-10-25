@@ -3,6 +3,7 @@ import {
   type Capture,
   type ChunkDraft,
   type ChunkerId,
+  type ContentHash,
   chunkDraft,
   chunkerId,
   type ItemDraft,
@@ -150,17 +151,22 @@ export class FakeStore implements WriteStore {
       for await (const b of batches) n += await this.vectors.put(space, b);
       return n;
     },
-    gc: async () => {
+    gc: async (_space: unknown, opts: { readonly limit: number; readonly after?: ContentHash }) => {
       const live = new Set<string>(
         [...this.items.values()].flatMap((r) => r.chunks.filter((c) => c.embed).map((c) => c.contentHash)),
       );
-      let n = 0;
-      for (const hash of this.vecs.keys()) {
+      const window = [...this.vecs.keys()]
+        .filter((h) => h > (opts.after ?? ""))
+        .sort()
+        .slice(0, opts.limit);
+      let deleted = 0;
+      for (const hash of window) {
         if (live.has(hash)) continue;
         this.vecs.delete(hash);
-        n++;
+        deleted++;
       }
-      return n;
+      const last = window.at(-1);
+      return { deleted, next: window.length === opts.limit && last ? (last as ContentHash) : null };
     },
   };
 

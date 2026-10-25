@@ -310,6 +310,34 @@ export function summarize(scores: readonly QueryScore[], latencies: readonly (re
   };
 }
 
+export interface Threshold {
+  readonly metric: "ndcg5" | "recall5" | "hit1" | "hit5" | "duplicateRate" | "junkRate" | "contaminationRate";
+  readonly label: string;
+  /** min: a release must score at or above `limit`; max: at or below. */
+  readonly bound: "min" | "max";
+  readonly limit: number;
+  /** What the gate's `from` scored. */
+  readonly baseline: number;
+}
+
+/**
+ * The search-quality release gate. Three invocations of `--runs 3` agreed to 0.001 except one duplicate
+ * slot, and no query's ranking changed between runs. One query moves a per-query mean by 1/22 = 0.045
+ * and one top-5 slot moves a rate by 1/110 = 0.009, so each bound lets about one query or three slots go.
+ */
+export const QUALITY_GATE: { readonly from: string; readonly thresholds: readonly Threshold[] } = {
+  from: "memindex 0.1.10 on the real archive, 2026-10-25, hybrid, limit 10",
+  thresholds: [
+    { metric: "ndcg5", label: "nDCG@5", bound: "min", limit: 0.55, baseline: 0.593 },
+    { metric: "recall5", label: "recall@5", bound: "min", limit: 0.55, baseline: 0.59 },
+    { metric: "hit1", label: "hit@1", bound: "min", limit: 0.77, baseline: 0.818 },
+    { metric: "hit5", label: "hit@5", bound: "min", limit: 0.9, baseline: 0.955 },
+    { metric: "duplicateRate", label: "dup", bound: "max", limit: 0.03, baseline: 0.009 },
+    { metric: "junkRate", label: "junk", bound: "max", limit: 0.1, baseline: 0.073 },
+    { metric: "contaminationRate", label: "contamination", bound: "max", limit: 0.18, baseline: 0.145 },
+  ],
+};
+
 const f2 = (x: number) => (Number.isFinite(x) ? x.toFixed(2) : "-");
 
 export function formatSummary(s: Summary): string {

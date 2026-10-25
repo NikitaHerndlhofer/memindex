@@ -8,6 +8,8 @@ import { deferReason, type PowerProbe } from "../power.ts";
 import type { Budget, JobDef, JobReport } from "./types.ts";
 
 const EMBED_BATCH = 64;
+/** Vectors one vec-gc statement examines: about 15 ms on a 274k-vector archive. */
+const GC_STEP = 2_000;
 
 /** One embedder per machine: embedding is bound by the one GPU, so a second embedder only competes for it. */
 export const EMBED_LOCK = "embed";
@@ -119,8 +121,16 @@ export const vecGcJob: JobDef = {
   runByDefault: false,
   pending: async () => null,
   async run(ctx, budget) {
-    budget.onUnit?.("vec-gc", ctx.embedder.space.id);
-    const removed = await ctx.store.vectors.gc(ctx.embedder.space);
-    return { id: "vec-gc", done: removed, remaining: 0, error: null };
+    const space = ctx.embedder.space;
+    let done = 0;
+    let after: ContentHash | undefined;
+    do {
+      budget.onUnit?.("vec-gc", `${space.id} after ${after ?? "the start"}`);
+      const step = await ctx.store.vectors.gc(space, { limit: GC_STEP, ...(after ? { after } : {}) });
+      done += step.deleted;
+      if (step.next === null) return { id: "vec-gc", done, remaining: 0, error: null };
+      after = step.next;
+    } while (!budget.expired());
+    return { id: "vec-gc", done, remaining: null, error: null };
   },
 };

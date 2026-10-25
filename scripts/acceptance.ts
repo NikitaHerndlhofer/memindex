@@ -20,7 +20,14 @@ import { redactUrl } from "../packages/engine/src/config.ts";
 import { readEmbedRuntime } from "../packages/engine/src/embed-duty.ts";
 import { MIGRATIONS } from "../packages/store/src/migrations.gen.ts";
 import { measureFreeSpace, shortfalls } from "./disk-headroom.ts";
-import { BASELINE_PATH, formatSummary, loadGolden, runEval, type Summary } from "./search-eval.ts";
+import {
+  BASELINE_PATH,
+  formatSummary,
+  loadGolden,
+  QUALITY_GATE,
+  runEval,
+  type Summary,
+} from "./search-eval.ts";
 
 export type Verdict = "VERIFIED" | "NOT VERIFIED" | "INCONCLUSIVE";
 
@@ -947,10 +954,27 @@ const searchLatency: Clause = {
   },
 };
 
-/** No quality thresholds are agreed yet, so this clause reports the scores next to the recorded baseline. */
+/** VERIFIED iff every gated metric holds its bound; an unscored (NaN) metric is INCONCLUSIVE. */
+export function qualityVerdict(s: Summary, gate = QUALITY_GATE): ClauseResult {
+  const parts = gate.thresholds.map((t) => {
+    const v = s[t.metric];
+    if (!Number.isFinite(v)) return { verdict: "INCONCLUSIVE" as const, text: `${t.label} not scored` };
+    const ok = t.bound === "min" ? v >= t.limit : v <= t.limit;
+    const word = t.bound === "min" ? "floor" : "ceiling";
+    return {
+      verdict: check(ok),
+      text: `${t.label} ${v.toFixed(2)} ${ok ? `(${word} ${t.limit})` : `${t.bound === "min" ? "below" : "above"} ${word} ${t.limit}`}`,
+    };
+  });
+  return {
+    verdict: combine(parts.map((p) => p.verdict)),
+    evidence: `${parts.map((p) => p.text).join(", ")}; bounds from ${gate.from}`,
+  };
+}
+
 const searchQuality: Clause = {
   id: "search-quality",
-  title: "search quality on the golden set (scripts/search-eval), compared with the recorded baseline",
+  title: "search quality on the golden set (scripts/search-eval) holds every floor in QUALITY_GATE",
   requires: ["schema"],
   async run(h) {
     const ollama = await ollamaHasModel();
@@ -968,14 +992,15 @@ const searchQuality: Clause = {
     const drift = report.missingGoldenKeys.length
       ? `; ${report.missingGoldenKeys.length} golden key(s) no longer in the archive${sample([...report.missingGoldenKeys])}`
       : "";
+    const gate = qualityVerdict(report.summary);
     return {
-      verdict: "INCONCLUSIVE",
-      evidence: `${formatSummary(report.summary)}${drift}; baseline ${
+      verdict: gate.verdict,
+      evidence: `${gate.evidence}${drift}; full: ${formatSummary(report.summary)}; baseline ${
         baseline
           ? `memindex ${baseline.version} (${baseline.at.slice(0, 10)}): ${formatSummary(baseline.summary)}`
           : "none recorded"
-      }; no thresholds agreed yet`,
-      data: { report, baseline },
+      }`,
+      data: { report, baseline, gate: QUALITY_GATE },
     };
   },
 };

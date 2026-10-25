@@ -127,6 +127,13 @@
       "when": 1792952006586,
       "tag": "20261025181326_memindex_superwhisper_rescan",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1792955539681,
+      "tag": "20261025191219_memindex_bounded_vec_gc",
+      "breakpoints": true
     }
   ]
 }
