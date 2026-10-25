@@ -230,7 +230,7 @@ export function idleCpuVerdict(samples: readonly CpuSample[]): ClauseResult {
   };
 }
 
-const LATENCY_LIMIT_MS = 3_000;
+const LATENCY_LIMIT_MS = 1_000;
 type LatencyGroup = "keyword" | "fuzzy" | "semantic" | "hybrid" | "recipe";
 const LATENCY_GROUPS: readonly LatencyGroup[] = ["keyword", "fuzzy", "semantic", "hybrid", "recipe"];
 

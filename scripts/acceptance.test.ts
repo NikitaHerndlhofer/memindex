@@ -124,20 +124,20 @@ describe("search-latency", () => {
     const r = latencyVerdict([
       ran("keyword", "sql", 100),
       ran("keyword", "rate limiter", 300),
-      ran("fuzzy", "sql", 2999),
+      ran("fuzzy", "sql", 999),
       ran("recipe", "sources", 50),
       ran("recipe", "thread", 900),
     ]);
     expect(r.verdict).toBe("VERIFIED");
     expect(r.evidence).toContain("keyword p50 100 ms p95 300 ms (n=2)");
-    expect(r.evidence).toContain("fuzzy p50 2999 ms");
+    expect(r.evidence).toContain("fuzzy p50 999 ms");
     expect(r.evidence).toContain("slowest thread 900 ms");
   });
 
   test("one run at the limit or one failure is NOT VERIFIED, and both are named", () => {
-    const slow = latencyVerdict([ran("keyword", "sql", 10), ran("fuzzy", "swrag sql", 3000)]);
+    const slow = latencyVerdict([ran("keyword", "sql", 10), ran("fuzzy", "swrag sql", 1000)]);
     expect(slow.verdict).toBe("NOT VERIFIED");
-    expect(slow.evidence).toContain('fuzzy "swrag sql" 3000 ms');
+    expect(slow.evidence).toContain('fuzzy "swrag sql" 1000 ms');
     const failed = latencyVerdict([
       ran("keyword", "sql", 10),
       {
