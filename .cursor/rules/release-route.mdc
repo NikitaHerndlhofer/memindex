@@ -1,0 +1,30 @@
+---
+description: Every change reaches this machine by the same update/install route an end user takes
+alwaysApply: true
+---
+
+# Ship through the user's route
+
+The local install is dogfood: it gets changes exactly the way an end user does, never by a shortcut.
+
+**Update route** (the only way a change reaches the real install):
+
+1. Commit to `main`.
+2. `bun run release X.Y.Z`: tests, tag, GitHub release, tap formula, `brew upgrade nikitaherndlhofer/tap/memindex`, `memindex install --yes`, `memindex doctor`.
+
+**Install route**: whatever README tells a new user (Homebrew, then `memindex install` with a Postgres
+URL, optionally the bundled `docker-compose.yml`) is what we run, from the released artifact.
+
+**Match the route, don't route around it.** If a change can't reach users that way, fix the route first
+(ship it in the release, have `memindex install` / `migrate` apply it, or document the user step in the
+README or release notes). Then apply it locally the same way.
+
+- ❌ `docker compose up -d` from the dev tree to pick up new Postgres settings no user receives
+- ❌ running `bun apps/memindex/src/cli.ts …` or a dev build against the real install
+- ❌ hand-run SQL or `memindex jobs run` to finish what the released watcher should do itself
+- ✅ a schema change ships as a migration that `memindex install` applies after `brew upgrade`
+- ✅ a user-side step (e.g. recreate the compose container) is in the release notes, and we follow
+  those notes, not our own knowledge of the repo
+
+Read-only diagnostics (`status`, `doctor`, `EXPLAIN`, SELECTs, logs) are fine. A write-path experiment
+on the real install is a bug in the route: stop, fix it, release, and let the release do the work.
