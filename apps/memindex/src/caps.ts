@@ -26,6 +26,8 @@ export type Frame =
       readonly item: string | null;
       /** thread-page's page size; null when the recipe returns every turn it matched. */
       readonly pageLimit: number | null;
+      /** Params the next thread-page repeats besides item, from and limit, so it lists the same kind of turns. */
+      readonly pageArgs: Args;
     }
   | { readonly kind: "turn"; readonly item: string; readonly from: number; readonly len: string | undefined };
 
@@ -172,7 +174,7 @@ export function capRows(all: readonly Row[], frame: Frame): Capped {
       if (last === null || frame.item === null) break;
       const pageFull = frame.pageLimit !== null && cut.length >= frame.pageLimit;
       const limit: Args = frame.pageLimit !== null ? { limit: String(frame.pageLimit) } : {};
-      const next = q("thread-page", frame.item, { from: String(last + 1), ...limit });
+      const next = q("thread-page", frame.item, { ...frame.pageArgs, from: String(last + 1), ...limit });
       if (over)
         notices.push(
           `Showing turns ${first}-${last} of the ${cut.length} this query returned: ${budget}. Next: ${next}`,

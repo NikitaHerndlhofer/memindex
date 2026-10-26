@@ -162,6 +162,13 @@
       "when": 1792992770514,
       "tag": "20261026053250_memindex_latest_strong_moment",
       "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1793030013687,
+      "tag": "20261026155333_memindex_turn_prose",
+      "breakpoints": true
     }
   ]
 }

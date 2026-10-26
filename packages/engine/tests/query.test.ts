@@ -133,10 +133,11 @@ describe("recipes", () => {
   });
 
   test("bindRecipe: defaults, ints, NULL optionals, required and unknown params", () => {
-    expect(bindRecipe(findRecipe("recent"), {})).toEqual({ days: 3, source: null, limit: 50 });
-    expect(bindRecipe(findRecipe("recent"), { days: "7", source: "cursor" })).toEqual({
+    expect(bindRecipe(findRecipe("recent"), {})).toEqual({ days: 3, source: null, subagents: 0, limit: 50 });
+    expect(bindRecipe(findRecipe("recent"), { days: "7", source: "cursor", subagents: "1" })).toEqual({
       days: 7,
       source: "cursor",
+      subagents: 1,
       limit: 50,
     });
     expect(() => bindRecipe(findRecipe("recent"), { days: "x" })).toThrow(/integer/);
@@ -223,7 +224,7 @@ describe("recipeCommand", () => {
       `memindex sql --param chunk=<chunk_id> --param around=2 <<'SQL'\n${findRecipe("context").sql}\nSQL`,
     );
     expect(recipeCommand(findRecipe("recent"), { args: { days: "7" } }).split("\n")[0]).toBe(
-      "memindex sql --param days=7 --param source --param limit=50 <<'SQL'",
+      "memindex sql --param days=7 --param source --param subagents=0 --param limit=50 <<'SQL'",
     );
     expect(recipeCommand(findRecipe("mode-recent")).split("\n")[0]).toBe(
       "memindex sql --param mode=<mode> --param days=7 --param limit=50 <<'SQL'",
@@ -261,7 +262,7 @@ describe("recipeCommand", () => {
       `memindex sql --search "<text>" --mode keyword --all-sources --param limit=20 --param offset=0 <<'SQL'`,
     );
     expect(recipeCommand(findRecipe("by-repo"), { args: { repo: "my repo" } }).split("\n")[0]).toBe(
-      "memindex sql --param 'repo=my repo' --param limit=50 <<'SQL'",
+      "memindex sql --param 'repo=my repo' --param subagents=0 --param limit=50 <<'SQL'",
     );
   });
 

@@ -100,7 +100,7 @@ export const VIEW_CONTRACT: readonly ViewDoc[] = [
   },
   {
     name: "turns",
-    note: "Messages / utterances, the readable text.",
+    note: "Messages, utterances and the agent's tool calls and thinking, one row per turn.",
     columns: [
       { name: "item_key", means: "its item" },
       { name: "turn_key", means: "id within the item" },
@@ -108,7 +108,13 @@ export const VIEW_CONTRACT: readonly ViewDoc[] = [
       { name: "role", means: "user, assistant, …" },
       { name: "at", means: "ISO-8601 UTC, may be NULL" },
       { name: "speaker", means: "diarized speaker label" },
-      { name: "body", means: "full text, can be MBs" },
+      { name: "body", means: "everything in the turn, tool calls and output included; can be MBs" },
+      {
+        name: "kind",
+        means:
+          "message (has prose) | tool (tool calls and results, no prose) | thinking (only thinking); NULL = blank",
+      },
+      { name: "prose", means: "the message text alone, NULL unless kind = message" },
     ],
     joins: [ITEM],
   },
@@ -342,6 +348,9 @@ Rules:
 - Always add a \`LIMIT\`: full transcripts and tool outputs fill the context window.
 - Locate text inside a body with \`strpos(body, 'needle')\` and read a window with \`substr(body, start, n)\`.
 - \`--param name\` without a value binds NULL.
+- Read what was said through \`prose\` with \`kind = 'message'\`; \`body\` adds tool calls, tool output and thinking.
+- \`recent\`, \`today\` and \`by-repo\` list only the user's own chats; \`--param subagents=1\` adds subagent chats.
+- In an item with \`parent_key\`, the first user turn is the spawning agent's brief, not the user. For what the user said, read items without \`parent_key\`.
 
 Chat search covers messages, thinking and what the agent did (terminal commands, \`edited <path>\`, \`read <path>\`),
 not bulk tool output: terminal output, file contents, page snapshots and search listings live only in

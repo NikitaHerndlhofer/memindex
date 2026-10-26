@@ -58,7 +58,13 @@ test("every recipe with a frame of its own exists", () => {
 
 describe("turn lists (thread, thread-page, context)", () => {
   const long = "x".repeat(10_024);
-  const thread: Frame = { kind: "turns", recipe: "thread", item: "cursor:abc", pageLimit: null };
+  const thread: Frame = {
+    kind: "turns",
+    recipe: "thread",
+    item: "cursor:abc",
+    pageLimit: null,
+    pageArgs: { messages: "0" },
+  };
 
   test("a long body is cut at the turn cap, and a sentence names the turn, the sizes and the command for the rest", () => {
     const { rows, notices } = capRows(
@@ -94,6 +100,7 @@ describe("turn lists (thread, thread-page, context)", () => {
       recipe: "thread-page",
       item: "cursor:abc",
       pageLimit: 20,
+      pageArgs: {},
     });
     expect(notices).toEqual([
       "Turn 0 truncated: 2,000 of 9,000 chars shown. Rest: memindex q turn cursor:abc --param ord=0 --param from=2000 --json",
@@ -104,7 +111,7 @@ describe("turn lists (thread, thread-page, context)", () => {
     const page = (n: number) =>
       capRows(
         Array.from({ length: n }, (_, i) => ({ ord: 40 + i, body: "b" })),
-        { kind: "turns", recipe: "thread-page", item: "cursor:abc", pageLimit: 3 },
+        { kind: "turns", recipe: "thread-page", item: "cursor:abc", pageLimit: 3, pageArgs: {} },
       ).notices;
     const [full] = page(3);
     expect(full).toStartWith("Showing turns 40-42. Next: ");
@@ -113,6 +120,17 @@ describe("turn lists (thread, thread-page, context)", () => {
       args: { item: "cursor:abc", from: "43", limit: "3" },
     });
     expect(page(2)).toEqual([]);
+  });
+
+  test("the next thread-page keeps listing every turn when the caller asked for every turn", () => {
+    const [full] = capRows(
+      Array.from({ length: 3 }, (_, i) => ({ ord: i, body: "b" })),
+      { kind: "turns", recipe: "thread-page", item: "cursor:abc", pageLimit: 3, pageArgs: { messages: "0" } },
+    ).notices;
+    expect(run(offered(full, "Next"))).toEqual({
+      recipe: "thread-page",
+      args: { item: "cursor:abc", messages: "0", from: "3", limit: "3" },
+    });
   });
 
   test("a whole thread stops at the output budget and offers the next page from the first turn left out", () => {
@@ -126,7 +144,7 @@ describe("turn lists (thread, thread-page, context)", () => {
     );
     expect(run(offered(last, "Next"))).toEqual({
       recipe: "thread-page",
-      args: { item: "cursor:abc", from: String(capped.rows.length) },
+      args: { item: "cursor:abc", messages: "0", from: String(capped.rows.length) },
     });
   });
 });

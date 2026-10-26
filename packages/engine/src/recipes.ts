@@ -39,6 +39,12 @@ export const OUTPUT_BUDGET = 60_000;
 
 const limit = (n: number): RecipeParam => ({ type: "int", summary: "max rows", default: String(n) });
 
+const subagents: RecipeParam = {
+  type: "int",
+  summary: "1 = include subagent chats (spawned by another agent)",
+  default: "0",
+};
+
 const SEARCH_SQL = `SELECT h.rank, h.unit, i.source, i.kind, i.started_day, i.title, i.origin, h.item_key, h.chunk_id,
        h.snippet, h.about, h.context, h.moments, (SELECT COUNT(*) FROM hits) AS ranked
 FROM hits h JOIN items i ON i.item_key = h.item_key
@@ -88,11 +94,12 @@ FROM superwhisper_items GROUP BY mode ORDER BY items DESC`,
     params: {
       days: { type: "int", summary: "look-back window in days", default: "3" },
       source: { type: "text", summary: "source id (e.g. cursor, superwhisper)" },
+      subagents,
       limit: limit(50),
     },
     sql: `SELECT item_key, source, kind, started_at, title, origin, turn_count
 FROM items
-WHERE age_days <= :days AND source = COALESCE(:source, source)
+WHERE age_days <= :days AND source = COALESCE(:source, source) AND (:subagents = 1 OR parent_key IS NULL)
 ORDER BY started_at DESC
 LIMIT :limit`,
   },
@@ -100,9 +107,9 @@ LIMIT :limit`,
     name: "today",
     summary: "Everything from the last 24 hours, newest first",
     group: "browse",
-    params: { limit: limit(100) },
+    params: { subagents, limit: limit(100) },
     sql: `SELECT item_key, source, kind, started_at, title, origin, turn_count
-FROM items WHERE age_days < 1
+FROM items WHERE age_days < 1 AND (:subagents = 1 OR parent_key IS NULL)
 ORDER BY started_at DESC
 LIMIT :limit`,
   },
@@ -152,9 +159,13 @@ LIMIT :limit`,
     name: "by-repo",
     summary: "Items whose origin (repository for chats, front app for dictation) matches",
     group: "browse",
-    params: { repo: { type: "text", summary: "origin, case-insensitive", required: true }, limit: limit(50) },
+    params: {
+      repo: { type: "text", summary: "origin, case-insensitive", required: true },
+      subagents,
+      limit: limit(50),
+    },
     sql: `SELECT item_key, source, kind, started_at, title, turn_count
-FROM items WHERE lower(origin) = lower(:repo)
+FROM items WHERE lower(origin) = lower(:repo) AND (:subagents = 1 OR parent_key IS NULL)
 ORDER BY started_at DESC
 LIMIT :limit`,
   },
@@ -275,16 +286,22 @@ LIMIT :limit`,
   },
   {
     name: "thread-page",
-    summary: `One page of an item's turns from ord \`from\`, bodies capped at ${TURN_BODY_CAP} chars (\`chars\` = full length)`,
+    summary: `One page of an item's messages from ord \`from\` (prose only), capped at ${TURN_BODY_CAP} chars (\`chars\` = full length)`,
     group: "read",
     params: {
       item: { type: "item_key", summary: "item key, e.g. cursor:3f1c…", required: true },
       from: { type: "int", summary: "first turn ord", default: "0" },
+      messages: {
+        type: "int",
+        summary: "0 = every turn, tool calls and thinking included (their full body)",
+        default: "1",
+      },
       limit: limit(20),
     },
-    sql: `SELECT ord, role, speaker, at, length(body) AS chars, substr(body, 1, ${TURN_BODY_CAP}) AS body
+    sql: `SELECT ord, role, kind, speaker, at, length(COALESCE(prose, body)) AS chars,
+       substr(COALESCE(prose, body), 1, ${TURN_BODY_CAP}) AS body
 FROM turns
-WHERE item_key = :item AND ord >= :from
+WHERE item_key = :item AND ord >= :from AND (:messages = 0 OR kind = 'message')
 ORDER BY ord
 LIMIT :limit`,
     teach: {
@@ -320,13 +337,10 @@ WHERE item_key = :item AND ord = :ord`,
       item: { type: "item_key", summary: "item key, e.g. cursor:3f1c…", required: true },
       limit: limit(5),
     },
-    sql: `SELECT t.ord, t.turn_key, t.role, t.speaker, length(t.body) AS chars, substr(t.body, 1, ${TURN_BODY_CAP}) AS body
+    sql: `SELECT t.ord, t.turn_key, t.role, t.speaker, length(t.prose) AS chars, substr(t.prose, 1, ${TURN_BODY_CAP}) AS body
 FROM turns t
-WHERE t.item_key = :item AND t.turn_key <> 'u'
-  AND (t.role = 'speaker'
-    OR (t.role = 'user' AND strpos(t.body, '<system_notification>') = 0)
-    OR (t.role = 'assistant' AND EXISTS (SELECT 1 FROM chunks c
-      WHERE c.item_key = t.item_key AND c.turn_key = t.turn_key AND c.kind = 'text')))
+WHERE t.item_key = :item AND t.turn_key <> 'u' AND t.kind = 'message'
+  AND (t.role <> 'user' OR strpos(t.prose, '<system_notification>') = 0)
 ORDER BY t.ord DESC
 LIMIT :limit`,
   },

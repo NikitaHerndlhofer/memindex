@@ -251,6 +251,68 @@ describe("integration: fixtures → Supabase store → recipes", () => {
   );
 
   test.skipIf(storeNotReady)(
+    "browse recipes list the user's own chats; subagents=1 adds the chats agents spawned",
+    async () => {
+      const children = await rows({
+        sql: "SELECT item_key, origin FROM items WHERE parent_key IS NOT NULL ORDER BY item_key",
+      });
+      expect(children.length).toBeGreaterThanOrEqual(2);
+      const keys = (rs: Record<string, unknown>[]) => rs.map((r) => String(r.item_key));
+      const childKeys = keys(children);
+
+      const recent = keys(await rows({ recipe: "recent", args: { days: "100000", limit: "1000" } }));
+      expect(recent.length).toBeGreaterThan(0);
+      expect(recent.filter((k) => childKeys.includes(k))).toEqual([]);
+      const withSubagents = keys(
+        await rows({ recipe: "recent", args: { days: "100000", limit: "1000", subagents: "1" } }),
+      );
+      expect(withSubagents).toEqual(expect.arrayContaining([...recent, ...childKeys]));
+
+      const child = children.find((c) => c.origin !== null);
+      if (!child) throw new Error("no fixture subagent with an origin");
+      const repo = String(child.origin);
+      expect(keys(await rows({ recipe: "by-repo", args: { repo } }))).not.toContain(child.item_key);
+      expect(keys(await rows({ recipe: "by-repo", args: { repo, subagents: "1" } }))).toContain(
+        String(child.item_key),
+      );
+    },
+  );
+
+  test.skipIf(storeNotReady)(
+    "thread-page and item-tail read a chat's messages as prose; messages=0 pages every turn",
+    async () => {
+      const [item] = await rows({
+        sql: `SELECT item_key FROM turns GROUP BY item_key
+              HAVING SUM(CASE WHEN kind = 'message' THEN 1 ELSE 0 END) > 0
+                 AND SUM(CASE WHEN kind = 'message' THEN 0 ELSE 1 END) > 0
+              ORDER BY item_key LIMIT 1`,
+      });
+      if (!item) throw new Error("no fixture chat with both message and tool or thinking turns");
+      const key = String(item.item_key);
+      const all = await rows({
+        sql: "SELECT ord, kind, prose, body FROM turns WHERE item_key = :k ORDER BY ord",
+        params: { k: key },
+      });
+      const messages = all.filter((t) => t.kind === "message");
+
+      const page = await rows({ recipe: "thread-page", args: { item: key, limit: "1000" } });
+      expect(page.map((r) => [r.ord, r.kind, r.body])).toEqual(
+        messages.map((t) => [t.ord, "message", t.prose]),
+      );
+      const everything = await rows({
+        recipe: "thread-page",
+        args: { item: key, limit: "1000", messages: "0" },
+      });
+      expect(everything.map((r) => r.ord)).toEqual(all.map((t) => t.ord));
+
+      const tail = await rows({ recipe: "item-tail", args: { item: key, limit: "1000" } });
+      expect(tail.length).toBeGreaterThan(0);
+      for (const r of tail) expect(messages.find((t) => t.ord === r.ord)?.prose).toBe(r.body);
+      expect(tail.map((r) => Number(r.ord))).toEqual(tail.map((r) => Number(r.ord)).sort((a, b) => b - a));
+    },
+  );
+
+  test.skipIf(storeNotReady)(
     "search modes return hits for fixture text; thread reads turns back in order",
     async () => {
       for (const mode of ["keyword", "fuzzy", "semantic", "hybrid"] as const) {

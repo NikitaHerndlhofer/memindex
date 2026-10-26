@@ -50,14 +50,17 @@ async function frameOf(archive: Archive, query: Query): Promise<Frame> {
             window: search.limit ?? DEFAULT_HIT_LIMIT,
           }
         : { kind: "rows" };
-    case "turns":
+    case "turns": {
+      const { item: _item, from: _from, limit: _limit, ...rest } = args;
       return {
         kind: "turns",
         recipe: query.recipe,
         item:
           typeof params.item === "string" ? params.item : await itemOfChunk(archive, String(params.chunk)),
         pageLimit: query.recipe === "thread-page" ? Number(params.limit) : null,
+        pageArgs: query.recipe === "thread-page" ? rest : { messages: "0" },
       };
+    }
     case "turn":
       return { kind: "turn", item: String(params.item), from: Number(params.from ?? 0), len: args.len };
     default:

@@ -18,6 +18,7 @@ import {
   isoTime,
   itemKey,
   type LocationId,
+  type Part,
   type ProducerId,
   producerId,
   type Revision,
@@ -389,6 +390,51 @@ export function runStoreContract(name: string, backend: () => ContractBackend): 
         expect(turns).toEqual([
           { turn_key: "a", body: "first part\n\n\n\nthird\npart\n" },
           { turn_key: "b", body: "only" },
+        ]);
+      });
+
+      test("a turn's kind says whether it holds a message, and prose is the message text alone", async () => {
+        const w = await writer();
+        const turn = (key: string, ...parts: [Part["kind"], string][]): TurnDraft => ({
+          key: turnKey(key),
+          role: "assistant",
+          at: null,
+          speaker: null,
+          parts: parts.map(([kind, text]) => ({ kind, text })),
+        });
+        const d = draftOf(CUR, "kinds", [
+          turn("message", ["text", "Ship it on Friday."]),
+          turn("thinking", ["thinking", "Weighing Friday against Monday."]),
+          turn("tool", ["tool_call", '{"cmd":"ls"}'], ["tool_result", "a.txt"], ["diff", "+x"]),
+          turn(
+            "mixed",
+            ["thinking", "Check first."],
+            ["text", "Checked."],
+            ["tool_call", "{}"],
+            ["text", "Done."],
+          ),
+          turn("acted", ["thinking", "Look around."], ["tool_call", '{"cmd":"pwd"}']),
+          turn("blank", ["text", "\n\n"]),
+          turn(
+            "spoken",
+            ["transcript", "Plans for the garden."],
+            ["transcript_raw", "um plans for the garden"],
+          ),
+        ]);
+        await w.apply(writeOf(CUR, L1, d, rev("1", 1, 1)));
+        const turns = await rows(
+          w.run("SELECT turn_key, kind, prose FROM turns WHERE item_key = :k ORDER BY ord", {
+            params: { k: d.key },
+          }),
+        );
+        expect(turns).toEqual([
+          { turn_key: "message", kind: "message", prose: "Ship it on Friday." },
+          { turn_key: "thinking", kind: "thinking", prose: null },
+          { turn_key: "tool", kind: "tool", prose: null },
+          { turn_key: "mixed", kind: "message", prose: "Checked.\n\nDone." },
+          { turn_key: "acted", kind: "tool", prose: null },
+          { turn_key: "blank", kind: null, prose: null },
+          { turn_key: "spoken", kind: "message", prose: "Plans for the garden.\n\num plans for the garden" },
         ]);
       });
 
