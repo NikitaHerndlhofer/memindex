@@ -11,6 +11,7 @@
  */
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { EVAL_LOCAL } from "./eval-dir.ts";
 import { isNewer, parseSums, rewriteFormula } from "./release-lib.ts";
 
 const ROOT = join(import.meta.dir, "..");
@@ -46,6 +47,8 @@ if (!isNewer(version, pkg.version)) throw new Error(`${version} is not newer tha
 step("preflight");
 if (run(["git", "branch", "--show-current"]) !== "main") throw new Error("release from main");
 if (run(["git", "status", "--porcelain"]) !== "") throw new Error("working tree is not clean");
+if (run(["git", "ls-files", EVAL_LOCAL]) !== "")
+  throw new Error(`${EVAL_LOCAL}/ holds archive-derived eval data and must stay untracked`);
 run(["git", "fetch", "-q", "origin"]);
 if (run(["git", "rev-list", "--count", "HEAD..origin/main"]) !== "0")
   throw new Error("main is behind origin");

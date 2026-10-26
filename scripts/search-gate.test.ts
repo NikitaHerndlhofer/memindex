@@ -248,7 +248,7 @@ describe("eval dir", () => {
 
   test("MEMINDEX_EVAL_DIR picks the dir; a missing dir fails with where it looked and how to point elsewhere", () => {
     expect(evalDir({ MEMINDEX_EVAL_DIR: "/x/y" })).toBe("/x/y");
-    expect(evalDir({})).toEndWith("Library/Application Support/memindex/eval");
+    expect(evalDir({})).toBe(join(import.meta.dir, "..", "eval-local"));
     expect(() => requireEvalDir(join(root, "nope"))).toThrow(EvalDirError);
     expect(() => requireEvalDir(join(root, "nope"))).toThrow(/MEMINDEX_EVAL_DIR/);
   });

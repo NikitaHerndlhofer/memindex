@@ -8,3 +8,4 @@ dist/
 .audit/
 .bench/
 supabase/.temp/
+/eval-local/

@@ -10,7 +10,8 @@
       "!**/.audit",
       "!**/.bench",
       "!**/supabase/.temp",
-      "!**/supabase/migrations/meta"
+      "!**/supabase/migrations/meta",
+      "!eval-local"
     ]
   },
   "formatter": { "enabled": true, "indentStyle": "space", "indentWidth": 2, "lineWidth": 110 },

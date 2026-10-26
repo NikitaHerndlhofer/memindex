@@ -90,8 +90,9 @@ chunks, not a whole batch.
 
 `scripts/search-gate.ts` scores search on every graded query set you keep, against a frozen snapshot of
 your archive, so a change to search SQL is measured on the same data each time. The queries and grades
-come from your own archive, so they live outside the repo, in `~/Library/Application Support/memindex/eval/`
-(or `MEMINDEX_EVAL_DIR`). The gate exits 2 with a message if that directory is missing.
+come from your own archive, so they never enter git: they live in the gitignored `eval-local/` at the repo
+root (or `MEMINDEX_EVAL_DIR`), and the release preflight refuses to ship if any file under `eval-local/` is
+tracked. The gate exits 2 with a message if that directory is missing.
 
 ```sh
 bun scripts/eval-snapshot.ts --from postgresql://memindex:memindex@127.0.0.1:54329/memindex  # once
