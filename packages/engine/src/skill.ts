@@ -1,7 +1,14 @@
 import type { SourceId } from "@memindex/model";
 import { HIT_COLUMNS } from "@memindex/store";
 import { type Params, SCOPES, type SearchSpec } from "./query.ts";
-import { assertKnownParams, OUTPUT_BUDGET, type Recipe, ROW_VALUE_CAP, TURN_BODY_CAP } from "./recipes.ts";
+import {
+  assertKnownParams,
+  OUTPUT_BUDGET,
+  PAGE_BODY_CAP,
+  type Recipe,
+  ROW_VALUE_CAP,
+  TURN_BODY_CAP,
+} from "./recipes.ts";
 
 type ViewName =
   | "items"
@@ -183,7 +190,7 @@ export const VIEW_CONTRACT: readonly ViewDoc[] = [
   },
   {
     name: "hits",
-    note: "Only with --search: one ranked list of items and moments, at most 3 rows per item.",
+    note: "Only with --search: one ranked list of items and moments, at most 3 rows per item (with `--item`, that item's moments only).",
     columns: HIT_COLUMNS.map((name) => ({ name, means: HIT_MEANS[name] })),
     joins: [{ cols: ["chunk_id"], to: "chunks" }, TURN, ITEM],
   },
@@ -243,6 +250,8 @@ export function recipeCommand(recipe: Recipe, run: RecipeRun = {}): string {
     if (f.kind?.length) flags.push("--kind", f.kind.join(","));
     if (f.since) flags.push("--since", shellQuote(f.since));
     if (f.includeSuperseded) flags.push("--all");
+    if (f.item) flags.push("--item", shellQuote(f.item));
+    else if (recipe.search.inItem) flags.push("--item", "<item_key>");
   }
   for (const [name, p] of Object.entries(recipe.params)) {
     const value = args[name] ?? p.default;
@@ -328,7 +337,7 @@ placeholders bind \`--param name=value\`. Start from a pattern in **SQL patterns
 
 Search flags: \`--search <text>\`, \`--mode keyword|fuzzy|semantic|hybrid\`, \`--scope ${Object.keys(SCOPES).join("|")}\`,
 \`--source a,b\`, \`--kind dictation|meeting|conversation\`, \`--since 7d|<ISO>\`, \`--limit n\`, \`--all\` (include older
-versions of reprocessed recordings), \`--all-sources\`.
+versions of reprocessed recordings), \`--all-sources\`, \`--item <item_key>\` (search inside one item).
 A "quoted phrase" in the search text matches those words exactly and in order; wrap the whole search
 text in single quotes for the shell. Use it when ranked search misses an exact phrase.
 
@@ -373,7 +382,9 @@ words. Pulling raw chunks into the main context fills the window and loses the s
    decided, how it ended, the current state) and a hit is in a long chat, it first reads the end with
    \`memindex q item-tail <item_key> --json\`: early matches in a long chat are often superseded. For a
    meeting it first reads the summary (\`turn\` at \`ord\` 0), whose decisions and action items come within
-   the first 10,000 characters. It expands what it needs with the \`context\` pattern (turns around \`chunk_id\`), \`thread-page\` (a long item from an
+   the first 10,000 characters. For a long chat or meeting it searches within it before paging:
+   \`memindex q search-in "<question>" --item <item_key> --json\` lists that item's best moments with their \`ord\`.
+   It expands what it needs with the \`context\` pattern (turns around \`chunk_id\`), \`thread-page\` (a long item from an
    \`ord\`) or \`turn\` (one long turn), and **summarizes** a focused answer with citations
    (\`item_key\`, turn \`ord\` ranges, \`origin\`, \`started_day\`).
 3. The main agent uses the summary; for more detail it dispatches another subagent with a narrower query.
@@ -391,22 +402,23 @@ retry without the filter before answering.
 
 ## Reading notices
 
-Output is capped: a turn body in \`context\`, \`thread\` and \`thread-page\` at ${TURN_BODY_CAP.toLocaleString("en-US")} chars, any other value at
+Output is capped: a turn body in \`thread-page\` at ${PAGE_BODY_CAP.toLocaleString("en-US")} chars (\`chars\` is its full length), in \`context\` and \`thread\` at ${TURN_BODY_CAP.toLocaleString("en-US")}, any other value at
 ${ROW_VALUE_CAP.toLocaleString("en-US")}, one output at ${OUTPUT_BUDGET.toLocaleString("en-US")} chars of text. Every cut, and every page with more after it, ends
 the output with a sentence giving the exact command or SQL for the rest; with \`--json\` it is the array's
 last element, \`{"notice": "…"}\`. Run that command when the missing part matters.
 
 \`\`\`text
-Turn 41 truncated: 2,000 of 51,234 chars shown. Rest: memindex q turn cursor:3f1c… --param ord=41 --param from=2000 --json
+Turn 41 truncated: ${PAGE_BODY_CAP.toLocaleString("en-US")} of 51,234 chars shown. Rest: memindex q turn cursor:3f1c… --param ord=41 --param from=${PAGE_BODY_CAP} --json
 Showing results 1-20 of 50+. Next: memindex q search 'auth refresh' --param offset=20 --json
 Row 3 column body truncated: 8,000 of 20,112 chars shown. Rest: select substr(body, 8001, 8000)
 \`\`\`
 
 ## Reading results
 
-- \`unit = item\`: the whole chat or recording answers the query. Read \`about\` and its \`moments\`.
-- \`unit = moment\`: one exchange or passage answers it. Read \`snippet\` and \`context\` (the message that
-  led in and the next reply).
+- \`unit = item\`: the whole chat or recording answers the query. Read \`about\` and \`snippet\` (its best moment).
+- \`unit = moment\`: one exchange or passage answers it. Read \`snippet\`.
+- Also select \`h.context\` when you need the exchange around a moment (the message that led in and the
+  next reply), and \`h.moments\` for an item's best 3 moments.
 - Order by \`rank\`. \`score\` is not a relevance probability and does not compare across searches.
 - On similar matches, newer records rank first and meetings above chats; to reach an old one, search for what only it says.
 - A hit on a chunk of kind \`title\` means the whole item is about the query.

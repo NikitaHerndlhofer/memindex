@@ -176,6 +176,13 @@
       "when": 1793038858071,
       "tag": "20261026182058_memindex_signal",
       "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1793046519248,
+      "tag": "20261026202839_memindex_search_in_item",
+      "breakpoints": true
     }
   ]
 }

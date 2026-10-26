@@ -1,5 +1,5 @@
 import type { Embedder } from "@memindex/embed";
-import { type IsoTime, type ItemKind, isoTime, type SourceId } from "@memindex/model";
+import { type IsoTime, type ItemKey, type ItemKind, isoTime, itemKey, type SourceId } from "@memindex/model";
 import type { ChunkFilter, Hit, RankedChunk, ReadStore, Row, StoreSearch } from "@memindex/store";
 import { z } from "zod";
 import { assertKnownParams, findRecipe, type Recipe } from "./recipes.ts";
@@ -44,6 +44,8 @@ export interface SearchSpec {
     /** "3d" | "12h" | "2w" | ISO date/time. */
     readonly since?: string;
     readonly includeSuperseded?: boolean;
+    /** Search inside this one item: its best moments, not at most 3; default sources don't apply. */
+    readonly item?: string;
   };
   /** Hits kept after fusion. Each modality fetches max(limit*4, 200) first. */
   readonly limit?: number;
@@ -115,8 +117,15 @@ function searchSources(
     if (filter.allSources) throw new Error("pass either sources or allSources, not both");
     return filter.source;
   }
-  if (filter.allSources) return null;
+  if (filter.allSources || filter.item) return null;
   return defaults;
+}
+
+/** "<source>:<id>" → that item's key. Throws on anything else. */
+function searchItem(key: string): ItemKey {
+  const i = key.indexOf(":");
+  if (i < 1) throw new Error(`--item: expected an item_key like cursor:3f1c…, got "${key}"`);
+  return itemKey(key.slice(0, i), key.slice(i + 1));
 }
 
 function toChunkFilter(
@@ -132,6 +141,7 @@ function toChunkFilter(
     ...(f.kind?.length ? { kind: f.kind } : {}),
     ...(f.since ? { since: parseSince(f.since, now) } : {}),
     ...(f.includeSuperseded ? { includeSuperseded: true } : {}),
+    ...(f.item ? { items: [searchItem(f.item)] } : {}),
   };
 }
 
@@ -219,6 +229,10 @@ export function resolveQuery(q: Query): ResolvedQuery {
   }
   if (!q.search?.text)
     throw new Error(`recipe ${recipe.name} needs search text: memindex q ${recipe.name} "<text>"`);
+  if (recipe.search.inItem && !q.search.filter.item)
+    throw new Error(
+      `recipe ${recipe.name} needs an item: memindex q ${recipe.name} "<text>" --item <item_key>`,
+    );
   return {
     sql: recipe.sql,
     params,

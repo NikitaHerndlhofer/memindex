@@ -1305,6 +1305,34 @@ export function runStoreContract(name: string, backend: () => ContractBackend): 
         expect(JSON.parse(String(recording?.moments)).length).toBe(1);
       });
 
+      test("a search inside one item lists each of its matching moments, more than 3 and never as one item row", async () => {
+        const w = await writer();
+        const reply = (key: string, text: string): TurnDraft => ({ ...turnOf(key, text), role: "assistant" });
+        const chat = draftOf(
+          CUR,
+          "inside",
+          [0, 1, 2, 3, 4, 5].flatMap((i) => [
+            turnOf(`u${i}`, `where does the plover nest, try ${i}`),
+            reply(`a${i}`, `The plover nests on shingle, answer ${i}.`),
+          ]),
+        );
+        const other = draftOf(CUR, "elsewhere", [turnOf("u0", "a plover flew past the office window")]);
+        for (const d of [chat, other]) await w.apply(writeOf(CUR, L1, d, rev("1")));
+        const search = (items?: ItemKey[]) =>
+          rows(
+            w.run("SELECT item_key, unit, turn_key FROM hits ORDER BY rank", {
+              hits: { via: "keyword", text: "plover", filter: items ? { items } : {}, k: 20 },
+            }),
+          );
+
+        const inside = await search([chat.key]);
+        expect(inside.map((r) => [r.item_key, r.unit])).toEqual(Array(6).fill([chat.key, "moment"]));
+        expect(new Set(inside.map((r) => r.turn_key)).size).toBe(6);
+
+        for (const unscoped of [await search(), await search([chat.key, other.key])])
+          expect(unscoped.filter((r) => r.item_key === chat.key).map((r) => r.unit)).toEqual(["item"]);
+      });
+
       test("a long chat's scattered matches add less than a short chat's: the short one ranks first", async () => {
         const w = await writer();
         const exchanges = (word: string) =>

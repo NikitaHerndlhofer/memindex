@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { type ItemKey, sourceId } from "@memindex/model";
+import { type ItemKey, itemKey, sourceId } from "@memindex/model";
 import type { RankedChunk, StoreSearch } from "@memindex/store";
 import {
   bindRecipe,
@@ -196,6 +196,15 @@ describe("recipes", () => {
     expect(() => resolveQuery({ recipe: "nope" })).toThrow(/unknown recipe/);
   });
 
+  test("resolveQuery: search-in needs the item it searches", () => {
+    expect(() => resolveQuery({ recipe: "search-in", search: { text: "x", filter: {} } })).toThrow(
+      /needs an item: memindex q search-in "<text>" --item <item_key>/,
+    );
+    expect(
+      resolveQuery({ recipe: "search-in", search: { text: "x", filter: { item: "cursor:abc" } } }).search,
+    ).toEqual({ text: "x", mode: "hybrid", filter: { item: "cursor:abc" } });
+  });
+
   test("covers the recipe intents the skill documents", () => {
     const names = new Set(RECIPES.map((r) => r.name));
     const intents = [
@@ -223,6 +232,7 @@ describe("recipes", () => {
       "hit-turns",
       "thread-page",
       "turn",
+      "search-in",
     ];
     for (const n of intents) expect(names.has(n)).toBe(true);
     expect(RECIPES.some((r) => r.name.startsWith("stats-"))).toBe(true);
@@ -271,6 +281,16 @@ describe("recipeCommand", () => {
       }).split("\n")[0],
     ).toBe(
       `memindex sql --search "<text>" --mode keyword --all-sources --param limit=20 --param offset=0 <<'SQL'`,
+    );
+    expect(recipeCommand(findRecipe("search-in")).split("\n")[0]).toBe(
+      `memindex sql --search "<text>" --mode hybrid --item <item_key> --param limit=10 --param offset=0 <<'SQL'`,
+    );
+    expect(
+      recipeCommand(findRecipe("search-in"), { search: { text: "x", filter: { item: "cursor:a b" } } }).split(
+        "\n",
+      )[0],
+    ).toBe(
+      `memindex sql --search x --mode hybrid --item 'cursor:a b' --param limit=10 --param offset=0 <<'SQL'`,
     );
     expect(recipeCommand(findRecipe("by-repo"), { args: { repo: "my repo" } }).split("\n")[0]).toBe(
       "memindex sql --param 'repo=my repo' --param subagents=false --param limit=50 <<'SQL'",
@@ -394,7 +414,7 @@ describe("search scope", () => {
       if (!hits) throw new Error("expected a search request");
       return hits.filter.source ?? null;
     };
-    return { archive, sourcesOf };
+    return { archive, sourcesOf, store };
   }
 
   test("no default searches everything", async () => {
@@ -421,6 +441,21 @@ describe("search scope", () => {
     expect(await sourcesOf({})).toEqual([sourceId("fake"), sourceId("other")]);
     expect((await archive.status()).search.from).toBe("env");
     expect(archive.skill()).toContain("This install searches every source by default.");
+  });
+
+  test("--item searches that one item, whatever the default sources; a malformed key fails", async () => {
+    const { archive, store } = await scoped({}, { search: { defaultSources: ["other"] } });
+    const filterOf = async (filter: SearchSpec["filter"]) => {
+      for await (const _ of archive.query({
+        sql: "SELECT 1",
+        search: { text: "q", mode: "keyword", filter },
+      }));
+      const hits = store.runs.at(-1)?.opts.hits as StoreSearch | undefined;
+      if (!hits) throw new Error("expected a search request");
+      return hits.filter;
+    };
+    expect(await filterOf({ item: "fake:abc" })).toEqual({ items: [itemKey("fake", "abc")] });
+    await expect(filterOf({ item: "abc" })).rejects.toThrow(/--item: expected an item_key/);
   });
 
   test("an unknown default source fails at open, naming the setting", async () => {
@@ -552,6 +587,29 @@ describe("renderSkill", () => {
     expect(md).toContain(
       "Joins: `chunk_id` → `chunks`; (`item_key`, `turn_key`) → `turns`; `item_key` → `items`.",
     );
+  });
+
+  test("the search pattern returns slim rows; context and moments are selected on demand", () => {
+    const pattern = md.match(
+      /^memindex sql --json --search "<text>" --mode hybrid .*<<'SQL'\n([\s\S]*?)\nSQL$/m,
+    )?.[1];
+    expect(pattern).toContain("h.snippet, h.about");
+    expect(pattern).not.toMatch(/h\.context|h\.moments/);
+    expect(md).toContain(
+      "- Also select `h.context` when you need the exchange around a moment (the message that led in and the\n  next reply), and `h.moments` for an item's best 3 moments.",
+    );
+  });
+
+  test("a long chat or meeting is searched within before it is paged, and pages show 1,000 chars a turn", () => {
+    expect(md).toContain(
+      'For a long chat or meeting it searches within it before paging:\n   `memindex q search-in "<question>" --item <item_key> --json`',
+    );
+    expect(md).toContain("`--item <item_key>` (search inside one item)");
+    expect(md).toContain("a turn body in `thread-page` at 1,000 chars (`chars` is its full length)");
+    expect(md).toContain(
+      "Turn 41 truncated: 1,000 of 51,234 chars shown. Rest: memindex q turn cursor:3f1c… --param ord=41 --param from=1000 --json",
+    );
+    expect(findRecipe("thread-page").sql).toContain("substr(COALESCE(prose, body), 1, 1000) AS body");
   });
 
   test("the subagent workflow searches through SQL; source notes are included", () => {

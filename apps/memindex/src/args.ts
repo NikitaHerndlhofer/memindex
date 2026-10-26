@@ -46,6 +46,7 @@ const FILTER_ARGS = {
   since: { type: "string", description: "7d | 12h | 2w | ISO date" },
   limit: { type: "string", description: "Max hits (sql) or rows (recipes)" },
   all: { type: "boolean", description: "Include superseded items" },
+  item: { type: "string", description: "Search inside one item (item_key): its best moments" },
 } as const satisfies ArgsDef;
 
 const PARAM_ARG = {
@@ -108,6 +109,11 @@ const Filters = z.object({
   limit: z.coerce.number().int().positive().max(100_000).optional(),
   all: z.boolean().optional(),
   "all-sources": z.boolean().optional(),
+  item: z
+    .string()
+    .trim()
+    .regex(/^[a-z][a-z0-9-]*:.+$/, "expected an item_key like cursor:3f1c…")
+    .optional(),
 });
 type Filters = z.infer<typeof Filters>;
 
@@ -140,6 +146,7 @@ function filterOf(f: Filters): SearchSpec["filter"] {
     ...(f.kind ? { kind: f.kind } : {}),
     ...(f.since ? { since: f.since } : {}),
     ...(f.all ? { includeSuperseded: true } : {}),
+    ...(f.item ? { item: f.item } : {}),
   };
 }
 
@@ -191,7 +198,17 @@ function outputFormat(args: Record<string, unknown>): OutputFormat {
   }
 }
 
-const SEARCH_ONLY = ["mode", "source", "scope", "kind", "since", "all", "all-sources", "limit"] as const;
+const SEARCH_ONLY = [
+  "mode",
+  "source",
+  "scope",
+  "kind",
+  "since",
+  "all",
+  "all-sources",
+  "item",
+  "limit",
+] as const;
 
 /** `memindex sql`: SQL comes from stdin only (quoting-safe); a positional is a usage error. */
 export async function parseSqlCommand(rawArgs: readonly string[], stdin: StdinSource): Promise<ParsedQuery> {
@@ -294,7 +311,7 @@ export function parseQCommand(rawArgs: readonly string[]): ParsedQ {
     };
   }
 
-  for (const k of ["mode", "scope", "kind", "since", "all", "all-sources"] as const) {
+  for (const k of ["mode", "scope", "kind", "since", "all", "all-sources", "item"] as const) {
     if (filters[k] !== undefined)
       throw new UsageError(`--${k} applies to search recipes only; ${recipe.name} is not one`);
   }

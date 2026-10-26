@@ -38,6 +38,7 @@ export const RECIPE_FRAMES: Readonly<Record<string, Exclude<Frame["kind"], "rows
   keyword: "results",
   fuzzy: "results",
   hybrid: "results",
+  "search-in": "results",
   thread: "turns",
   "thread-page": "turns",
   context: "turns",
@@ -70,6 +71,7 @@ function searchFlags(f: Extract<Frame, { kind: "results" }>): string[] {
     ...(s.kind?.length ? ["--kind", s.kind.join(",")] : []),
     ...(s.since ? ["--since", shellQuote(s.since)] : []),
     ...(s.includeSuperseded ? ["--all"] : []),
+    ...(s.item ? ["--item", shellQuote(s.item)] : []),
   ];
 }
 

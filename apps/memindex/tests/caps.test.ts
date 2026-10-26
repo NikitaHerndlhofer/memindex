@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { OUTPUT_BUDGET, RECIPES, ROW_VALUE_CAP, TURN_BODY_CAP } from "@memindex/engine";
+import { findRecipe, OUTPUT_BUDGET, RECIPES, ROW_VALUE_CAP, TURN_BODY_CAP } from "@memindex/engine";
 import { parseQCommand } from "../src/args.ts";
 import { capRows, type Frame, RECIPE_FRAMES } from "../src/caps.ts";
 
@@ -94,8 +94,10 @@ describe("turn lists (thread, thread-page, context)", () => {
     expect(run(offered(notices[0], "Rest"))).toMatchObject({ args: { from: String(TURN_BODY_CAP) } });
   });
 
-  test("thread-page reports the full length from `chars` when its SQL already cut the body", () => {
-    const { notices } = capRows([{ ord: 0, role: "user", chars: 9000, body: "y".repeat(TURN_BODY_CAP) }], {
+  test("thread-page reports the full length from `chars` when its SQL already cut the body at 1,000", () => {
+    expect(findRecipe("thread-page").sql).toContain("length(COALESCE(prose, body)) AS chars");
+    expect(findRecipe("thread-page").sql).toContain("substr(COALESCE(prose, body), 1, 1000) AS body");
+    const { notices } = capRows([{ ord: 0, role: "user", chars: 9000, body: "y".repeat(1000) }], {
       kind: "turns",
       recipe: "thread-page",
       item: "cursor:abc",
@@ -103,7 +105,7 @@ describe("turn lists (thread, thread-page, context)", () => {
       pageArgs: {},
     });
     expect(notices).toEqual([
-      "Turn 0 truncated: 2,000 of 9,000 chars shown. Rest: memindex q turn cursor:abc --param ord=0 --param from=2000 --json",
+      "Turn 0 truncated: 1,000 of 9,000 chars shown. Rest: memindex q turn cursor:abc --param ord=0 --param from=1000 --json",
     ]);
   });
 
@@ -224,6 +226,24 @@ describe("search results", () => {
       frame({ modeGiven: true, search: { ...search, mode: "keyword" } }),
     );
     expect(run(offered(notices[0], "Next")).search?.mode).toBe("keyword");
+  });
+
+  test("a search inside one item offers its next moments inside the same item", () => {
+    const { notices } = capRows(
+      [hit(1, 30)],
+      frame({
+        recipe: "search-in",
+        search: { ...search, filter: { item: "cursor:a b" } },
+        offset: 0,
+        args: { limit: "1" },
+      }),
+    );
+    expect(notices[0]).toStartWith("Showing results 1-1 of 30. Next: memindex q search-in ");
+    expect(run(offered(notices[0], "Next"))).toEqual({
+      recipe: "search-in",
+      args: { limit: "1", offset: "1" },
+      search: { text: search.text, filter: { item: "cursor:a b" } },
+    });
   });
 
   test("the last page says so; a first page that holds every result needs no notice", () => {

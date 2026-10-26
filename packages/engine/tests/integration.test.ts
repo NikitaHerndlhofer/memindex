@@ -13,6 +13,7 @@ import { migrateStore } from "@memindex/store";
 import { SQL } from "bun";
 import {
   type Archive,
+  findRecipe,
   ITEM_COLUMNS,
   loadConfig,
   openArchive,
@@ -238,7 +239,11 @@ describe("integration: fixtures → Supabase store → recipes", () => {
         try {
           await rows(
             r.search
-              ? { recipe: r.name, args: args(r), search: { text: "the", filter: {} } }
+              ? {
+                  recipe: r.name,
+                  args: args(r),
+                  search: { text: "the", filter: r.search.inItem ? { item: required.item } : {} },
+                }
               : { recipe: r.name, args: args(r) },
           );
         } catch (e) {
@@ -296,8 +301,11 @@ describe("integration: fixtures → Supabase store → recipes", () => {
       const messages = all.filter((t) => t.kind === "message");
 
       const page = await rows({ recipe: "thread-page", args: { item: key, limit: "1000" } });
-      expect(page.map((r) => [r.ord, r.kind, r.body])).toEqual(
-        messages.map((t) => [t.ord, "message", t.prose]),
+      expect(page.map((r) => [r.ord, r.kind, r.body, r.chars])).toEqual(
+        messages.map((t) => {
+          const prose = [...String(t.prose)];
+          return [t.ord, "message", prose.slice(0, 1000).join(""), prose.length];
+        }),
       );
       const everything = await rows({
         recipe: "thread-page",
@@ -309,6 +317,41 @@ describe("integration: fixtures → Supabase store → recipes", () => {
       expect(tail.length).toBeGreaterThan(0);
       for (const r of tail) expect(messages.find((t) => t.ord === r.ord)?.prose).toBe(r.body);
       expect(tail.map((r) => Number(r.ord))).toEqual(tail.map((r) => Number(r.ord)).sort((a, b) => b - a));
+    },
+  );
+
+  test.skipIf(storeNotReady)(
+    "thread-page shows 1,000 chars of a long message and its full length",
+    async () => {
+      const long = "é".repeat(1500);
+      const turns = `WITH turns AS (SELECT 'cursor:long' AS item_key, 0 AS ord, 'user' AS role, 'message' AS kind,
+                       NULL AS speaker, NULL AS at, '${long}' AS prose, '${long}' AS body)`;
+      const [row] = await rows({
+        sql: `${turns}\n${findRecipe("thread-page").sql}`,
+        params: { item: "cursor:long", from: "0", messages: "true", limit: "20" },
+      });
+      expect(row?.body).toBe("é".repeat(1000));
+      expect(Number(row?.chars)).toBe(1500);
+    },
+  );
+
+  test.skipIf(storeNotReady)(
+    "search inside one item returns only that item's moments, each with its turn ord",
+    async () => {
+      const [item] = await rows({
+        sql: "SELECT item_key FROM items WHERE kind = 'conversation' AND turn_count > 4 ORDER BY item_key LIMIT 1",
+      });
+      if (!item) throw new Error("no fixture chat with more than 4 turns");
+      const key = String(item.item_key);
+      const found = await rows({ recipe: "search-in", search: { text: "the", filter: { item: key } } });
+      expect(found.length).toBeGreaterThan(0);
+      const turns = await rows({ sql: "SELECT ord FROM turns WHERE item_key = :k", params: { k: key } });
+      for (const r of found) expect(turns.map((t) => t.ord)).toContain(r.ord);
+      const ids = await rows({
+        sql: "SELECT DISTINCT item_key FROM hits",
+        search: { text: "the", mode: "hybrid", filter: { item: key } },
+      });
+      expect(ids.map((r) => r.item_key)).toEqual([key]);
     },
   );
 

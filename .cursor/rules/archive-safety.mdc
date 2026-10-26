@@ -8,7 +8,11 @@ alwaysApply: true
 The live archive is the only copy of data its sources already deleted. Treat it as production.
 
 - The live database changes only through a release (`bun run release`, see release-route.mdc).
-  Read-only diagnostics against it are fine.
+- Evaluate retrieval on the live archive, read-only: the installed `memindex` CLI (`sql`, recipes,
+  `--search`) or SELECT/EXPLAIN. Real usage, sizes and signal come from it. Ranking changes are still
+  gated on the snapshot, because the live archive moves and contains the eval chats themselves.
+- Tests (`bun test`) run only on the Supabase test stack (`memindex-dev`, port 54422): they wipe and
+  reset it. Stop it when idle with `supabase stop` (data kept); tests need it running.
 - Dev builds (`bun apps/memindex/src/cli.ts …`) run only against the eval snapshot or a scratch
   database, never the configured store.
 - Point the CLI elsewhere per command, never by exporting:

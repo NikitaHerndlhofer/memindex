@@ -76,6 +76,18 @@ describe("memindex sql", () => {
     await expect(parseSqlCommand(["--json", "--csv"], s)).rejects.toThrow(/pick one output format/);
   });
 
+  test("--item searches inside one item; it needs --search and an item_key", async () => {
+    const r = await parseSqlCommand(["--search", "x", "--item", "cursor:3f1c"], piped("SELECT 1"));
+    expect(r.query.search?.filter).toEqual({ item: "cursor:3f1c" });
+    const s = piped("SELECT 1");
+    await expect(parseSqlCommand(["--item", "cursor:3f1c"], s)).rejects.toThrow(
+      /only apply together with --search/,
+    );
+    await expect(parseSqlCommand(["--search", "x", "--item", "3f1c"], s)).rejects.toThrow(
+      /--item: expected an item_key/,
+    );
+  });
+
   test("search-only flags without --search are an error", async () => {
     await expect(parseSqlCommand(["--mode", "keyword"], piped("SELECT 1"))).rejects.toThrow(
       /only apply together with --search/,
@@ -161,6 +173,22 @@ describe("memindex q", () => {
     expect(window(["search", "x", "--param", "offset=20", "--limit", "20"])).toBeUndefined();
     expect(window(["search", "x", "--param", "offset=40", "--limit", "20"])).toBe(61);
     expect(window(["keyword", "x", "--param", "offset=60"])).toBe(81);
+  });
+
+  test("search-in takes the item with --item; other recipes refuse it", () => {
+    expect(parseQCommand(["search-in", "who", "decided", "--item", "cursor:3f1c", "--json"])).toEqual({
+      kind: "run",
+      format: "json",
+      explain: false,
+      query: {
+        recipe: "search-in",
+        args: {},
+        search: { text: "who decided", filter: { item: "cursor:3f1c" } },
+      },
+    });
+    expect(() => parseQCommand(["thread", "cursor:3f1c", "--item", "cursor:3f1c"])).toThrow(
+      /search recipes only/,
+    );
   });
 
   test("search recipes need text", () => {

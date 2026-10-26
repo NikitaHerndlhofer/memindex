@@ -17,7 +17,11 @@ export interface Recipe {
   readonly group: "discover" | "browse" | "search" | "read" | "stats";
   readonly params: Readonly<Record<string, RecipeParam>>;
   /** Present ⇒ the recipe reads `hits`; the positional CLI text is the search text. */
-  readonly search?: { readonly defaultMode: SearchMode };
+  readonly search?: {
+    readonly defaultMode: SearchMode;
+    /** The search runs inside one item, named by --item. */
+    readonly inItem?: true;
+  };
   /**
    * Portable SQL over the view contract, `:name` params. No FTS/vector syntax, no date functions
    * (use age_days / started_day / duration_s), no ORDER BY on nullable columns (NULL order differs
@@ -28,8 +32,11 @@ export interface Recipe {
   readonly teach?: { readonly lesson: string };
 }
 
-/** Chars of a turn body that paged reads show; the rest is one `turn` read away. */
+/** Chars of a turn body that `thread`, `context` and `item-tail` show; the rest is one `turn` read away. */
 export const TURN_BODY_CAP = 2000;
+
+/** Chars of each turn body in a `thread-page`; `chars` beside it is the full length. */
+export const PAGE_BODY_CAP = 1000;
 
 /** Chars of one value that query output shows; agents size longer reads themselves with substr. */
 export const ROW_VALUE_CAP = 8000;
@@ -46,7 +53,7 @@ const subagents: RecipeParam = {
 };
 
 const SEARCH_SQL = `SELECT h.rank, h.unit, i.source, i.kind, i.started_day, i.title, i.origin, h.item_key, h.chunk_id,
-       h.snippet, h.about, h.context, h.moments, (SELECT COUNT(*) FROM hits) AS ranked
+       h.snippet, h.about, (SELECT COUNT(*) FROM hits) AS ranked
 FROM hits h JOIN items i ON i.item_key = h.item_key
 ORDER BY h.rank
 LIMIT :limit OFFSET :offset`;
@@ -216,6 +223,26 @@ LIMIT :limit`,
   searchRecipe("fuzzy", "fuzzy", "Trigram search: substrings, typos, glued identifiers (≥3 chars)"),
   searchRecipe("hybrid", "hybrid", "Keyword + semantic fused with RRF (k=60)"),
   {
+    name: "search-in",
+    summary: "The best moments inside one long chat or meeting (--item <item_key>), each with its turn `ord`",
+    group: "search",
+    params: {
+      limit: limit(10),
+      offset: {
+        type: "int",
+        summary: "moments to skip (the next page starts at offset + limit)",
+        default: "0",
+      },
+    },
+    search: { defaultMode: "hybrid", inItem: true },
+    sql: `SELECT h.rank, t.ord, t.role, t.speaker, c.kind, h.snippet, h.chunk_id, (SELECT COUNT(*) FROM hits) AS ranked
+FROM hits h
+JOIN chunks c ON c.chunk_id = h.chunk_id
+JOIN turns t ON t.item_key = h.item_key AND t.turn_key = h.turn_key
+ORDER BY h.rank
+LIMIT :limit OFFSET :offset`,
+  },
+  {
     name: "hit-turns",
     summary: "Hits with the whole turn they matched in: who said it, which chunk kind, the message itself",
     group: "search",
@@ -271,7 +298,7 @@ LIMIT :limit`,
   },
   {
     name: "thread-page",
-    summary: `One page of an item's messages from ord \`from\` (prose only), capped at ${TURN_BODY_CAP} chars (\`chars\` = full length)`,
+    summary: `One page of an item's messages from ord \`from\` (prose only), each capped at ${PAGE_BODY_CAP} chars (\`chars\` = full length)`,
     group: "read",
     params: {
       item: { type: "item_key", summary: "item key, e.g. cursor:3f1c…", required: true },
@@ -284,7 +311,7 @@ LIMIT :limit`,
       limit: limit(20),
     },
     sql: `SELECT ord, role, kind, speaker, at, length(COALESCE(prose, body)) AS chars,
-       substr(COALESCE(prose, body), 1, ${TURN_BODY_CAP}) AS body
+       substr(COALESCE(prose, body), 1, ${PAGE_BODY_CAP}) AS body
 FROM turns
 WHERE item_key = :item AND ord >= :from AND (NOT :messages OR kind = 'message')
 ORDER BY ord
