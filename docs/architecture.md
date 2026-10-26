@@ -207,6 +207,10 @@ list that everything else derives from.
   when a meeting's title or summary matched; otherwise its best moments (at most 3) come back on their
   own with the prompt that led in and the next prose reply. Recipes are compiled into the binary; the
   skill lists recipe names and the view contract.
+- Signal: `memindex.signal()` is the one registry of search weights (per item kind, per chunk kind) and the
+  age half-life. A hit's weight is its item and chunk weights times its rank weight, with its rank doubled
+  for every half-life its item started before the archive's newest item. Retuning redefines that one
+  function.
 
 ## Migrations and data updates
 

@@ -71,17 +71,28 @@ memindex q search "why did the deploy keep failing" --json      # hybrid: meanin
 memindex q keyword "ECONNRESET" --json                          # exact tokens, error strings, function names
 memindex q fuzzy "postgress" --json                             # typos and fragments of words
 memindex q search '"revoke the token family"' --json           # an exact phrase, in order
-memindex q recency-decay "embedding speed" --json               # relevance, weighted toward recent
 ```
 
 Results come back as whole chats or recordings when the whole thing is about your query, and as single
 moments (the matching exchange, with the message that led into it and the reply) when only part of it
 is. Long chats don't win just by being long.
 
+### The best evidence first
+
+A meeting outranks a chat that says the same thing, a dictation outranks a chat, and your own chats
+outrank the subagent runs they spawned. What you and the agent wrote outranks the agent's reasoning, and
+reasoning outranks its tool calls and their output. When a topic comes back months later, the newer
+discussion leads. Old results fade rather than vanish: a strong old match still beats a weak new one.
+
+```sh
+memindex q search "garden budget" --scope chats --since 30d --json      # only your agent chats, last month
+memindex q search "seed order" --scope dictations --json                # only voice notes
+```
+
 ### Scoped to what you ask for
 
 ```sh
-memindex q search "Q4 roadmap" --kind meeting --since 7d --json        # only meetings, last week
+memindex q search "Q4 roadmap" --scope meetings --since 7d --json      # only meetings, last week
 memindex q search "release process" --source cursor,claude-code --json # only agent chats
 memindex q recent --param days=1 --json                                # everything from yesterday on
 memindex q by-repo --param repo=api-gateway --json                     # one repository's chats
@@ -370,6 +381,9 @@ needs the same disk headroom as `eval-snapshot.ts`). Each run prints one line pe
 under its long-chat ceilings (share of top-5 slots on items of 300+ turns, median turns of the top 5),
 and within tolerance of the baseline: a set's nDCG@5 and nDCG@10 may drop by at most
 max(run-to-run spread, `queryFraction` / queries).
+
+Re-record the baseline after every snapshot restore: a restored vector index is rebuilt with different
+approximate neighbours, so scores move without any code change.
 
 The eval dir holds:
 - `sets/<name>.json`: one graded set. Grades run 1 to `maxGrade`; grade 2 and up count toward recall.

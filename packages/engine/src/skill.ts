@@ -1,6 +1,6 @@
 import type { SourceId } from "@memindex/model";
 import { HIT_COLUMNS } from "@memindex/store";
-import type { Params, SearchSpec } from "./query.ts";
+import { type Params, SCOPES, type SearchSpec } from "./query.ts";
 import { assertKnownParams, OUTPUT_BUDGET, type Recipe, ROW_VALUE_CAP, TURN_BODY_CAP } from "./recipes.ts";
 
 type ViewName =
@@ -326,8 +326,8 @@ ${shellBlock(intro)}
 \`--search <text>\` adds a relation named \`hits\` (ranked search results) to the query. \`:name\`
 placeholders bind \`--param name=value\`. Start from a pattern in **SQL patterns** below and adapt it.
 
-Search flags: \`--search <text>\`, \`--mode keyword|fuzzy|semantic|hybrid\`, \`--source a,b\`,
-\`--kind dictation|meeting|conversation\`, \`--since 7d|<ISO>\`, \`--limit n\`, \`--all\` (include older
+Search flags: \`--search <text>\`, \`--mode keyword|fuzzy|semantic|hybrid\`, \`--scope ${Object.keys(SCOPES).join("|")}\`,
+\`--source a,b\`, \`--kind dictation|meeting|conversation\`, \`--since 7d|<ISO>\`, \`--limit n\`, \`--all\` (include older
 versions of reprocessed recordings), \`--all-sources\`.
 A "quoted phrase" in the search text matches those words exactly and in order; wrap the whole search
 text in single quotes for the shell. Use it when ranked search misses an exact phrase.
@@ -383,8 +383,8 @@ narrow to exact tokens (function names, error strings, file paths, typos), \`sem
 and other languages.
 
 When the user names what to search, pass it as a filter rather than only putting it in the query
-text: "meetings" or "calls" → \`--kind meeting\`; "dictations" or "voice notes" → \`--kind dictation\`;
-"chats", "agent sessions" or "conversations" → \`--kind conversation\`; a tool ("in Cursor", "Claude
+text: "meetings" or "calls" → \`--scope meetings\`; "dictations" or "voice notes" → \`--scope dictations\`;
+"chats", "agent sessions" or "conversations" → \`--scope chats\`; a tool ("in Cursor", "Claude
 Code", "Super Whisper") → \`--source\`; a time ("last week", "in October", "yesterday") → \`--since\`, or a
 \`started_at\` range in SQL for a closed window. If the filtered search finds nothing, say so and
 retry without the filter before answering.
@@ -408,6 +408,7 @@ Row 3 column body truncated: 8,000 of 20,112 chars shown. Rest: select substr(bo
 - \`unit = moment\`: one exchange or passage answers it. Read \`snippet\` and \`context\` (the message that
   led in and the next reply).
 - Order by \`rank\`. \`score\` is not a relevance probability and does not compare across searches.
+- On similar matches, newer records rank first and meetings above chats; to reach an old one, search for what only it says.
 - A hit on a chunk of kind \`title\` means the whole item is about the query.
 - A recording's \`transcript\` may be an LLM summary. Quote \`transcript_raw\` for the exact words.
 - \`source_gone = 1\` means the source app deleted the item; the archive is the only copy.

@@ -80,6 +80,32 @@ describe("memindex sql", () => {
     await expect(parseSqlCommand(["--mode", "keyword"], piped("SELECT 1"))).rejects.toThrow(
       /only apply together with --search/,
     );
+    await expect(parseSqlCommand(["--scope", "chats"], piped("SELECT 1"))).rejects.toThrow(
+      /only apply together with --search/,
+    );
+  });
+
+  test("--scope sets the kind filter and narrows an explicit --kind; all adds none", async () => {
+    const filterOf = async (...flags: string[]) => {
+      const r = await parseSqlCommand(["--search", "x", ...flags], piped("SELECT 1"));
+      return r.query.search?.filter;
+    };
+    expect(await filterOf("--scope", "chats")).toEqual({ kind: ["conversation"] });
+    expect(await filterOf("--scope", "meetings")).toEqual({ kind: ["meeting"] });
+    expect(await filterOf("--scope", "dictations", "--since", "7d")).toEqual({
+      kind: ["dictation"],
+      since: "7d",
+    });
+    expect(await filterOf("--scope", "all")).toEqual({});
+    expect(await filterOf("--scope", "all", "--kind", "meeting")).toEqual({ kind: ["meeting"] });
+    expect(await filterOf("--scope", "meetings", "--kind", "meeting,dictation")).toEqual({
+      kind: ["meeting"],
+    });
+    const s = piped("SELECT 1");
+    await expect(
+      parseSqlCommand(["--search", "x", "--scope", "meetings", "--kind", "conversation"], s),
+    ).rejects.toThrow(UsageError);
+    await expect(parseSqlCommand(["--search", "x", "--scope", "notes"], s)).rejects.toThrow(/--scope/);
   });
 
   test("--param binds :name placeholders", async () => {
@@ -183,6 +209,10 @@ describe("memindex q", () => {
     ).toBe(
       "memindex sql --search 'token refresh' --mode semantic --source cursor --param limit=5 --param offset=0 <<'SQL'",
     );
+    expect(sqlOf(["search", "deploy error", "--scope", "chats", "--sql"]).split("\n")[1]).toBe(
+      "memindex sql --search 'deploy error' --mode hybrid --kind conversation --param limit=20 --param offset=0 <<'SQL'",
+    );
+    expect(() => parseQCommand(["recent", "--scope", "chats"])).toThrow(/search recipes only/);
     expect(sqlOf(["rank-items", "--sql"]).split("\n")[1]).toBe(
       `memindex sql --search "<text>" --mode semantic --param limit=10 <<'SQL'`,
     );

@@ -263,21 +263,6 @@ LIMIT :limit`,
     teach: { lesson: "Rank whole items: GROUP BY the item over `hits`, order by its best chunk's rank." },
   },
   {
-    name: "recency-decay",
-    summary: "Relevance × recency: prefer recent hits (score / (1 + age_days / half_life))",
-    group: "search",
-    params: {
-      half_life: { type: "int", summary: "days until relevance halves", default: "30" },
-      limit: limit(10),
-    },
-    search: { defaultMode: "semantic" },
-    sql: `SELECT h.score / (1.0 + i.age_days / :half_life) AS decayed, h.rank, i.item_key, i.source,
-       i.started_day, i.title, h.chunk_id, h.snippet
-FROM hits h JOIN items i ON i.item_key = h.item_key
-ORDER BY decayed DESC, h.rank
-LIMIT :limit`,
-  },
-  {
     name: "thread",
     summary: "All turns of one item, in order (the whole chat / recording)",
     group: "read",

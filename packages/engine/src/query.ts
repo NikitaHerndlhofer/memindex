@@ -9,6 +9,26 @@ export type SearchMode = "keyword" | "fuzzy" | "semantic" | "hybrid";
 export const SEARCH_MODES: readonly SearchMode[] = ["keyword", "fuzzy", "semantic", "hybrid"];
 export const ITEM_KINDS: readonly ItemKind[] = ["dictation", "meeting", "conversation"];
 
+/** Named search presets: the item kinds each searches; `all` adds no kind filter. */
+export const SCOPES = {
+  all: null,
+  meetings: ["meeting"],
+  chats: ["conversation"],
+  dictations: ["dictation"],
+} as const satisfies Readonly<Record<string, readonly ItemKind[] | null>>;
+export type Scope = keyof typeof SCOPES;
+
+/** The kind filter a scope and an explicit `--kind` list leave: their intersection. Throws when it is empty. */
+export function scopedKinds(scope: Scope, kind?: readonly ItemKind[]): readonly ItemKind[] | undefined {
+  const preset: readonly ItemKind[] | null = SCOPES[scope];
+  if (!preset) return kind;
+  if (!kind) return preset;
+  const both = preset.filter((k) => kind.includes(k));
+  if (both.length === 0)
+    throw new Error(`scope ${scope} searches ${preset.join(", ")}, not ${kind.join(", ")}`);
+  return both;
+}
+
 export const RRF_K = 60;
 export const DEFAULT_HIT_LIMIT = 50;
 

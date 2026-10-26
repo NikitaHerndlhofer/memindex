@@ -19,6 +19,7 @@ import {
   itemKey,
   type LocationId,
   type Part,
+  type PartKind,
   type ProducerId,
   producerId,
   type Revision,
@@ -1359,6 +1360,84 @@ export function runStoreContract(name: string, backend: () => ContractBackend): 
           }),
         );
         expect(got.map((r) => r.turn_key)).toEqual(["late", "early"]);
+      });
+
+      test("on equal matches a meeting ranks above a dictation, the user's chat and then a subagent chat", async () => {
+        const w = await writer();
+        const said = (n: number) => `osprey survey at the north pier, note ${n}`;
+        const chat = draftOf(CUR, "c-osprey", [turnOf("m", said(1))]);
+        const drafts: [SourceId, ItemDraft][] = [
+          [CUR, draftOf(CUR, "a-osprey", [turnOf("m", said(2))], { parentKey: chat.key })],
+          [CUR, chat],
+          [SW, draftOf(SW, "d-osprey", [turnOf("u", said(3))])],
+          [SW, draftOf(SW, "m-osprey", [turnOf("u", said(4))], { kind: "meeting" })],
+        ];
+        for (const [s, d] of drafts) await w.apply(writeOf(s, L1, d, rev("1")));
+        const got = await rows(
+          w.run("SELECT item_key FROM hits ORDER BY rank", {
+            hits: { via: "keyword", text: "osprey survey", filter: {}, k: 10 },
+          }),
+        );
+        expect(got.map((r) => r.item_key)).toEqual([
+          itemKey(SW, "m-osprey"),
+          itemKey(SW, "d-osprey"),
+          chat.key,
+          itemKey(CUR, "a-osprey"),
+        ]);
+      });
+
+      test("a newer chat ranks above an older one that matches a little better; the older one stays in the results", async () => {
+        const w = await writer();
+        const old = draftOf(
+          CUR,
+          "heron-old",
+          [turnOf("m", "heron feeder repair notes, heron feeder repair")],
+          {
+            startedAt: isoTime("2026-01-01T00:00:00.000Z"),
+          },
+        );
+        const recent = draftOf(CUR, "heron-new", [turnOf("m", "heron feeder repair notes")], {
+          startedAt: isoTime("2026-07-01T00:00:00.000Z"),
+        });
+        for (const d of [old, recent]) await w.apply(writeOf(CUR, L1, d, rev("1")));
+        const keyword = await w.search({ via: "keyword", text: "heron feeder repair", filter: {}, k: 10 });
+        expect(keyword.map((h) => h.itemKey)).toEqual([old.key, recent.key]);
+        const got = await rows(
+          w.run("SELECT item_key FROM hits ORDER BY rank", {
+            hits: { via: "keyword", text: "heron feeder repair", filter: {}, k: 10 },
+          }),
+        );
+        expect(got.map((r) => r.item_key)).toEqual([recent.key, old.key]);
+      });
+
+      test("on equal matches a reply ranks above the agent's thinking, and thinking above a tool call", async () => {
+        const w = await writer();
+        const chatWith = (native: string, kind: PartKind, n: number) =>
+          draftOf(CUR, native, [
+            {
+              key: turnKey("a0"),
+              role: "assistant",
+              at: null,
+              speaker: null,
+              parts: [{ kind, text: `plover nest count by the dunes, note ${n}` }],
+            },
+          ]);
+        const drafts = [
+          chatWith("p-call", "tool_call", 1),
+          chatWith("p-think", "thinking", 2),
+          chatWith("p-reply", "text", 3),
+        ];
+        for (const d of drafts) await w.apply(writeOf(CUR, L1, d, rev("1")));
+        const got = await rows(
+          w.run("SELECT item_key FROM hits ORDER BY rank", {
+            hits: { via: "keyword", text: "plover nest count", filter: {}, k: 10 },
+          }),
+        );
+        expect(got.map((r) => r.item_key)).toEqual([
+          itemKey(CUR, "p-reply"),
+          itemKey(CUR, "p-think"),
+          itemKey(CUR, "p-call"),
+        ]);
       });
 
       test("read-only, timeout, maxRows marker", async () => {

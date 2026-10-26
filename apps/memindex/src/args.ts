@@ -8,9 +8,12 @@ import {
   type Recipe,
   type RecipeRun,
   recipeCommand,
+  SCOPES,
+  type Scope,
   SEARCH_MODES,
   type SearchMode,
   type SearchSpec,
+  scopedKinds,
 } from "@memindex/engine";
 import { type ArgsDef, parseArgs } from "citty";
 import { z } from "zod";
@@ -38,6 +41,7 @@ const FILTER_ARGS = {
     type: "boolean",
     description: "Search every source, ignoring MEMINDEX_SOURCES / config defaults",
   },
+  scope: { type: "string", description: `${Object.keys(SCOPES).join(" | ")} (default all)` },
   kind: { type: "string", description: "dictation | meeting | conversation, comma-separated" },
   since: { type: "string", description: "7d | 12h | 2w | ISO date" },
   limit: { type: "string", description: "Max hits (sql) or rows (recipes)" },
@@ -84,6 +88,7 @@ const csv = (v: string) =>
 const Filters = z.object({
   mode: z.enum(SEARCH_MODES as [SearchMode, ...SearchMode[]]).optional(),
   source: z.string().transform(csv).optional(),
+  scope: z.enum(Object.keys(SCOPES) as [Scope, ...Scope[]]).optional(),
   kind: z
     .string()
     .transform(csv)
@@ -119,7 +124,13 @@ function parseFilters(args: Record<string, unknown>): Filters {
     throw new UsageError(`--${String(issue?.path[0] ?? "?")}: ${issue?.message ?? "invalid"}`);
   }
   if (r.data.source && r.data["all-sources"]) throw new UsageError("pass either --source or --all-sources");
-  return r.data;
+  if (!r.data.scope) return r.data;
+  try {
+    const kind = scopedKinds(r.data.scope, r.data.kind);
+    return { ...r.data, ...(kind ? { kind: [...kind] } : {}) };
+  } catch (e) {
+    throw new UsageError(`--scope: ${e instanceof Error ? e.message : String(e)}`);
+  }
 }
 
 function filterOf(f: Filters): SearchSpec["filter"] {
@@ -180,7 +191,7 @@ function outputFormat(args: Record<string, unknown>): OutputFormat {
   }
 }
 
-const SEARCH_ONLY = ["mode", "source", "kind", "since", "all", "all-sources", "limit"] as const;
+const SEARCH_ONLY = ["mode", "source", "scope", "kind", "since", "all", "all-sources", "limit"] as const;
 
 /** `memindex sql`: SQL comes from stdin only (quoting-safe); a positional is a usage error. */
 export async function parseSqlCommand(rawArgs: readonly string[], stdin: StdinSource): Promise<ParsedQuery> {
@@ -283,7 +294,7 @@ export function parseQCommand(rawArgs: readonly string[]): ParsedQ {
     };
   }
 
-  for (const k of ["mode", "kind", "since", "all", "all-sources"] as const) {
+  for (const k of ["mode", "scope", "kind", "since", "all", "all-sources"] as const) {
     if (filters[k] !== undefined)
       throw new UsageError(`--${k} applies to search recipes only; ${recipe.name} is not one`);
   }

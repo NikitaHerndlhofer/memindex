@@ -220,7 +220,6 @@ describe("recipes", () => {
       "rank-items",
       "reprocess-history",
       "fuzzy",
-      "recency-decay",
       "hit-turns",
       "thread-page",
       "turn",
@@ -483,6 +482,12 @@ describe("renderSkill", () => {
   test("prescribes use, with none of the build's vocabulary", () => {
     expect(md).not.toMatch(/contract|fidelity|chunker|prefix|state\.vscdb|\binstr\b|subagent-driven/i);
     expect(md).not.toMatch(/\bMATCH\b/);
+    expect(md).not.toMatch(/half[- ]life|decay|weight|signal|hidden|\d+ days/i);
+  });
+
+  test("teaches scope presets", () => {
+    expect(md).toContain("`--scope all|meetings|chats|dictations`");
+    expect(md).toContain('"meetings" or "calls" → `--scope meetings`');
   });
 
   test("teaches every bool param as true/false", () => {

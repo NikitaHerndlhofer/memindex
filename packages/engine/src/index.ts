@@ -90,9 +90,12 @@ export {
   RRF_K,
   resolveQuery,
   rrf,
+  SCOPES,
+  type Scope,
   SEARCH_MODES,
   type SearchMode,
   type SearchSpec,
+  scopedKinds,
   sqlParams,
 } from "./query.ts";
 export {
