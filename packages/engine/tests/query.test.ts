@@ -485,6 +485,13 @@ describe("renderSkill", () => {
     expect(md).not.toMatch(/\bMATCH\b/);
   });
 
+  test("teaches every bool param as true/false", () => {
+    const bools = RECIPES.flatMap((r) => Object.entries(r.params).filter(([, p]) => p.type === "bool"));
+    expect(bools.length).toBeGreaterThan(0);
+    for (const [name] of bools) expect(md).not.toMatch(new RegExp(`${name}=[01]\\b`));
+    expect(md).toContain("`--param subagents=true`");
+  });
+
   test("teaches Postgres over the views: --search for hits, strpos, LIMIT, turn windows", () => {
     expect(md).toContain("`--search <text>` adds a relation named `hits`");
     expect(md).toContain("`strpos(body, 'needle')`");

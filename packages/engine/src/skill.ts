@@ -349,7 +349,7 @@ Rules:
 - Locate text inside a body with \`strpos(body, 'needle')\` and read a window with \`substr(body, start, n)\`.
 - \`--param name\` without a value binds NULL.
 - Read what was said through \`prose\` with \`kind = 'message'\`; \`body\` adds tool calls, tool output and thinking.
-- \`recent\`, \`today\` and \`by-repo\` list only the user's own chats; \`--param subagents=1\` adds subagent chats.
+- \`recent\`, \`today\` and \`by-repo\` list only the user's own chats; \`--param subagents=true\` adds subagent chats.
 - In an item with \`parent_key\`, the first user turn is the spawning agent's brief, not the user. For what the user said, read items without \`parent_key\`.
 
 Chat search covers messages, thinking and what the agent did (terminal commands, \`edited <path>\`, \`read <path>\`),
