@@ -1,0 +1,23 @@
+---
+description: Which databases dev work may touch, and how to point the CLI at them safely
+alwaysApply: true
+---
+
+# Archive safety
+
+The live archive is the only copy of data its sources already deleted. Treat it as production.
+
+- The live database changes only through a release (`bun run release`, see release-route.mdc).
+  Read-only diagnostics against it are fine.
+- Dev builds (`bun apps/memindex/src/cli.ts …`) run only against the eval snapshot or a scratch
+  database, never the configured store.
+- Point the CLI elsewhere per command, never by exporting:
+  `MEMINDEX_STORE=postgresql://…/memindex_snapshot bun apps/memindex/src/cli.ts sql …`.
+  An exported `MEMINDEX_STORE` outlives the command, and `memindex install --yes` saves it as the
+  user's store. The release preflight refuses a set `MEMINDEX_STORE`.
+- The snapshot (`memindex_snapshot`, made by `scripts/eval-snapshot.ts`) is read-only by default. To
+  bring its schema up to date, migrate it in one session:
+  `MEMINDEX_STORE="…/memindex_snapshot?options=-c%20default_transaction_read_only%3Doff" memindex migrate`.
+- Name scratch databases `memindex_<purpose>` and drop them when done.
+- Check free disk (`df -h /`) before copying a database: keep at least 25 GB free.
+- Workers and subagents never commit, stash, reset or checkout; the coordinating agent owns git.

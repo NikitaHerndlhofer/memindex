@@ -1,0 +1,18 @@
+---
+description: Formatting, comments, tests and checks for memindex TypeScript
+globs: "**/*.ts"
+alwaysApply: false
+---
+
+# Code style
+
+- Biome formats this repo (`biome.json`, 110 columns). Run `bunx biome format --write <paths>`; never
+  let Prettier reformat files here (the workspace disables format-on-save for that reason).
+- Comments only state a constraint the code can't show. No narration, no history, no "fixed X".
+- Model the domain in data: a flag on the documented shape (e.g. `internal: true` on a column doc)
+  beats a special case in the renderer.
+- Tests assert observable behavior through the public surface: SQL results through `run()`, the
+  rendered SKILL.md, CLI output. A new behavior test must fail on the previous code; check it.
+- Before committing: `bun run typecheck`, `bunx biome check .`, `bun run lint:knip`, `bun test`.
+  Read exit codes, not just tail output: a piped `| tail` hides a failure.
+- zsh doesn't split words in variables: use a function or an array, not `CMD="psql -h …"; $CMD`.

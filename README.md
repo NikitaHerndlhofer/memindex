@@ -1,7 +1,86 @@
 # memindex
 
-One searchable archive of your dictations, meetings and agent chats. See
-[docs/architecture.md](docs/architecture.md) for the design.
+**Your coding agents forget every conversation. Your dictation app deletes old recordings. memindex keeps
+all of it, on your machine, searchable by meaning, and hands it to your agents as a skill.**
+
+memindex is a local archive of everything you dictate, record and discuss with AI coding agents. A
+background watcher captures new Super Whisper dictations and meetings, Cursor chats and Claude Code
+sessions as they happen, embeds them with a local model, and stores them in one Postgres database.
+Your agents query it with plain SQL plus hybrid search, so "what did we decide about the auth refresh
+flow?" gets answered from the actual chat where you decided it, weeks later, in a different project.
+- **One archive, every source.** Dictations, meetings (with speakers), agent chats and subagent runs,
+  including what the agent did: commands it ran, files it edited and read.
+- **The archive outlives the source.** Super Whisper prunes old recordings and chat apps lose history.
+  memindex keeps the only copy and marks what the source deleted.
+- **Search that understands questions.** Keyword, typo-tolerant and semantic search fused into one
+  ranking, with a multilingual embedding model, and long chats shown by their best and latest moments,
+  not ranked by their length.
+- **Built for agents.** It installs a skill for Cursor and Claude Code: read-only SQL over documented
+  views, ready-made query patterns, and output capped so one huge chat can't flood the context window.
+- **Local and private.** Postgres on your machine, embeddings by Ollama (`bge-m3`) on your machine.
+  Nothing leaves it.
+- **Light.** The watcher works in short low-priority slices, pauses on battery, and the database runs
+  happily with 128 MB of shared buffers.
+
+## What it looks like
+
+Ask your agent, in any chat:
+
+> What did we end up deciding about rate limiting the login endpoints?
+
+> Find the meeting last week where we talked about the Q4 roadmap and list the action items.
+
+> Which repo did I fix the flaky upload test in, and what was the cause?
+
+The agent reaches for the memindex skill and runs queries like these, which you can run yourself:
+
+```sh
+# Hybrid search across everything, best matches first
+memindex q search "rate limiting login endpoints" --json
+
+# Only meetings from the last 7 days
+memindex q search "Q4 roadmap" --kind meeting --since 7d --json
+
+# Only Cursor chats, then read the end of a long one, where the conclusion usually is
+memindex q search "flaky upload test" --source cursor --json
+memindex q item-tail cursor:3f1c… --json
+```
+
+Or with SQL. `--search` adds a ranked `hits` relation you can join to the views:
+
+```sh
+memindex sql --json --search "auth token refresh" <<'SQL'
+SELECT h.rank, i.source, i.started_day, i.title, h.snippet
+FROM hits h JOIN items i USING (item_key)
+ORDER BY h.rank
+LIMIT 10
+SQL
+```
+
+```json
+[
+  {
+    "rank": 1,
+    "source": "cursor",
+    "started_day": "2026-09-14",
+    "title": "Refresh token rotation",
+    "snippet": "…rotate the refresh token on every use and revoke the family on reuse…"
+  },
+  {
+    "rank": 2,
+    "source": "superwhisper",
+    "started_day": "2026-09-12",
+    "title": "Auth sync with Dana",
+    "snippet": "…we agreed refresh tokens should live 14 days, access tokens 15 minutes…"
+  },
+  {
+    "notice": "Showing results 1-10 of 40+. Next: memindex q search 'auth token refresh' --param offset=10 --json"
+  }
+]
+```
+
+`memindex q recipes` lists every ready-made query, and `memindex q <recipe> --sql` prints the SQL behind
+one so you can adapt it.
 
 ## Install
 
@@ -12,10 +91,9 @@ brew install nikitaherndlhofer/tap/memindex
 memindex install
 ```
 
-`memindex install` asks for a Postgres URL (see [Database](#database); no database yet? it shows the
-bundled `docker-compose.yml`), migrates it, sets up Ollama with the `bge-m3` embed model, installs the
-background watcher, agent hooks and the agent skill, then runs `memindex doctor`. Every step checks
-before it changes anything, so re-running install is safe.
+`memindex install` asks for a Postgres URL (see [Database](#database)), migrates it, sets up Ollama
+with the `bge-m3` model, installs the background watcher, agent hooks and the agent skill, then runs
+`memindex doctor`. Every step checks before it changes anything, so re-running install is safe.
 
 If you use Super Whisper, macOS asks once whether memindex may access files in your Documents folder,
 where Super Whisper keeps its recordings. Click Allow. Install waits for the answer and says so if the
@@ -30,6 +108,39 @@ A first install has the whole archive to embed. Let the watcher do it at full sp
 memindex pace full
 ```
 
+## Database
+
+memindex stores everything in one Postgres database with `pgvector` >= 0.8, `pg_trgm`, `unaccent` and
+`btree_gin`. It doesn't care where that database runs: it takes a URL, checks the extensions, and
+migrates it. It never starts a database itself. Pick whichever suits you.
+
+**Homebrew Postgres** (lightest on a Mac):
+
+```sh
+brew install postgresql@17 pgvector
+brew services start postgresql@17
+createdb memindex
+memindex install --url "postgresql://$USER@127.0.0.1:5432/memindex"
+```
+
+For a small footprint, set `shared_buffers = 128MB` and `jit = off` in
+`/opt/homebrew/var/postgresql@17/postgresql.conf`, then `brew services restart postgresql@17`. macOS
+caches the database files itself, so a larger buffer pool buys little for one person's archive.
+
+**Docker**: this repo ships a `docker-compose.yml` (pgvector/pgvector:pg17, data in a named volume,
+listening on 127.0.0.1 only, sized for an 8 GB Docker VM):
+
+```sh
+docker compose up -d
+memindex install --url postgresql://memindex:memindex@127.0.0.1:54329/memindex
+```
+
+**Supabase**: use your project's session pooler URL (port 5432).
+
+`memindex doctor` and `memindex status` show the database, its extension versions and the schema.
+Steps you turn off with `memindex install --skip-ollama`, `--skip-watch` or `--skip-hooks` show as
+SKIPPED in `memindex doctor`, which then still exits 0.
+
 ## Upgrade
 
 ```sh
@@ -39,37 +150,7 @@ memindex install
 
 `memindex install` applies new migrations, refreshes the watcher's copy of the binary and restarts the
 watcher. `memindex doctor` fails with `fix: memindex install` when the watcher still runs an older copy.
-
-If you run the bundled database, recreate its container after an upgrade whose release notes change
-`docker-compose.yml`, from the directory where you saved it (your data stays in its volume):
-
-```sh
-docker compose up -d
-```
-
-The current file sizes Postgres for Docker Desktop's default 8 GB VM: `shared_buffers=2GB`,
-`effective_cache_size=5GB`, `work_mem=32MB`, `maintenance_work_mem=512MB`, `random_page_cost=1.1`,
-`effective_io_concurrency=200`, and a 2 GB `/dev/shm`. After an upgrade that re-chunks the archive,
-`memindex pace full` clears the re-embedding backlog sooner.
-
-## Database
-
-memindex stores everything in one Postgres database with `pgvector` >= 0.8, `pg_trgm`, `unaccent`
-and `btree_gin`. Bring your own: a Supabase project (use the session pooler URL, port 5432) or any
-Postgres you run. `memindex install` asks for the URL, checks the extensions, and migrates it with
-the Supabase CLI. It never starts a database itself.
-
-To run one locally, this repo ships a `docker-compose.yml` (pgvector/pgvector:pg17, data in a named
-volume, listening on 127.0.0.1 only):
-
-```sh
-docker compose up -d
-memindex install --url postgresql://memindex:memindex@127.0.0.1:54329/memindex
-```
-
-`memindex doctor` and `memindex status` show the database, its extension versions and the schema.
-Steps you turn off with `memindex install --skip-ollama`, `--skip-watch` or `--skip-hooks` show as
-SKIPPED in `memindex doctor`, which then still exits 0.
+After an upgrade that re-chunks the archive, `memindex pace full` clears the re-embedding backlog sooner.
 
 ## Embedding pace
 
@@ -86,7 +167,29 @@ The running watcher picks the change up after its current slice. Searches stay r
 full-pace backfill: the watcher sends Ollama small requests, so a query embed waits behind a few
 chunks, not a whole batch.
 
-## Search quality gate
+## How it works
+
+- **Plugins** read each source (`packages/sources`) and map it into one content model: items (a chat, a
+  recording), turns (messages, speaker runs) and parts (text, thinking, tool calls, diffs, transcripts).
+- **Chunkers** cut turns into search units of at most 512 bge-m3 tokens. Bulk tool output stays in the
+  turn, unchunked, so search covers what was said and done, not megabytes of logs.
+- **Search runs in Postgres**: a full-text, a trigram and an HNSW vector index, fused by reciprocal rank
+  fusion, then shaped into whole items or single moments with the exchange around them.
+- **Agents read through views** (`items`, `turns`, `chunks`, `hits`, one facet view per source) in a
+  read-only transaction with a statement timeout.
+
+The design and its constraints are in [docs/architecture.md](docs/architecture.md).
+
+## Development
+
+```sh
+bun install
+bun test                # unit, contract and integration tests
+bun run typecheck && bunx biome check . && bun run lint:knip
+bun run release X.Y.Z   # the only way a change ships: tests, tag, GitHub release, tap, brew upgrade, doctor
+```
+
+### Search quality gate
 
 `scripts/search-gate.ts` scores search on every graded query set you keep, against a frozen snapshot of
 your archive, so a change to search SQL is measured on the same data each time. The queries and grades
@@ -95,7 +198,7 @@ root (or `MEMINDEX_EVAL_DIR`), and the release preflight refuses to ship if any 
 tracked. The gate exits 2 with a message if that directory is missing.
 
 ```sh
-bun scripts/eval-snapshot.ts --from postgresql://memindex:memindex@127.0.0.1:54329/memindex  # once
+bun scripts/eval-snapshot.ts --from postgresql://…/memindex     # once
 bun scripts/search-gate.ts --record-baseline                       # the current code, as the baseline
 bun scripts/search-gate.ts --candidate-bin "bun apps/memindex/src/cli.ts"   # a change, on a clone
 ```
@@ -140,3 +243,7 @@ To add a query, write it before you look at any search results for it, find cand
 `memindex sql` (title matches, keyword and semantic probes on paraphrases, not the query itself), grade
 each candidate item, and add the entry to a set. Grades added after seeing results go in with
 `"judged": "posthoc"`. Then re-record the baseline with the current code.
+
+## License
+
+MIT

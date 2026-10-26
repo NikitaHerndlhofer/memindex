@@ -12,8 +12,8 @@ The local install is dogfood: it gets changes exactly the way an end user does, 
 1. Commit to `main`.
 2. `bun run release X.Y.Z`: tests, tag, GitHub release, tap formula, `brew upgrade nikitaherndlhofer/tap/memindex`, `memindex install --yes`, `memindex doctor`.
 
-**Install route**: whatever README tells a new user (Homebrew, then `memindex install` with a Postgres
-URL, optionally the bundled `docker-compose.yml`) is what we run, from the released artifact.
+**Install route**: whatever README tells a new user (Homebrew, then `memindex install` with the URL of
+any Postgres they run) is what we run, from the released artifact.
 
 **Match the route, don't route around it.** If a change can't reach users that way, fix the route first
 (ship it in the release, have `memindex install` / `migrate` apply it, or document the user step in the
