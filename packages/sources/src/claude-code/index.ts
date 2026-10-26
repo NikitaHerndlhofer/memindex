@@ -198,6 +198,6 @@ export const claudeCode: SourcePlugin<ClaudeCodeMeta> = {
   triggers: { watch: (kit) => [root(kit)], hooks: null },
 
   skillNotes:
-    "Claude Code: one item per session (`claude-code:<sessionId>`), turns keyed by line uuid. Subagent " +
-    "sessions carry parent_key. Facets: repository (git origin of cwd), git_branch.",
+    "Claude Code: one item per session (`claude-code:<sessionId>`), turns keyed by line uuid. A subagent " +
+    "session's `parent_key` is the session that spawned it. Facets: repository (git origin of cwd), git_branch.",
 };

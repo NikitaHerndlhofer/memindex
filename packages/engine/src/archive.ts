@@ -498,7 +498,7 @@ class ArchiveImpl implements Archive {
       notes.set(s.id, [facetLine, s.skillNotes?.trim()].filter(Boolean).join("\n\n"));
     }
     const scope = this.p.config.search;
-    return renderSkill(RECIPES, notes, this.p.store.schema.contract, {
+    return renderSkill(RECIPES, notes, {
       sources: this.p.registry.all.map((s) => s.id),
       configured: scope.from === "config" ? scope.defaultSources : null,
     });

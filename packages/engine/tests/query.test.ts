@@ -424,7 +424,7 @@ describe("search scope", () => {
 const SCOPE = { sources: [sourceId("superwhisper"), sourceId("cursor")], configured: null };
 
 describe("renderSkill", () => {
-  const md = renderSkill(RECIPES, new Map([[sourceId("superwhisper"), "Dictations live here."]]), 2, SCOPE);
+  const md = renderSkill(RECIPES, new Map([[sourceId("superwhisper"), "Dictations live here."]]), SCOPE);
 
   test("frontmatter is manual-invocation only and names the SQL interface", () => {
     expect(md.startsWith("---\nname: memindex\ndescription: ")).toBe(true);
@@ -435,10 +435,10 @@ describe("renderSkill", () => {
     const sections = [...md.matchAll(/^## (.+)$/gm)].map((m) => m[1]);
     expect(sections).toEqual([
       "How to call",
-      "Scoping to plugins",
-      "View contract",
+      "Scoping to sources",
+      "Views",
       "SQL patterns",
-      "Retrieval workflow (subagent-driven)",
+      "Retrieval workflow",
       "Reading notices",
       "Reading results",
       "Source notes",
@@ -448,18 +448,33 @@ describe("renderSkill", () => {
     expect(md).not.toMatch(/^\| recipe \|/m);
   });
 
-  test("lists every view, the hits columns and the contract version", () => {
-    for (const v of VIEW_CONTRACT) expect(md).toContain(`- \`${v.name}\`: `);
+  test("lists the agent-facing views and the hits columns", () => {
+    for (const v of VIEW_CONTRACT.filter((v) => !v.internal)) expect(md).toContain(`- \`${v.name}\`: `);
     expect(md).toContain(
-      "Columns: `rank` (1 = best), `score` (1 = the best single moment; an item adds up to 0.75 for its 2nd and 3rd moments, less when they are a small share of a long item), `via` (keyword | fuzzy | semantic | hybrid), `chunk_id`",
+      "Columns: `rank` (1 = best), `score` (orders rows within this result list only; order by `rank`), `via` (keyword | fuzzy | semantic | hybrid), `chunk_id`",
     );
     expect(md).toContain("`unit` (item (the whole chat or recording) | moment (one exchange or passage))");
-    expect(md).toContain("View contract v2");
   });
 
-  test("teaches Postgres over the views: --search for hits, strpos not instr, LIMIT, turn windows", () => {
-    expect(md).toContain("relation named `hits`, present only when the call\npasses `--search <text>`");
-    expect(md).toContain("`strpos(body, 'needle')` (there is no `instr`)");
+  test("leaves out internal views, internal columns and joins to internal views", () => {
+    for (const v of VIEW_CONTRACT.filter((v) => v.internal)) expect(md).not.toContain(`\`${v.name}\``);
+    const items = md.match(/^- `items`: .*\n {2}Columns: (.*)$/m)?.[1] ?? "";
+    expect(items).toContain("`source_gone`");
+    for (const c of ["rev_hash", "producer_id", "chunker", "parser_version", "written_at"])
+      expect(items).not.toContain(`\`${c}\``);
+    const chunks = md.match(/^- `chunks`: .*\n {2}Columns: (.*)$/m)?.[1] ?? "";
+    expect(chunks).toContain("`chunk_id`");
+    for (const c of ["part_idx", "sub", "content_hash", "embed"]) expect(chunks).not.toContain(`\`${c}\` (`);
+  });
+
+  test("prescribes use, with none of the build's vocabulary", () => {
+    expect(md).not.toMatch(/contract|fidelity|chunker|prefix|state\.vscdb|\binstr\b|subagent-driven/i);
+    expect(md).not.toMatch(/\bMATCH\b/);
+  });
+
+  test("teaches Postgres over the views: --search for hits, strpos, LIMIT, turn windows", () => {
+    expect(md).toContain("`--search <text>` adds a relation named `hits`");
+    expect(md).toContain("`strpos(body, 'needle')`");
     expect(md).toContain("Always add a `LIMIT`");
     expect(md).toContain("`substr(body, :from + 1, :len)` the window");
   });
@@ -524,11 +539,11 @@ describe("renderSkill", () => {
     expect(md).not.toMatch(/--xml|<\/\w+>|<document/);
   });
 
-  test("teaches how to scope searches to plugins", () => {
-    expect(md).toContain("## Scoping to plugins");
+  test("teaches how to scope searches to sources", () => {
+    expect(md).toContain("## Scoping to sources");
     expect(md).toContain("`--all-sources`");
-    expect(md).toContain("MEMINDEX_SOURCES=cursor,claude-code");
-    expect(md).toContain("(`superwhisper`, `cursor`)");
+    expect(md).toContain("`memindex status` shows it");
+    expect(md).toContain("Sources: `superwhisper`, `cursor`.");
   });
 
   test("teaches no dialect syntax", () => {
@@ -536,9 +551,9 @@ describe("renderSkill", () => {
   });
 
   test("is deterministic", () => {
-    expect(
-      renderSkill(RECIPES, new Map([[sourceId("superwhisper"), "Dictations live here."]]), 2, SCOPE),
-    ).toBe(md);
+    expect(renderSkill(RECIPES, new Map([[sourceId("superwhisper"), "Dictations live here."]]), SCOPE)).toBe(
+      md,
+    );
   });
 
   test("Archive.skill adds facet views from the registry", async () => {

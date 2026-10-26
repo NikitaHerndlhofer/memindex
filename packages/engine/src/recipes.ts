@@ -122,7 +122,7 @@ ORDER BY started_at DESC
 LIMIT :limit`,
     teach: {
       lesson:
-        "A facet view (`superwhisper_items`, `cursor_items`, …) is `items` plus that source's columns; `age_days <= n` is the recency filter (no date functions).",
+        "A facet view (`superwhisper_items`, `cursor_items`, …) is `items` plus that source's columns; `age_days <= n` is the recency filter.",
     },
   },
   {

@@ -194,9 +194,8 @@ export const cursor: SourcePlugin<CursorMeta> = {
   },
 
   skillNotes: [
-    "Cursor: one item per composer (`cursor:<composerId>`), turns keyed by bubble id. state.vscdb (fidelity 2)",
-    "wins over the agent-transcripts JSONL mirror (fidelity 1) for the same composer; JSONL-only chats keep",
-    "their transcript. Subagent chats carry parent_key; the parent's spawning turn has a `subagent` part whose",
-    "ref is the child item. Facet: repository (git origin name of the workspace).",
+    "Cursor: one item per chat (`cursor:<composerId>`), turns keyed by bubble id. A subagent chat's",
+    "`parent_key` is the chat that spawned it, and the spawning turn has a `subagent` chunk. Facet: repository",
+    "(git origin name of the workspace).",
   ].join("\n"),
 };

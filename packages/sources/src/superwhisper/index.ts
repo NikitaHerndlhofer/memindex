@@ -226,10 +226,9 @@ export const superwhisper: SourcePlugin<SuperWhisperMeta> = {
 
   skillNotes: [
     "Super Whisper: one item per recording (`superwhisper:<recording uuid hex>`), kind `dictation` or `meeting`.",
-    "Turn `u` has two parts: `transcript` (LLM output when the mode ran one — for meetings that is the summary)",
-    "and `transcript_raw` (verbatim speech, embedded with a `[<mode> raw]` prefix, no chunks when identical to",
-    "the transcript). Diarized meetings have turn `u` with the summary (when the mode ran an LLM) and the raw",
-    "transcript, then one turn per speaker run (`s<n>`, `speaker` = the label from Super Whisper).",
-    "Reprocessings of the same audio share a supersede group; default views show only the newest.",
+    "Turn `u` holds the text: chunk kind `transcript` is the mode's LLM output (for a meeting, its summary) and",
+    "`transcript_raw` the verbatim speech; quote `transcript_raw` for exact words. A diarized meeting adds one",
+    "turn per speaker run (`s<n>`, `speaker` = the label from Super Whisper). A reprocessed recording shows",
+    "only its newest version; `items_all` has the older ones.",
   ].join("\n"),
 };

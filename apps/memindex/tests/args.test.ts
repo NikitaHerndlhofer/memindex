@@ -229,7 +229,7 @@ function shellWords(line: string): string[] {
 
 describe("the installed skill's commands", () => {
   const sources = ["superwhisper", "cursor"] as unknown as SkillScope["sources"];
-  const md = renderSkill(RECIPES, new Map(), 2, { sources, configured: null });
+  const md = renderSkill(RECIPES, new Map(), { sources, configured: null });
 
   test("every SQL pattern parses as the `memindex sql` call it shows, with --json", async () => {
     const calls = [...md.matchAll(/^memindex sql (.*) <<'SQL'\n([\s\S]*?)\nSQL$/gm)];
