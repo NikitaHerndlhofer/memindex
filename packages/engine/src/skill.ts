@@ -360,7 +360,11 @@ words. Pulling raw chunks into the main context fills the window and loses the s
 1. The main agent dispatches a **subagent** (Task tool) with the question; it does not pull raw
    chunks into the main chat.
 2. The subagent runs the \`search\` pattern with \`memindex sql --search "<question>" --json\` and reads
-   each row as described in **Reading results**. It expands what it needs with the \`context\` pattern (turns around \`chunk_id\`), \`thread-page\` (a long item from an
+   each row as described in **Reading results**. When the question asks for an outcome (what was
+   decided, how it ended, the current state) and a hit is in a long chat, it first reads the end with
+   \`memindex q item-tail <item_key> --json\`: early matches in a long chat are often superseded. For a
+   meeting it first reads the summary (\`turn\` at \`ord\` 0), whose decisions and action items come within
+   the first 10,000 characters. It expands what it needs with the \`context\` pattern (turns around \`chunk_id\`), \`thread-page\` (a long item from an
    \`ord\`) or \`turn\` (one long turn), and **summarizes** a focused answer with citations
    (\`item_key\`, turn \`ord\` ranges, \`origin\`, \`started_day\`).
 3. The main agent uses the summary; for more detail it dispatches another subagent with a narrower query.

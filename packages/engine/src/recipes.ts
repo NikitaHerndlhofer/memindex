@@ -312,6 +312,25 @@ WHERE item_key = :item AND ord = :ord`,
     },
   },
   {
+    name: "item-tail",
+    summary:
+      "The last prose turns of a long chat or meeting, newest first: where outcomes and final decisions usually are",
+    group: "read",
+    params: {
+      item: { type: "item_key", summary: "item key, e.g. cursor:3f1c…", required: true },
+      limit: limit(5),
+    },
+    sql: `SELECT t.ord, t.turn_key, t.role, t.speaker, length(t.body) AS chars, substr(t.body, 1, ${TURN_BODY_CAP}) AS body
+FROM turns t
+WHERE t.item_key = :item AND t.turn_key <> 'u'
+  AND (t.role = 'speaker'
+    OR (t.role = 'user' AND strpos(t.body, '<system_notification>') = 0)
+    OR (t.role = 'assistant' AND EXISTS (SELECT 1 FROM chunks c
+      WHERE c.item_key = t.item_key AND c.turn_key = t.turn_key AND c.kind = 'text')))
+ORDER BY t.ord DESC
+LIMIT :limit`,
+  },
+  {
     name: "context",
     summary: "Turns around a hit: the chunk's turn ± `around` neighbors",
     group: "read",
