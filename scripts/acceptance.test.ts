@@ -36,6 +36,12 @@ describe("parseOptions", () => {
     expect(() => parseOptions(["--db", DB, "--only", "schema,nope"])).toThrow(UsageError);
     expect(() => parseOptions(["--db", DB, "--ingest-env", "NOEQ"])).toThrow(UsageError);
   });
+
+  test("--bin takes a bare name from PATH and a path relative to the cwd", () => {
+    expect(parseOptions(["--db", DB, "--bin", "sh"]).bin).toBe(Bun.which("sh"));
+    expect(parseOptions(["--db", DB, "--bin", "./bin/memindex"]).bin).toBe(`${process.cwd()}/bin/memindex`);
+    expect(() => parseOptions(["--db", DB, "--bin", "no-such-binary-xyz"])).toThrow("not on PATH");
+  });
 });
 
 describe("verdicts", () => {

@@ -93,9 +93,14 @@ export function parseOptions(argv: readonly string[]): Options {
     if (unknown.length)
       throw new UsageError(`--only: unknown clause ${unknown.join(", ")}; known: ${CLAUSE_IDS.join(", ")}`);
   }
+  let bin: string | null = null;
+  if (values.bin) {
+    bin = values.bin.includes("/") ? resolve(values.bin) : Bun.which(values.bin);
+    if (!bin) throw new UsageError(`--bin: ${values.bin} is not on PATH`);
+  }
   return {
     db: values.db,
-    bin: values.bin ? resolve(values.bin) : null,
+    bin,
     embedSample,
     ingestEnv,
     only,
