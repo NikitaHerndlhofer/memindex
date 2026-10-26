@@ -295,15 +295,15 @@ describe("render", () => {
     expect((await capture("csv")).s).toBe('a,b,c\n1,"x,y",\n2,"say ""hi""\nnext",z\n');
   });
 
-  test("table aligns columns and flattens newlines", async () => {
-    const { s } = await capture("table");
-    expect(s.split("\n")).toEqual([
-      "a  b              c",
-      "-  -------------  -",
-      "1  x,y",
-      '2  say "hi" next  z',
-      "",
+  test("table aligns single-line values in columns; a value with a line break prints every row as a record", async () => {
+    const grid = await capture("table", [
+      { a: 1, b: "x,y", c: null },
+      { a: 2, b: 'say "hi"', c: "z" },
     ]);
+    expect(grid.s.split("\n")).toEqual(["a  b         c", "-  --------  -", "1  x,y", '2  say "hi"  z', ""]);
+    expect((await capture("table")).s).toBe(
+      `-[ row 1 ]\na  1\nb  x,y\nc\n\n-[ row 2 ]\na  2\nb  say "hi"\n   next\nc  z\n`,
+    );
     expect((await capture("table", [])).s).toBe("(no rows)\n");
   });
 
@@ -340,15 +340,29 @@ describe("render", () => {
       expect(JSON.parse((await withNotices("json", rows, [])).s)).toEqual(rows);
     });
 
-    test("table prints each sentence under the table, and says when it cut cells for display", async () => {
-      const long = [{ a: 1, b: "w".repeat(300) }];
-      const lines = (await withNotices("table", long)).s.trimEnd().split("\n");
-      expect(lines.slice(-3)).toEqual([
-        "1 cell is cut to 120 chars for display (ends in …). Full values: rerun with --json.",
-        ...notices,
-      ]);
+    test("table prints each sentence under the table", async () => {
+      const lines = (await withNotices("table")).s.trimEnd().split("\n");
+      expect(lines.slice(-2)).toEqual([...notices]);
       expect((await withNotices("table", rows, [])).s).toBe((await capture("table")).s);
       expect((await withNotices("table", [])).s).toBe(`(no rows)\n${notices.join("\n")}\n`);
+    });
+
+    test("table never shortens a value: long or multi-line values print one full record per row", async () => {
+      const long = "w".repeat(300);
+      const s = (
+        await withNotices(
+          "table",
+          [
+            { a: 1, body: long },
+            { a: 2, body: "first\nsecond" },
+          ],
+          [],
+        )
+      ).s;
+      expect(s).toBe(
+        `-[ row 1 ]\na     1\nbody  ${long}\n\n-[ row 2 ]\na     2\nbody  first\n      second\n`,
+      );
+      expect(s).not.toContain("…");
     });
 
     test("csv stays plain data", async () => {

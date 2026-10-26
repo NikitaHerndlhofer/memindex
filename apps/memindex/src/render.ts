@@ -4,7 +4,8 @@ type Cell = string | number | null;
 export type Row = Readonly<Record<string, Cell>>;
 type Write = (s: string) => void;
 
-const MAX_CELL = 120;
+/** Widest value an aligned table holds; past it every row is printed as a record instead. */
+const GRID_CELL = 120;
 
 export function formatFrom(flags: {
   readonly json?: boolean;
@@ -22,7 +23,7 @@ export function formatFrom(flags: {
  *
  * `notices` (sentences saying what output caps cut) go where a reader of that format looks: JSON
  * ends with one `{"notice": …}` element, a table prints them under its rows. CSV stays plain data.
- * Without notices, a table says nothing about the cells it shortens for display.
+ * No format shortens a value: a table whose values don't fit an aligned grid prints one record per row.
  */
 export async function render(
   rows: AsyncIterable<Row>,
@@ -73,12 +74,8 @@ async function renderCsv(rows: AsyncIterable<Row>, write: Write): Promise<number
   return n;
 }
 
-const flat = (v: Cell) => (v === null ? "" : String(v).replace(/\s+/g, " "));
-
-function tableCell(v: Cell): string {
-  const s = flat(v);
-  return s.length > MAX_CELL ? `${s.slice(0, MAX_CELL - 1)}…` : s;
-}
+const text = (v: Cell) => (v === null ? "" : String(v));
+const fitsGrid = (v: Cell) => !/[\r\n]/.test(text(v)) && text(v).length <= GRID_CELL;
 
 async function renderTable(
   rows: AsyncIterable<Row>,
@@ -87,22 +84,24 @@ async function renderTable(
 ): Promise<number> {
   const buffered: Row[] = [];
   for await (const row of rows) buffered.push(row);
-  const first = buffered[0];
-  const footer = (cut: number) => {
-    if (notices === null) return;
-    if (cut > 0)
-      write(
-        `${cut} ${cut === 1 ? "cell is" : "cells are"} cut to ${MAX_CELL} chars for display (ends in …). Full values: rerun with --json.\n`,
-      );
-    for (const n of notices) write(`${n}\n`);
+  const footer = () => {
+    for (const n of notices ?? []) write(`${n}\n`);
   };
+  const first = buffered[0];
   if (!first) {
     write("(no rows)\n");
-    footer(0);
+    footer();
     return 0;
   }
   const cols = Object.keys(first);
-  const cells = buffered.map((r) => cols.map((c) => tableCell(r[c] ?? null)));
+  if (buffered.every((r) => cols.every((c) => fitsGrid(r[c] ?? null)))) writeGrid(buffered, cols, write);
+  else writeRecords(buffered, cols, write);
+  footer();
+  return buffered.length;
+}
+
+function writeGrid(rows: readonly Row[], cols: readonly string[], write: Write): void {
+  const cells = rows.map((r) => cols.map((c) => text(r[c] ?? null)));
   const widths = cols.map((c, i) => Math.max(c.length, ...cells.map((r) => (r[i] ?? "").length)));
   const line = (vals: readonly string[]) =>
     `${vals
@@ -112,8 +111,19 @@ async function renderTable(
   write(line(cols));
   write(line(widths.map((w) => "-".repeat(w))));
   for (const r of cells) write(line(r));
-  footer(buffered.reduce((n, r) => n + cols.filter((c) => flat(r[c] ?? null).length > MAX_CELL).length, 0));
-  return buffered.length;
+}
+
+/** psql's expanded layout: a header per row, then `column  value`, continuation lines indented under the value. */
+function writeRecords(rows: readonly Row[], cols: readonly string[], write: Write): void {
+  const width = Math.max(...cols.map((c) => c.length));
+  rows.forEach((r, i) => {
+    write(`${i === 0 ? "" : "\n"}-[ row ${i + 1} ]${"-".repeat(Math.max(0, width - 4))}\n`);
+    for (const c of cols) {
+      const [head = "", ...rest] = text(r[c] ?? null).split(/\r?\n/);
+      write(`${`${c.padEnd(width)}  ${head}`.trimEnd()}\n`);
+      for (const l of rest) write(`${`${" ".repeat(width + 2)}${l}`.trimEnd()}\n`);
+    }
+  });
 }
 
 /** Plain arrays rendered through the same path (status, recipes, reports). */
