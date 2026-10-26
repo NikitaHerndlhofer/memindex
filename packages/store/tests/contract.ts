@@ -1296,6 +1296,25 @@ export function runStoreContract(name: string, backend: () => ContractBackend): 
         expect(Number(got[0]?.score)).toBeGreaterThan(Number(got[1]?.score));
       });
 
+      test("in a long chat the latest close match leads, though an earlier one matches a bit better", async () => {
+        const w = await writer();
+        const filler = Array.from({ length: 60 }, (_, i) => turnOf(`f${i}`, `unrelated note number ${i}`));
+        const chat = draftOf(CUR, "evolving", [
+          turnOf("early", "heron plan heron plan, first draft"),
+          ...filler,
+          turnOf("late", "heron plan settled: ship it"),
+        ]);
+        await w.apply(writeOf(CUR, L1, chat, rev("1")));
+
+        const got = await rows(
+          w.run("SELECT turn_key FROM hits WHERE item_key = :k ORDER BY rank", {
+            params: { k: chat.key },
+            hits: { via: "keyword", text: "heron plan", filter: {}, k: 10 },
+          }),
+        );
+        expect(got.map((r) => r.turn_key)).toEqual(["late", "early"]);
+      });
+
       test("read-only, timeout, maxRows marker", async () => {
         const w = await writer();
         await w.apply(writeOf(SW, L1, draftOf(SW, "ro", [turnOf("u", "x")]), rev("1")));
