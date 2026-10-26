@@ -207,6 +207,7 @@ export interface RecipeRun {
     readonly mode?: SearchSpec["mode"];
     readonly filter?: SearchSpec["filter"];
   };
+  readonly json?: boolean;
 }
 
 /**
@@ -216,7 +217,7 @@ export interface RecipeRun {
 export function recipeCommand(recipe: Recipe, run: RecipeRun = {}): string {
   const args = run.args ?? {};
   assertKnownParams(recipe, args);
-  const flags: string[] = [];
+  const flags: string[] = run.json ? ["--json"] : [];
   if (recipe.search) {
     const f = run.search?.filter ?? {};
     flags.push("--search", run.search?.text ? shellQuote(run.search.text) : '"<text>"');
@@ -237,29 +238,15 @@ export function recipeCommand(recipe: Recipe, run: RecipeRun = {}): string {
   return `memindex sql ${flags.join(" ")} <<'SQL'\n${recipe.sql}\nSQL`;
 }
 
+const shellBlock = (r: Recipe) => `\`\`\`sh\n${recipeCommand(r, { json: true })}\n\`\`\``;
+
 function sqlPatterns(recipes: readonly Recipe[]): string {
   return recipes
-    .flatMap((r) =>
-      r.teach ? [`**${code(r.name)}**: ${r.teach.lesson}\n\n\`\`\`sh\n${recipeCommand(r)}\n\`\`\`\n`] : [],
-    )
+    .flatMap((r) => (r.teach ? [`**${code(r.name)}**: ${r.teach.lesson}\n\n${shellBlock(r)}\n`] : []))
     .join("\n");
 }
 
-const GROUP_TITLES: Readonly<Record<Recipe["group"], string>> = {
-  discover: "Discover",
-  browse: "Browse",
-  search: "Search (positional text required)",
-  read: "Read / expand",
-  stats: "Stats",
-};
-
-function recipeRow(r: Recipe): string {
-  const params = Object.entries(r.params)
-    .map(([k, p]) => (p.required ? `${k}` : `${k}${p.default !== undefined ? `=${p.default}` : "?"}`))
-    .join(", ");
-  const mode = r.search ? ` (default mode: ${r.search.defaultMode})` : "";
-  return `| \`${r.name}\` | ${params || "—"} | ${r.summary}${mode} |`;
-}
+const INTRO_RECIPE = "sources";
 
 export interface SkillScope {
   readonly sources: readonly SourceId[];
@@ -295,14 +282,8 @@ export function renderSkill(
   contract: number,
   scope: SkillScope,
 ): string {
-  const groups = (Object.keys(GROUP_TITLES) as Recipe["group"][])
-    .map((g) => {
-      const rows = recipes.filter((r) => r.group === g);
-      if (rows.length === 0) return "";
-      return `### ${GROUP_TITLES[g]}\n\n| recipe | params | what |\n| --- | --- | --- |\n${rows.map(recipeRow).join("\n")}\n`;
-    })
-    .filter(Boolean)
-    .join("\n");
+  const intro = recipes.find((r) => r.name === INTRO_RECIPE);
+  if (!intro) throw new Error(`renderSkill: recipe ${INTRO_RECIPE} is missing`);
   const views = VIEW_CONTRACT.map(viewEntry).join("\n");
   const notes = [...sourceNotes.entries()]
     .sort(([a], [b]) => (a < b ? -1 : 1))
@@ -311,40 +292,36 @@ export function renderSkill(
 
   return `---
 name: memindex
-description: Query the user's local memindex archive — Super Whisper dictations and meetings plus agent chats (Cursor, Claude Code, …) — via named recipes and read-only SQL.
+description: Query the user's local memindex archive — Super Whisper dictations and meetings plus agent chats (Cursor, Claude Code, …) — via read-only SQL over documented views.
 disable-model-invocation: true
 ---
 
 # memindex
 
 One archive of everything the user dictated, recorded and discussed with coding agents.
-Read-only from here: \`memindex q\` and \`memindex sql\` never write. View contract v${contract}.
+Read-only from here: \`memindex sql\` never writes. View contract v${contract}.
 
 ## How to call
 
-\`\`\`sh
-memindex q recipes                                   # list recipes and params
-memindex q recent --param days=7 --param source=cursor
-memindex q search "auth token refresh bug" --source cursor --since 14d --limit 20 --json
-memindex q search "auth token refresh bug" --param offset=20 --json   # the next 20 results
-memindex q keyword '"invalid_grant"' --json          # double quotes inside: that exact phrase
-memindex q thread-page cursor:3f1c… --param from=40  # positional fills the first required param
-memindex q turn cursor:3f1c… --param ord=41 --param from=2000   # one turn, a char window at a time
-memindex q context --param chunk=<chunk_id> --param around=3
-memindex q rank-items "auth bug" --sql              # print the recipe as a runnable \`memindex sql\` command
-\`\`\`
+Query with read-only SQL (Postgres) over the views below. The SQL reads from **stdin** (quoted
+heredoc, so nothing is shell-expanded). Add \`--json\` to every call (one array, best for agents).
 
-Custom SQL reads from **stdin** (quoted heredoc, so nothing is shell-expanded). Search runs inside
-\`memindex\` and reaches SQL as a relation named \`hits\`. Start from a recipe's SQL (**SQL patterns**
-below, or \`memindex q <recipe> --sql\`) and adapt it.
+${shellBlock(intro)}
 
-Search flags (\`q\` and \`sql\`): \`--search <text>\` (sql only; for \`q\` the positional is the text),
-\`--mode keyword|fuzzy|semantic|hybrid\`, \`--source a,b\`, \`--kind dictation|meeting|conversation\`,
-\`--since 7d|<ISO>\`, \`--limit n\`, \`--all\` (include superseded), \`--all-sources\`; search recipes page
-with \`--param offset=n\`. Output: \`--json\` (one array, best for agents), \`--csv\`, \`--table\` (default).
+Search runs inside \`memindex\` and reaches SQL as a relation named \`hits\`, present only when the call
+passes \`--search <text>\`. \`:name\` placeholders bind \`--param name=value\`. Start from a pattern in
+**SQL patterns** below and adapt it.
+
+Search flags: \`--search <text>\`, \`--mode keyword|fuzzy|semantic|hybrid\`, \`--source a,b\`,
+\`--kind dictation|meeting|conversation\`, \`--since 7d|<ISO>\`, \`--limit n\`, \`--all\` (include
+superseded), \`--all-sources\`. Output: \`--json\` (one array, best for agents), \`--csv\`, \`--table\` (default).
 A query with a "quoted phrase" matches those words exactly, in that order (case, punctuation and
 spacing aside; no stemming), in \`keyword\` mode and in hybrid's keyword list: wrap it in single quotes
 for the shell. Use it instead of \`ILIKE\` when ranked search misses an exact phrase.
+
+More starting points: every named recipe is SQL, and \`memindex q <recipe> --sql\` prints it as a
+runnable \`memindex sql\` command (\`memindex q recipes\` lists their params), for example
+\`memindex q turn cursor:3f1c… --param ord=41 --sql\`. Recipes: ${recipes.map((r) => code(r.name)).join(", ")}.
 
 ${scopeSection(scope)}
 ## View contract
@@ -357,17 +334,15 @@ FTS \`MATCH\`, no vector functions or literals (use \`--search\`); \`:name\` pla
 The SQL is Postgres: find a substring's position with \`strpos(body, 'needle')\` (there is no \`instr\`) and read a window
 with \`substr(body, start, n)\`.
 Find text with \`--search … --mode keyword|fuzzy\` (indexed), never \`text ILIKE '%…%'\`: that scans every chunk and
-hits the statement timeout on a large archive. Join \`hits\` to the views and aggregate in SQL instead.Chat search covers messages, thinking and what the agent did (terminal commands, \`edited <path>\`, \`read <path>\`),
+hits the statement timeout on a large archive. Join \`hits\` to the views and aggregate in SQL instead.
+Chat search covers messages, thinking and what the agent did (terminal commands, \`edited <path>\`, \`read <path>\`),
 not bulk tool output: terminal output, file contents, page snapshots and search listings live only in
 \`turns.body\`. Find the moment with \`--search\`, then read that turn's body.
 
-## Recipes
-
-${groups}
 ## SQL patterns
 
-Recipes come first; when none fits, adapt one of these. Each is a recipe's exact SQL as the
-\`memindex sql\` command that runs it (fill the \`<…>\` placeholders).
+Start from one of these and adapt it. Each is a recipe's exact SQL as the \`memindex sql\`
+command that runs it (fill the \`<…>\` placeholders).
 
 ${sqlPatterns(recipes)}
 ## Retrieval workflow (subagent-driven)
@@ -377,11 +352,11 @@ words. Pulling raw chunks into the main context fills the window and loses the s
 
 1. The main agent dispatches a **subagent** (Task tool) with the question; it does not pull raw
    chunks into the main chat.
-2. The subagent runs \`memindex q search "<question>" --json\`. Each row is an \`item\` (the whole chat
+2. The subagent runs the \`search\` pattern with \`memindex sql --search "<question>" --json\`. Each row is an \`item\` (the whole chat
    or recording is the answer: read \`about\` and its \`moments\`) or a \`moment\` (one exchange: read
    \`snippet\` and \`context\`, the prompt that led in and the next prose reply). It expands what it
-   needs with \`context\` (turns around \`chunk_id\`), \`thread-page\` (a long item from an \`ord\`),
-   \`turn\` (one long turn) or \`thread\`, and **summarizes** a focused answer with citations
+   needs with the \`context\` pattern (turns around \`chunk_id\`), \`thread-page\` (a long item from an
+   \`ord\`) or \`turn\` (one long turn), and **summarizes** a focused answer with citations
    (\`item_key\`, turn \`ord\` ranges, \`origin\`, \`started_day\`).
 3. The main agent uses the summary; for more detail it dispatches another subagent with a narrower query.
 

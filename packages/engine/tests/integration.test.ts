@@ -173,13 +173,12 @@ describe("integration: fixtures → Supabase store → recipes", () => {
         chunk_id: String(anyChunk?.chunk_id),
         item_key: String(anyChunk?.item_key),
         mode: String(anyMode?.mode),
+        ord: "0",
       };
-      const commands = [
-        ...live()
-          .skill()
-          .matchAll(/^memindex sql (.*) <<'SQL'\n([\s\S]*?)\nSQL$/gm),
-      ];
-      expect(commands.length).toBe(RECIPES.filter((r) => r.teach).length);
+      const skill = live().skill();
+      const commands = [...skill.matchAll(/^memindex sql (.*) <<'SQL'\n([\s\S]*?)\nSQL$/gm)];
+      expect(commands.length).toBe(skill.split("<<'SQL'").length - 1);
+      expect(commands.length).toBeGreaterThan(RECIPES.filter((r) => r.teach).length);
       const failures: string[] = [];
       for (const [, flags = "", sql = ""] of commands) {
         const params: Record<string, string | null> = {};

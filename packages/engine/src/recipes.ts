@@ -12,7 +12,7 @@ export interface RecipeParam {
 
 export interface Recipe {
   readonly name: string;
-  /** One line, rendered into SKILL.md and `memindex q recipes`. */
+  /** One line, rendered by `memindex q recipes`. */
   readonly summary: string;
   readonly group: "discover" | "browse" | "search" | "read" | "stats";
   readonly params: Readonly<Record<string, RecipeParam>>;
@@ -62,15 +62,16 @@ const searchRecipe = (name: string, mode: SearchMode, summary: string, teach?: R
   ...(teach ? { teach } : {}),
 });
 
-/** THE recipe list. SKILL.md's recipe table, `memindex q recipes` and the lint/integration tests derive from it. */
+/** THE recipe list. SKILL.md's SQL patterns and recipe names, `memindex q recipes` and the lint/integration tests derive from it. */
 export const RECIPES: readonly Recipe[] = [
   {
     name: "sources",
     summary: "Which sources and kinds are archived, with counts and latest activity",
     group: "discover",
-    params: {},
-    sql: `SELECT source, kind, COUNT(*) AS items, MAX(started_at) AS latest
-FROM items GROUP BY source, kind ORDER BY items DESC`,
+    params: { limit: limit(20) },
+    sql: `SELECT source, kind, COUNT(*) AS items, MAX(started_day) AS latest
+FROM items GROUP BY source, kind ORDER BY items DESC
+LIMIT :limit`,
   },
   {
     name: "modes",
@@ -305,6 +306,10 @@ LIMIT :limit`,
     sql: `SELECT ord, turn_key, role, speaker, at, length(body) AS chars, substr(body, :from + 1, :len) AS body
 FROM turns
 WHERE item_key = :item AND ord = :ord`,
+    teach: {
+      lesson:
+        "Read one long turn a window at a time: `length(body)` is the full size, `substr(body, :from + 1, :len)` the window.",
+    },
   },
   {
     name: "context",

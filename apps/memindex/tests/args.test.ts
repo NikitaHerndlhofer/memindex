@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { findRecipe, RECIPES } from "@memindex/engine";
+import { findRecipe, RECIPES, renderSkill, type SkillScope } from "@memindex/engine";
 import { parseParams, parseQCommand, parseSqlCommand } from "../src/args.ts";
 import { UsageError } from "../src/errors.ts";
 import type { StdinSource } from "../src/stdin.ts";
@@ -216,5 +216,59 @@ describe("memindex sql --param", () => {
     await expect(parseSqlCommand(["--param", "--json"], piped("SELECT 1"))).rejects.toThrow(
       /--param expects/,
     );
+  });
+});
+
+/** Shell words of one command line: bare, "double" and 'single' quoted (including the '\'' idiom). */
+function shellWords(line: string): string[] {
+  const words: string[] = [];
+  for (const [word = ""] of line.matchAll(/(?:[^\s'"\\]+|\\.|'[^']*'|"[^"]*")+/g))
+    words.push(word.replace(/'([^']*)'|"([^"]*)"|\\(.)/g, (_, sq, dq, esc) => sq ?? dq ?? esc));
+  return words;
+}
+
+describe("the installed skill's commands", () => {
+  const sources = ["superwhisper", "cursor"] as unknown as SkillScope["sources"];
+  const md = renderSkill(RECIPES, new Map(), 2, { sources, configured: null });
+
+  test("every SQL pattern parses as the `memindex sql` call it shows, with --json", async () => {
+    const calls = [...md.matchAll(/^memindex sql (.*) <<'SQL'\n([\s\S]*?)\nSQL$/gm)];
+    expect(calls.length).toBe(md.split("<<'SQL'").length - 1);
+    for (const [, flags = "", sql = ""] of calls) {
+      const parsed = await parseSqlCommand(shellWords(flags), piped(sql));
+      expect({ flags, format: parsed.format, query: parsed.query }).toMatchObject({
+        flags,
+        format: "json",
+        query: { sql },
+      });
+      expect(Boolean(parsed.query.search)).toBe(flags.includes("--search"));
+    }
+  });
+
+  test("every concrete `memindex q` command it shows parses", () => {
+    const shown = [
+      ...[...md.matchAll(/`(memindex q [^`<]+)`/g)].map((m) => m[1] ?? ""),
+      ...[...md.matchAll(/(?:Rest|Next): (memindex q .+)$/gm)].map((m) => m[1] ?? ""),
+    ];
+    expect(shown.length).toBeGreaterThanOrEqual(3);
+    for (const cmd of shown) expect(() => parseQCommand(shellWords(cmd).slice(2))).not.toThrow();
+  });
+
+  test("commands are split into words the way the shell splits them", () => {
+    expect(shellWords("memindex q search 'auth refresh' --param offset=20 --json")).toEqual([
+      "memindex",
+      "q",
+      "search",
+      "auth refresh",
+      "--param",
+      "offset=20",
+      "--json",
+    ]);
+    expect(shellWords(`--search 'bob'\\''s bug' --param x="a b"`)).toEqual([
+      "--search",
+      "bob's bug",
+      "--param",
+      "x=a b",
+    ]);
   });
 });

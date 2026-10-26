@@ -228,6 +228,9 @@ describe("recipeCommand", () => {
     expect(recipeCommand(findRecipe("mode-recent")).split("\n")[0]).toBe(
       "memindex sql --param mode=<mode> --param days=7 --param limit=50 <<'SQL'",
     );
+    expect(recipeCommand(findRecipe("mode-recent"), { json: true }).split("\n")[0]).toBe(
+      "memindex sql --json --param mode=<mode> --param days=7 --param limit=50 <<'SQL'",
+    );
   });
 
   test("search recipes carry text, mode and every search filter; values are shell-quoted", () => {
@@ -423,13 +426,29 @@ const SCOPE = { sources: [sourceId("superwhisper"), sourceId("cursor")], configu
 describe("renderSkill", () => {
   const md = renderSkill(RECIPES, new Map([[sourceId("superwhisper"), "Dictations live here."]]), 2, SCOPE);
 
-  test("frontmatter is manual-invocation only", () => {
+  test("frontmatter is manual-invocation only and names the SQL interface", () => {
     expect(md.startsWith("---\nname: memindex\ndescription: ")).toBe(true);
-    expect(md).toContain("\ndisable-model-invocation: true\n---\n");
+    expect(md).toContain("via read-only SQL over documented views.\ndisable-model-invocation: true\n---\n");
   });
 
-  test("lists every recipe, every view, the hits columns and the contract version", () => {
-    for (const r of RECIPES) expect(md).toContain(`| \`${r.name}\` |`);
+  test("SQL-first sections, in order; recipes only as a list of starting points", () => {
+    const sections = [...md.matchAll(/^## (.+)$/gm)].map((m) => m[1]);
+    expect(sections).toEqual([
+      "How to call",
+      "Scoping to plugins",
+      "View contract",
+      "SQL patterns",
+      "Retrieval workflow (subagent-driven)",
+      "Reading notices",
+      "Reading results",
+      "Source notes",
+    ]);
+    expect(md).toContain("`memindex q <recipe> --sql`");
+    expect(md).toContain(`Recipes: ${RECIPES.map((r) => `\`${r.name}\``).join(", ")}.`);
+    expect(md).not.toMatch(/^\| recipe \|/m);
+  });
+
+  test("lists every view, the hits columns and the contract version", () => {
     for (const v of VIEW_CONTRACT) expect(md).toContain(`- \`${v.name}\`: `);
     expect(md).toContain(
       "Columns: `rank` (1 = best), `score` (1 = the best single moment; an item adds up to 0.75 for its 2nd and 3rd moments), `via` (keyword | fuzzy | semantic | hybrid), `chunk_id`",
@@ -438,17 +457,24 @@ describe("renderSkill", () => {
     expect(md).toContain("View contract v2");
   });
 
-  test("every SQL example is a teaching recipe's SQL, byte for byte, inside the command that runs it", () => {
+  test("teaches Postgres over the views: --search for hits, strpos not instr, LIMIT, turn windows", () => {
+    expect(md).toContain("relation named `hits`, present only when the call\npasses `--search <text>`");
+    expect(md).toContain("`strpos(body, 'needle')` (there is no `instr`)");
+    expect(md).toContain("Always add a `LIMIT`");
+    expect(md).toContain("`substr(body, :from + 1, :len)` the window");
+  });
+
+  test("every SQL example is a recipe's SQL, byte for byte, inside the --json command that runs it", () => {
     const examples = [...md.matchAll(/^(memindex sql .*) <<'SQL'\n([\s\S]*?)\nSQL$/gm)].map(
       ([, cmd, sql]) => ({
         cmd,
         sql,
       }),
     );
-    const teaching = RECIPES.filter((r) => r.teach);
-    expect(examples.map((e) => e.sql)).toEqual(teaching.map((r) => r.sql));
+    const shown = [findRecipe("sources"), ...RECIPES.filter((r) => r.teach)];
+    expect(examples.map((e) => e.sql)).toEqual(shown.map((r) => r.sql));
     expect(examples.map((e) => `${e.cmd} <<'SQL'\n${e.sql}\nSQL`)).toEqual(
-      teaching.map((r) => recipeCommand(r)),
+      shown.map((r) => recipeCommand(r, { json: true })),
     );
     const prose = md.replace(/<<'SQL'\n[\s\S]*?\nSQL$/gm, "");
     expect(prose).not.toMatch(/<<'SQL'|```sql|\bSELECT\b/);
@@ -467,6 +493,7 @@ describe("renderSkill", () => {
     expect(all).toMatch(/BETWEEN hit.ord - :around/);
     expect(all).toMatch(/FROM hits h JOIN items i[^;]*GROUP BY i.item_key/);
     expect(all).toMatch(/FROM turns\s+WHERE item_key = :item[^;]*LIMIT :limit/);
+    expect(all).toMatch(/substr\(body, :from \+ 1, :len\)/);
   });
 
   test("join keys name documented columns on both sides", () => {
@@ -487,12 +514,14 @@ describe("renderSkill", () => {
     );
   });
 
-  test("teaches the CLI surface, the subagent workflow and includes source notes", () => {
-    expect(md).toContain("memindex q ");
-    expect(md).toContain("memindex sql --search");
-    expect(md).toContain("<<'SQL'");
-    expect(md).toContain("## Retrieval workflow (subagent-driven)");
+  test("the subagent workflow searches through SQL; source notes are included", () => {
+    expect(md).toContain('runs the `search` pattern with `memindex sql --search "<question>" --json`');
     expect(md).toContain("### superwhisper\n\nDictations live here.");
+  });
+
+  test("teaches neither --explain nor XML output", () => {
+    expect(md).not.toMatch(/--explain|EXPLAIN/);
+    expect(md).not.toMatch(/--xml|<\/\w+>|<document/);
   });
 
   test("teaches how to scope searches to plugins", () => {
