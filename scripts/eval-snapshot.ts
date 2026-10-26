@@ -108,6 +108,15 @@ async function looseIndexes(q: Query): Promise<Map<string, string>> {
   return new Map(rows.map((r) => [r.name, r.def]));
 }
 
+/** Views, name to definition. Facet views are made at runtime, so a fresh migrate lacks them. */
+async function views(q: Query): Promise<Map<string, string>> {
+  const rows = await q<{ name: string; def: string }>(`
+    SELECT c.relname AS name, pg_get_viewdef(c.oid) AS def
+    FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE n.nspname = 'memindex' AND c.relkind = 'v'`);
+  return new Map(rows.map((r) => [r.name, r.def]));
+}
+
 async function ledger(q: Query): Promise<Map<string, string>> {
   const rows = await q<{ version: string; name: string }>(
     "SELECT version, name FROM supabase_migrations.schema_migrations",
@@ -236,6 +245,7 @@ interface SnapshotResult {
   readonly at: string;
   readonly rows: Readonly<Record<string, number>>;
   readonly indexes: number;
+  readonly views: number;
   readonly ms: number;
 }
 
@@ -299,7 +309,20 @@ async function takeSnapshot(plan: SnapshotPlan, bin: readonly string[]): Promise
       if (off.length) throw new Error(`copy does not match the snapshot: ${off.join("; ")}`);
       const missing = mapDiff(indexes, await looseIndexes(dq));
       if (missing.length) throw new Error(`indexes differ: ${missing.join("; ")}`);
-      return { at, rows: Object.fromEntries(want), indexes: indexes.size };
+
+      const srcViews = await views(sq);
+      for (const name of (await views(dq)).keys())
+        if (!srcViews.has(name)) await copy.unsafe(`DROP VIEW memindex.${quoteIdent(name)}`);
+      const have = await views(dq);
+      for (const [name, def] of srcViews) {
+        if (have.has(name)) continue;
+        step(`creating view ${name}`);
+        await copy.unsafe(`CREATE VIEW memindex.${quoteIdent(name)} AS ${def}`);
+        await copy.unsafe(`GRANT SELECT ON memindex.${quoteIdent(name)} TO memindex_reader, memindex_writer`);
+      }
+      const viewDrift = mapDiff(srcViews, await views(dq));
+      if (viewDrift.length) throw new Error(`views differ: ${viewDrift.join("; ")}`);
+      return { at, rows: Object.fromEntries(want), indexes: indexes.size, views: srcViews.size };
     });
 
     step("analyzing");
@@ -348,7 +371,7 @@ async function main(): Promise<number> {
   }
   const total = Object.values(r.rows).reduce((a, b) => a + b, 0);
   process.stdout.write(
-    `${redactUrl(plan.targetUrl)} is the archive at ${r.at}: ${total} rows in ${Object.keys(r.rows).length} tables, ${r.indexes} indexes rebuilt, ${Math.round(r.ms / 1000)} s\n`,
+    `${redactUrl(plan.targetUrl)} is the archive at ${r.at}: ${total} rows in ${Object.keys(r.rows).length} tables, ${r.indexes} indexes rebuilt, ${r.views} views, ${Math.round(r.ms / 1000)} s\n`,
   );
   return 0;
 }
