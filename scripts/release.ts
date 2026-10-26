@@ -45,6 +45,8 @@ const pkg = JSON.parse(readFileSync(pkgPath, "utf8")) as { version: string };
 if (!isNewer(version, pkg.version)) throw new Error(`${version} is not newer than ${pkg.version}`);
 
 step("preflight");
+if (process.env.MEMINDEX_STORE)
+  throw new Error("unset MEMINDEX_STORE: the dogfood `memindex install --yes` would save it as the store");
 if (run(["git", "branch", "--show-current"]) !== "main") throw new Error("release from main");
 if (run(["git", "status", "--porcelain"]) !== "") throw new Error("working tree is not clean");
 if (run(["git", "ls-files", EVAL_LOCAL]) !== "")
