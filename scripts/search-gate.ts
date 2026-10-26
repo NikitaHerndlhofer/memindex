@@ -499,6 +499,9 @@ export async function scoreGate(
   return { snapshot, contaminated: [...contaminated].sort(), sets };
 }
 
+/** Candidate items per contamination statement: every turn body is scanned, so one statement must stay under the CLI's timeout. */
+const CONTAMINATION_BATCH = 10;
+
 export async function runGate(data: EvalData, run: Runner, runs = data.config.runs): Promise<GateReport> {
   const snapshot = await snapshotNote(run);
   const toHits = (rows: Record<string, unknown>[]): Hit[] =>
@@ -525,12 +528,17 @@ export async function runGate(data: EvalData, run: Runner, runs = data.config.ru
       ),
     runs,
     async (keys, queries) => {
-      const sql = `WITH q(q) AS (VALUES ${queries.map((x) => `(${lit(x)})`).join(", ")}),
-c(item_key) AS (VALUES ${keys.map((k) => `(${lit(k)})`).join(", ")})
+      const quoted = new Map<string, number>();
+      for (let i = 0; i < keys.length; i += CONTAMINATION_BATCH) {
+        const batch = keys.slice(i, i + CONTAMINATION_BATCH);
+        const sql = `WITH q(q) AS (VALUES ${queries.map((x) => `(${lit(x)})`).join(", ")}),
+c(item_key) AS (VALUES ${batch.map((k) => `(${lit(k)})`).join(", ")})
 SELECT t.item_key, count(DISTINCT q.q) AS quoted FROM turns t JOIN c USING (item_key)
 JOIN q ON strpos(lower(t.body), q.q) > 0 GROUP BY 1`;
-      const rows = await sqlRows(run, sql, "contamination check");
-      return new Map(rows.map((r) => [String(r.item_key), Number(r.quoted)]));
+        for (const r of await sqlRows(run, sql, "contamination check"))
+          quoted.set(String(r.item_key), Number(r.quoted));
+      }
+      return quoted;
     },
     snapshot,
   );
