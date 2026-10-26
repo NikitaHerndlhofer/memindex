@@ -251,7 +251,7 @@ describe("integration: fixtures → Supabase store → recipes", () => {
   );
 
   test.skipIf(storeNotReady)(
-    "browse recipes list the user's own chats; subagents=1 adds the chats agents spawned",
+    "browse recipes list the user's own chats; subagents=true adds the chats agents spawned",
     async () => {
       const children = await rows({
         sql: "SELECT item_key, origin FROM items WHERE parent_key IS NOT NULL ORDER BY item_key",
@@ -264,7 +264,7 @@ describe("integration: fixtures → Supabase store → recipes", () => {
       expect(recent.length).toBeGreaterThan(0);
       expect(recent.filter((k) => childKeys.includes(k))).toEqual([]);
       const withSubagents = keys(
-        await rows({ recipe: "recent", args: { days: "100000", limit: "1000", subagents: "1" } }),
+        await rows({ recipe: "recent", args: { days: "100000", limit: "1000", subagents: "true" } }),
       );
       expect(withSubagents).toEqual(expect.arrayContaining([...recent, ...childKeys]));
 
@@ -272,14 +272,14 @@ describe("integration: fixtures → Supabase store → recipes", () => {
       if (!child) throw new Error("no fixture subagent with an origin");
       const repo = String(child.origin);
       expect(keys(await rows({ recipe: "by-repo", args: { repo } }))).not.toContain(child.item_key);
-      expect(keys(await rows({ recipe: "by-repo", args: { repo, subagents: "1" } }))).toContain(
+      expect(keys(await rows({ recipe: "by-repo", args: { repo, subagents: "true" } }))).toContain(
         String(child.item_key),
       );
     },
   );
 
   test.skipIf(storeNotReady)(
-    "thread-page and item-tail read a chat's messages as prose; messages=0 pages every turn",
+    "thread-page and item-tail read a chat's messages as prose; messages=false pages every turn",
     async () => {
       const [item] = await rows({
         sql: `SELECT item_key FROM turns GROUP BY item_key
@@ -301,7 +301,7 @@ describe("integration: fixtures → Supabase store → recipes", () => {
       );
       const everything = await rows({
         recipe: "thread-page",
-        args: { item: key, limit: "1000", messages: "0" },
+        args: { item: key, limit: "1000", messages: "false" },
       });
       expect(everything.map((r) => r.ord)).toEqual(all.map((t) => t.ord));
 

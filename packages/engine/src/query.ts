@@ -152,11 +152,13 @@ export function sqlParams(sql: string): Set<string> {
 }
 
 const INT = z.coerce.number().int();
+/** `1`/`0` stay accepted: commands written before flags were booleans keep working. */
+const BOOL: Readonly<Record<string, boolean>> = { true: true, false: false, "1": true, "0": false };
 
 /** Applies defaults, checks required params and types, and drops params the SQL doesn't reference. */
 export function bindRecipe(recipe: Recipe, args: Params): BoundParams {
   assertKnownParams(recipe, args);
-  const out: Record<string, string | number | null> = {};
+  const out: Record<string, string | number | boolean | null> = {};
   for (const [name, def] of Object.entries(recipe.params)) {
     const raw = args[name] ?? def.default;
     if (raw === undefined) {
@@ -167,6 +169,11 @@ export function bindRecipe(recipe: Recipe, args: Params): BoundParams {
       if (!n.success)
         throw new Error(`recipe ${recipe.name}: param ${name} must be an integer, got "${raw}"`);
       out[name] = n.data;
+    } else if (def.type === "bool") {
+      const b = BOOL[raw.toLowerCase()];
+      if (b === undefined)
+        throw new Error(`recipe ${recipe.name}: param ${name} must be true or false, got "${raw}"`);
+      out[name] = b;
     } else {
       out[name] = raw;
     }
@@ -174,7 +181,7 @@ export function bindRecipe(recipe: Recipe, args: Params): BoundParams {
   return out;
 }
 
-export type BoundParams = Readonly<Record<string, string | number | null>>;
+export type BoundParams = Readonly<Record<string, string | number | boolean | null>>;
 
 export interface ResolvedQuery {
   readonly sql: string;

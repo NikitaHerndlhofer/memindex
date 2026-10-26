@@ -133,11 +133,16 @@ describe("recipes", () => {
   });
 
   test("bindRecipe: defaults, ints, NULL optionals, required and unknown params", () => {
-    expect(bindRecipe(findRecipe("recent"), {})).toEqual({ days: 3, source: null, subagents: 0, limit: 50 });
-    expect(bindRecipe(findRecipe("recent"), { days: "7", source: "cursor", subagents: "1" })).toEqual({
+    expect(bindRecipe(findRecipe("recent"), {})).toEqual({
+      days: 3,
+      source: null,
+      subagents: false,
+      limit: 50,
+    });
+    expect(bindRecipe(findRecipe("recent"), { days: "7", source: "cursor", subagents: "true" })).toEqual({
       days: 7,
       source: "cursor",
-      subagents: 1,
+      subagents: true,
       limit: 50,
     });
     expect(() => bindRecipe(findRecipe("recent"), { days: "x" })).toThrow(/integer/);
@@ -145,6 +150,13 @@ describe("recipes", () => {
     expect(() => bindRecipe(findRecipe("thread"), { item: "a:b", bogus: "1" })).toThrow(
       /unknown param bogus/,
     );
+  });
+
+  test("bool params take true/false in any case, and 1/0 from older commands; anything else is an error", () => {
+    const sub = (v: string) => bindRecipe(findRecipe("recent"), { subagents: v }).subagents;
+    expect(["true", "TRUE", "1"].map(sub)).toEqual([true, true, true]);
+    expect(["false", "False", "0"].map(sub)).toEqual([false, false, false]);
+    expect(() => sub("yes")).toThrow(/subagents must be true or false, got "yes"/);
   });
 
   test("turn reads one turn from a char offset; search recipes page with offset", () => {
@@ -224,7 +236,7 @@ describe("recipeCommand", () => {
       `memindex sql --param chunk=<chunk_id> --param around=2 <<'SQL'\n${findRecipe("context").sql}\nSQL`,
     );
     expect(recipeCommand(findRecipe("recent"), { args: { days: "7" } }).split("\n")[0]).toBe(
-      "memindex sql --param days=7 --param source --param subagents=0 --param limit=50 <<'SQL'",
+      "memindex sql --param days=7 --param source --param subagents=false --param limit=50 <<'SQL'",
     );
     expect(recipeCommand(findRecipe("mode-recent")).split("\n")[0]).toBe(
       "memindex sql --param mode=<mode> --param days=7 --param limit=50 <<'SQL'",
@@ -262,7 +274,7 @@ describe("recipeCommand", () => {
       `memindex sql --search "<text>" --mode keyword --all-sources --param limit=20 --param offset=0 <<'SQL'`,
     );
     expect(recipeCommand(findRecipe("by-repo"), { args: { repo: "my repo" } }).split("\n")[0]).toBe(
-      "memindex sql --param 'repo=my repo' --param subagents=0 --param limit=50 <<'SQL'",
+      "memindex sql --param 'repo=my repo' --param subagents=false --param limit=50 <<'SQL'",
     );
   });
 

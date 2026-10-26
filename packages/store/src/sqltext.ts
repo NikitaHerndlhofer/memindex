@@ -117,17 +117,17 @@ export function normalizeSql(sql: string): string {
 
 export interface CompiledParams {
   readonly text: string;
-  readonly values: (string | number | null)[];
+  readonly values: (string | number | boolean | null)[];
 }
 
 /** Rewrites `:name` outside literals/comments to `$n`, numbering from `offset + 1`. `::` casts are left alone. */
 export function bindNamedParams(
   sql: string,
-  params: Readonly<Record<string, string | number | null>>,
+  params: Readonly<Record<string, string | number | boolean | null>>,
   offset = 0,
 ): CompiledParams {
   const index = new Map<string, number>();
-  const values: (string | number | null)[] = [];
+  const values: (string | number | boolean | null)[] = [];
   let text = "";
   for (const seg of scan(sql)) {
     if (seg.kind !== "code") {

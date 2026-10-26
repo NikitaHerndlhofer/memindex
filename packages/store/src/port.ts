@@ -135,7 +135,7 @@ export const HIT_COLUMNS = [
 
 export interface RunOptions {
   readonly hits?: StoreSearch | readonly Hit[];
-  readonly params?: Readonly<Record<string, string | number | null>>;
+  readonly params?: Readonly<Record<string, string | number | boolean | null>>;
   /** Default 15s. */
   readonly timeoutMs?: number;
   /** Default 10k. The stream ends with a truncation marker row rather than silently cutting. */

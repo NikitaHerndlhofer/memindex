@@ -58,7 +58,7 @@ async function frameOf(archive: Archive, query: Query): Promise<Frame> {
         item:
           typeof params.item === "string" ? params.item : await itemOfChunk(archive, String(params.chunk)),
         pageLimit: query.recipe === "thread-page" ? Number(params.limit) : null,
-        pageArgs: query.recipe === "thread-page" ? rest : { messages: "0" },
+        pageArgs: query.recipe === "thread-page" ? rest : { messages: "false" },
       };
     }
     case "turn":

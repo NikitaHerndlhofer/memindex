@@ -176,7 +176,7 @@ describe("memindex q", () => {
       return r.text;
     };
     expect(sqlOf(["thread-page", "cursor:3f1c", "--param", "from=40", "--sql"])).toBe(
-      `# thread-page: ${findRecipe("thread-page").summary}\nmemindex sql --param item=cursor:3f1c --param from=40 --param messages=1 --param limit=20 <<'SQL'\n${findRecipe("thread-page").sql}\nSQL\n`,
+      `# thread-page: ${findRecipe("thread-page").summary}\nmemindex sql --param item=cursor:3f1c --param from=40 --param messages=true --param limit=20 <<'SQL'\n${findRecipe("thread-page").sql}\nSQL\n`,
     );
     expect(
       sqlOf(["semantic", "token refresh", "--source", "cursor", "--limit", "5", "--sql"]).split("\n")[1],

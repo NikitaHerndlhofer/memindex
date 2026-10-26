@@ -63,7 +63,7 @@ describe("turn lists (thread, thread-page, context)", () => {
     recipe: "thread",
     item: "cursor:abc",
     pageLimit: null,
-    pageArgs: { messages: "0" },
+    pageArgs: { messages: "false" },
   };
 
   test("a long body is cut at the turn cap, and a sentence names the turn, the sizes and the command for the rest", () => {
@@ -125,11 +125,17 @@ describe("turn lists (thread, thread-page, context)", () => {
   test("the next thread-page keeps listing every turn when the caller asked for every turn", () => {
     const [full] = capRows(
       Array.from({ length: 3 }, (_, i) => ({ ord: i, body: "b" })),
-      { kind: "turns", recipe: "thread-page", item: "cursor:abc", pageLimit: 3, pageArgs: { messages: "0" } },
+      {
+        kind: "turns",
+        recipe: "thread-page",
+        item: "cursor:abc",
+        pageLimit: 3,
+        pageArgs: { messages: "false" },
+      },
     ).notices;
     expect(run(offered(full, "Next"))).toEqual({
       recipe: "thread-page",
-      args: { item: "cursor:abc", messages: "0", from: "3", limit: "3" },
+      args: { item: "cursor:abc", messages: "false", from: "3", limit: "3" },
     });
   });
 
@@ -144,7 +150,7 @@ describe("turn lists (thread, thread-page, context)", () => {
     );
     expect(run(offered(last, "Next"))).toEqual({
       recipe: "thread-page",
-      args: { item: "cursor:abc", messages: "0", from: String(capped.rows.length) },
+      args: { item: "cursor:abc", messages: "false", from: String(capped.rows.length) },
     });
   });
 });

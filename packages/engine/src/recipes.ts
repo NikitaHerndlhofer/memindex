@@ -1,6 +1,6 @@
 import type { SearchMode } from "./query.ts";
 
-export type ParamType = "text" | "int" | "item_key" | "chunk_id";
+export type ParamType = "text" | "int" | "bool" | "item_key" | "chunk_id";
 
 export interface RecipeParam {
   readonly type: ParamType;
@@ -40,9 +40,9 @@ export const OUTPUT_BUDGET = 60_000;
 const limit = (n: number): RecipeParam => ({ type: "int", summary: "max rows", default: String(n) });
 
 const subagents: RecipeParam = {
-  type: "int",
-  summary: "1 = include subagent chats (spawned by another agent)",
-  default: "0",
+  type: "bool",
+  summary: "true = include subagent chats (spawned by another agent)",
+  default: "false",
 };
 
 const SEARCH_SQL = `SELECT h.rank, h.unit, i.source, i.kind, i.started_day, i.title, i.origin, h.item_key, h.chunk_id,
@@ -99,7 +99,7 @@ FROM superwhisper_items GROUP BY mode ORDER BY items DESC`,
     },
     sql: `SELECT item_key, source, kind, started_at, title, origin, turn_count
 FROM items
-WHERE age_days <= :days AND source = COALESCE(:source, source) AND (:subagents = 1 OR parent_key IS NULL)
+WHERE age_days <= :days AND source = COALESCE(:source, source) AND (:subagents OR parent_key IS NULL)
 ORDER BY started_at DESC
 LIMIT :limit`,
   },
@@ -109,7 +109,7 @@ LIMIT :limit`,
     group: "browse",
     params: { subagents, limit: limit(100) },
     sql: `SELECT item_key, source, kind, started_at, title, origin, turn_count
-FROM items WHERE age_days < 1 AND (:subagents = 1 OR parent_key IS NULL)
+FROM items WHERE age_days < 1 AND (:subagents OR parent_key IS NULL)
 ORDER BY started_at DESC
 LIMIT :limit`,
   },
@@ -165,7 +165,7 @@ LIMIT :limit`,
       limit: limit(50),
     },
     sql: `SELECT item_key, source, kind, started_at, title, turn_count
-FROM items WHERE lower(origin) = lower(:repo) AND (:subagents = 1 OR parent_key IS NULL)
+FROM items WHERE lower(origin) = lower(:repo) AND (:subagents OR parent_key IS NULL)
 ORDER BY started_at DESC
 LIMIT :limit`,
   },
@@ -292,16 +292,16 @@ LIMIT :limit`,
       item: { type: "item_key", summary: "item key, e.g. cursor:3f1c…", required: true },
       from: { type: "int", summary: "first turn ord", default: "0" },
       messages: {
-        type: "int",
-        summary: "0 = every turn, tool calls and thinking included (their full body)",
-        default: "1",
+        type: "bool",
+        summary: "false = every turn, tool calls and thinking included (their full body)",
+        default: "true",
       },
       limit: limit(20),
     },
     sql: `SELECT ord, role, kind, speaker, at, length(COALESCE(prose, body)) AS chars,
        substr(COALESCE(prose, body), 1, ${TURN_BODY_CAP}) AS body
 FROM turns
-WHERE item_key = :item AND ord >= :from AND (:messages = 0 OR kind = 'message')
+WHERE item_key = :item AND ord >= :from AND (NOT :messages OR kind = 'message')
 ORDER BY ord
 LIMIT :limit`,
     teach: {
