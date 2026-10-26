@@ -3,7 +3,6 @@ import {
   GoldenError,
   type GoldenQuery,
   isJunk,
-  loadGolden,
   parseGolden,
   type ResultRow,
   scoreQuery,
@@ -241,17 +240,5 @@ describe("golden set", () => {
     expect(() =>
       parseGolden(withQueries([{ id: "a", query: "x", intent: "vibes", expected: [exp("k", 3)] }])),
     ).toThrow(GoldenError);
-  });
-
-  test("the shipped golden set covers the prototype queries and every intent with at least 20 queries", () => {
-    const g = loadGolden();
-    expect(g.queries.length).toBeGreaterThanOrEqual(20);
-    expect(g.queries.flatMap((q) => (q.prototype ? [q.prototype] : [])).sort((a, b) => a - b)).toEqual([
-      1, 2, 3, 4, 5, 6, 7, 8,
-    ]);
-    const intents = new Set(g.queries.map((q) => q.intent));
-    for (const i of ["needle", "topic", "project", "meeting", "titled-meeting", "decision", "cross-lingual"])
-      expect(intents.has(i as GoldenQuery["intent"])).toBe(true);
-    for (const q of g.queries) expect(q.expected.some((e) => e.grade === 3)).toBe(true);
   });
 });

@@ -85,3 +85,58 @@ memindex pace gentle   # the default
 The running watcher picks the change up after its current slice. Searches stay responsive during a
 full-pace backfill: the watcher sends Ollama small requests, so a query embed waits behind a few
 chunks, not a whole batch.
+
+## Search quality gate
+
+`scripts/search-gate.ts` scores search on every graded query set you keep, against a frozen snapshot of
+your archive, so a change to search SQL is measured on the same data each time. The queries and grades
+come from your own archive, so they live outside the repo, in `~/Library/Application Support/memindex/eval/`
+(or `MEMINDEX_EVAL_DIR`). The gate exits 2 with a message if that directory is missing.
+
+```sh
+bun scripts/eval-snapshot.ts --from postgresql://memindex:memindex@127.0.0.1:54329/memindex  # once
+bun scripts/search-gate.ts --record-baseline                       # the current code, as the baseline
+bun scripts/search-gate.ts --candidate-bin "bun apps/memindex/src/cli.ts"   # a change, on a clone
+```
+
+`--candidate-bin` clones the snapshot, migrates the clone with that binary, scores it and drops it (it
+needs the same disk headroom as `eval-snapshot.ts`). Each run prints one line per check and writes
+`runs/gate-<time>.json` in the eval dir. The verdict holds when every set stays at or above its floors,
+under its long-chat ceilings (share of top-5 slots on items of 300+ turns, median turns of the top 5),
+and within tolerance of the baseline: a set's nDCG@5 and nDCG@10 may drop by at most
+max(run-to-run spread, `queryFraction` / queries).
+
+The eval dir holds:
+
+- `sets/<name>.json`: one graded set. Grades run 1 to `maxGrade`; grade 2 and up count toward recall.
+  Copies or forks of one item share a `family` and count once.
+- `contamination.json`: eval chats quote eval queries, so they are dropped from results unless graded
+  for that query: listed `items`, every item from a `workspaces` origin, and conversations quoting
+  `minQuotedQueries` or more eval queries, all from `since` on.
+- `gate.json`: the snapshot URL, rows per search, runs, tolerance, and per-set `floors` and `hub` ceilings.
+- `baseline.json`: written by `--record-baseline`.
+
+```json
+{
+  "version": 1,
+  "name": "birds",
+  "maxGrade": 2,
+  "queries": [
+    {
+      "id": "heron-fishing",
+      "query": "how do herons catch fish",
+      "type": "paraphrase",
+      "rationale": "avoids the word the target uses, 'wading'",
+      "expected": [
+        { "item_key": "cursor:1111", "grade": 2, "title": "Wading birds notes" },
+        { "item_key": "cursor:2222", "grade": 1, "family": "bird-walk", "judged": "posthoc" }
+      ]
+    }
+  ]
+}
+```
+
+To add a query, write it before you look at any search results for it, find candidates with
+`memindex sql` (title matches, keyword and semantic probes on paraphrases, not the query itself), grade
+each candidate item, and add the entry to a set. Grades added after seeing results go in with
+`"judged": "posthoc"`. Then re-record the baseline with the current code.

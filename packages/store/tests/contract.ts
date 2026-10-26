@@ -1258,6 +1258,44 @@ export function runStoreContract(name: string, backend: () => ContractBackend): 
         expect(JSON.parse(String(recording?.moments)).length).toBe(1);
       });
 
+      test("a long chat's scattered matches add less than a short chat's: the short one ranks first", async () => {
+        const w = await writer();
+        const exchanges = (word: string) =>
+          [0, 2, 4].flatMap((i) => [
+            {
+              key: turnKey(`u${i}`),
+              role: "user" as const,
+              at: null,
+              speaker: null,
+              parts: [{ kind: "text" as const, text: `tell me about the ${word} ${i}` }],
+            },
+            {
+              key: turnKey(`a${i + 1}`),
+              role: "assistant" as const,
+              at: null,
+              speaker: null,
+              parts: [{ kind: "text" as const, text: `The ${word} ${word} story, part ${i}.` }],
+            },
+          ]);
+        const filler = Array.from({ length: 400 }, (_, i) =>
+          turnOf(`f${i}`, `unrelated note number ${i} about lunch plans`),
+        );
+        const short = draftOf(CUR, "short", exchanges("ibis"));
+        const long = draftOf(CUR, "long", [...exchanges("ibis ibis"), ...filler]);
+        for (const d of [short, long]) await w.apply(writeOf(CUR, L1, d, rev("1")));
+
+        const got = await rows(
+          w.run("SELECT item_key, unit, score FROM hits ORDER BY rank", {
+            hits: { via: "keyword", text: "ibis", filter: {}, k: 10 },
+          }),
+        );
+        expect(got.map((r) => [r.item_key, r.unit])).toEqual([
+          [short.key, "item"],
+          [long.key, "item"],
+        ]);
+        expect(Number(got[0]?.score)).toBeGreaterThan(Number(got[1]?.score));
+      });
+
       test("read-only, timeout, maxRows marker", async () => {
         const w = await writer();
         await w.apply(writeOf(SW, L1, draftOf(SW, "ro", [turnOf("u", "x")]), rev("1")));

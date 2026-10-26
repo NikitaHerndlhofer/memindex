@@ -20,14 +20,8 @@ import { redactUrl } from "../packages/engine/src/config.ts";
 import { readEmbedRuntime } from "../packages/engine/src/embed-duty.ts";
 import { MIGRATIONS } from "../packages/store/src/migrations.gen.ts";
 import { measureFreeSpace, shortfalls } from "./disk-headroom.ts";
-import {
-  BASELINE_PATH,
-  formatSummary,
-  loadGolden,
-  QUALITY_GATE,
-  runEval,
-  type Summary,
-} from "./search-eval.ts";
+import { EvalDirError, requireEvalDir } from "./eval-dir.ts";
+import { formatReport, GateRefusal, gateVerdict, loadEvalData, runGate } from "./search-gate.ts";
 
 export type Verdict = "VERIFIED" | "NOT VERIFIED" | "INCONCLUSIVE";
 
@@ -836,7 +830,7 @@ const LATENCY_QUERIES = [
   "swrag sql",
   "statment timeout",
   "Besprechung",
-  "ECONNREFUSED",
+  "ETIMEDOUT",
   "pgvector halfvec",
 ] as const;
 const LATENCY_MODES = ["keyword", "fuzzy", "semantic", "hybrid"] as const;
@@ -961,53 +955,35 @@ const searchLatency: Clause = {
   },
 };
 
-/** VERIFIED iff every gated metric holds its bound; an unscored (NaN) metric is INCONCLUSIVE. */
-export function qualityVerdict(s: Summary, gate = QUALITY_GATE): ClauseResult {
-  const parts = gate.thresholds.map((t) => {
-    const v = s[t.metric];
-    if (!Number.isFinite(v)) return { verdict: "INCONCLUSIVE" as const, text: `${t.label} not scored` };
-    const ok = t.bound === "min" ? v >= t.limit : v <= t.limit;
-    const word = t.bound === "min" ? "floor" : "ceiling";
-    return {
-      verdict: check(ok),
-      text: `${t.label} ${v.toFixed(2)} ${ok ? `(${word} ${t.limit})` : `${t.bound === "min" ? "below" : "above"} ${word} ${t.limit}`}`,
-    };
-  });
-  return {
-    verdict: combine(parts.map((p) => p.verdict)),
-    evidence: `${parts.map((p) => p.text).join(", ")}; bounds from ${gate.from}`,
-  };
-}
-
 const searchQuality: Clause = {
   id: "search-quality",
-  title: "search quality on the golden set (scripts/search-eval) holds every floor in QUALITY_GATE",
+  title:
+    "search quality on every eval set (scripts/search-gate.ts) holds its floors and baseline on a frozen snapshot",
   requires: ["schema"],
   async run(h) {
+    let data: ReturnType<typeof loadEvalData>;
+    try {
+      data = loadEvalData(requireEvalDir());
+    } catch (e) {
+      if (e instanceof EvalDirError) return { verdict: "NOT VERIFIED", evidence: e.message };
+      throw e;
+    }
     const ollama = await ollamaHasModel();
     if (ollama) return { verdict: "INCONCLUSIVE", evidence: `Ollama ${ollama}; hybrid search needs it` };
     await warmEmbedder();
-    const report = await runEval(loadGolden(), (args, stdin) => h.cli(args, { stdin, timeoutMs: 120_000 }), {
-      mode: "hybrid",
-      limit: 10,
-      runs: 1,
-      only: null,
-    });
-    const baseline = existsSync(BASELINE_PATH)
-      ? (JSON.parse(readFileSync(BASELINE_PATH, "utf8")) as { version: string; at: string; summary: Summary })
-      : null;
-    const drift = report.missingGoldenKeys.length
-      ? `; ${report.missingGoldenKeys.length} golden key(s) no longer in the archive${sample([...report.missingGoldenKeys])}`
-      : "";
-    const gate = qualityVerdict(report.summary);
+    let report: Awaited<ReturnType<typeof runGate>>;
+    try {
+      report = await runGate(data, (args, stdin) => h.cli(args, { stdin, timeoutMs: 120_000 }));
+    } catch (e) {
+      if (e instanceof GateRefusal) return { verdict: "INCONCLUSIVE", evidence: e.message };
+      throw e;
+    }
+    const summaries = Object.fromEntries(Object.entries(report.sets).map(([n, s]) => [n, s.summary]));
+    const gate = gateVerdict(summaries, data.config, report.snapshot, data.baseline);
     return {
       verdict: gate.verdict,
-      evidence: `${gate.evidence}${drift}; full: ${formatSummary(report.summary)}; baseline ${
-        baseline
-          ? `memindex ${baseline.version} (${baseline.at.slice(0, 10)}): ${formatSummary(baseline.summary)}`
-          : "none recorded"
-      }`,
-      data: { report, baseline, gate: QUALITY_GATE },
+      evidence: `${gate.lines.filter((l) => !l.startsWith("VERIFIED")).join("; ") || "every check holds"}; ${formatReport(report).replaceAll("\n", " | ")}`,
+      data: { report, gate },
     };
   },
 };

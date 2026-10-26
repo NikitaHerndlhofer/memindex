@@ -3,24 +3,27 @@
  * Search-quality eval: runs every golden query through the CLI's `hits` relation and scores the ranked
  * rows against graded expected answers, so every search change is measured the same way.
  *
- *   bun scripts/search-eval.ts [--bin memindex] [--db postgres://…] [--golden scripts/search-eval/golden.json]
+ *   bun scripts/search-eval.ts [--bin memindex] [--db postgres://…] [--golden <golden.json>]
  *     [--mode hybrid] [--limit 10] [--runs 1] [--only id,id] [--json] [--save-baseline]
+ *
+ * The golden set is the eval dir's sets/golden.json with its contamination.json (scripts/eval-dir.ts), or a
+ * single file in the format parseGolden reads. scripts/search-gate.ts gates every set; this tool is the
+ * row-level view of one.
  *
  * `--bin` may be a command line (`--bin "bun apps/memindex/src/cli.ts"` runs the dev build). `--db` points
  * the CLI at that database with a throwaway config directory, so a dev build never reads the user's config.
  *
  * Scores rows by item_key/turn_key only, so it works for chunk-level hits and for any later result
  * shape that still exposes those per row. `--json` writes `.audit/search-eval-<timestamp>.json`;
- * `--save-baseline` writes the summary to `scripts/search-eval/baseline.json`.
+ * `--save-baseline` writes the summary to search-eval-baseline.json in the eval dir.
  */
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { parseArgs } from "node:util";
+import { requireEvalDir } from "./eval-dir.ts";
 
 const REPO = resolve(import.meta.dir, "..");
-const GOLDEN_PATH = join(REPO, "scripts/search-eval/golden.json");
-export const BASELINE_PATH = join(REPO, "scripts/search-eval/baseline.json");
 const K = 5;
 
 // ─── Golden set ──────────────────────────────────────────────────────────────
@@ -102,8 +105,17 @@ export function parseGolden(raw: unknown): Golden {
   return g;
 }
 
-export function loadGolden(path = GOLDEN_PATH): Golden {
-  return parseGolden(JSON.parse(readFileSync(path, "utf8")));
+/** A single golden file, or the eval dir's sets/golden.json joined with its contamination.json. */
+function loadGolden(path?: string): Golden {
+  if (path) return parseGolden(JSON.parse(readFileSync(path, "utf8")));
+  const dir = requireEvalDir();
+  const set = JSON.parse(readFileSync(join(dir, "sets/golden.json"), "utf8"));
+  const c = JSON.parse(readFileSync(join(dir, "contamination.json"), "utf8"));
+  return parseGolden({
+    version: 1,
+    contamination: { since: c.since, minQuotedQueries: c.minQuotedQueries, items: c.items },
+    queries: set.queries,
+  });
 }
 
 // ─── Scoring ─────────────────────────────────────────────────────────────────
@@ -310,37 +322,9 @@ export function summarize(scores: readonly QueryScore[], latencies: readonly (re
   };
 }
 
-export interface Threshold {
-  readonly metric: "ndcg5" | "recall5" | "hit1" | "hit5" | "duplicateRate" | "junkRate" | "contaminationRate";
-  readonly label: string;
-  /** min: a release must score at or above `limit`; max: at or below. */
-  readonly bound: "min" | "max";
-  readonly limit: number;
-  /** What the gate's `from` scored. */
-  readonly baseline: number;
-}
-
-/**
- * The search-quality release gate. Three invocations of `--runs 3` agreed to 0.001 except one duplicate
- * slot, and no query's ranking changed between runs. One query moves a per-query mean by 1/22 = 0.045
- * and one top-5 slot moves a rate by 1/110 = 0.009, so each bound lets about one query or three slots go.
- */
-export const QUALITY_GATE: { readonly from: string; readonly thresholds: readonly Threshold[] } = {
-  from: "memindex 0.1.10 on the real archive, 2026-10-25, hybrid, limit 10",
-  thresholds: [
-    { metric: "ndcg5", label: "nDCG@5", bound: "min", limit: 0.55, baseline: 0.593 },
-    { metric: "recall5", label: "recall@5", bound: "min", limit: 0.55, baseline: 0.59 },
-    { metric: "hit1", label: "hit@1", bound: "min", limit: 0.77, baseline: 0.818 },
-    { metric: "hit5", label: "hit@5", bound: "min", limit: 0.9, baseline: 0.955 },
-    { metric: "duplicateRate", label: "dup", bound: "max", limit: 0.03, baseline: 0.009 },
-    { metric: "junkRate", label: "junk", bound: "max", limit: 0.1, baseline: 0.073 },
-    { metric: "contaminationRate", label: "contamination", bound: "max", limit: 0.18, baseline: 0.145 },
-  ],
-};
-
 const f2 = (x: number) => (Number.isFinite(x) ? x.toFixed(2) : "-");
 
-export function formatSummary(s: Summary): string {
+function formatSummary(s: Summary): string {
   return `hit@1 ${f2(s.hit1)} hit@5 ${f2(s.hit5)} MRR ${f2(s.mrr)} nDCG@5 ${f2(s.ndcg5)} recall@5 ${f2(s.recall5)} moment@5 ${f2(s.momentHit5)} (n=${s.n.momentHit5}) momentP ${f2(s.momentPrecision)} (n=${s.n.momentPrecision}) distinct@5 ${f2(s.distinctItems5)} dup ${f2(s.duplicateRate)} junk ${f2(s.junkRate)} contamination ${f2(s.contaminationRate)} latency p50 ${Math.round(s.latencyP50Ms)} ms p95 ${Math.round(s.latencyP95Ms)} ms over ${s.queries} queries`;
 }
 
@@ -432,7 +416,7 @@ JOIN q ON strpos(lower(t.body), q.q) > 0 GROUP BY 1`;
   return out;
 }
 
-export interface EvalOptions {
+interface EvalOptions {
   readonly mode: string;
   readonly limit: number;
   readonly runs: number;
@@ -447,7 +431,7 @@ interface QueryRun {
   readonly rows: readonly ResultRow[];
 }
 
-export interface Report {
+interface Report {
   readonly options: EvalOptions;
   readonly missingGoldenKeys: readonly string[];
   readonly contaminated: readonly string[];
@@ -456,7 +440,7 @@ export interface Report {
   readonly summary: Summary;
 }
 
-export async function runEval(golden: Golden, run: Runner, opts: EvalOptions): Promise<Report> {
+async function runEval(golden: Golden, run: Runner, opts: EvalOptions): Promise<Report> {
   const queries = golden.queries.filter((q) => !opts.only || opts.only.includes(q.id));
   const missing = await missingGoldenKeys(golden, run);
   const runs: QueryRun[] = [];
@@ -547,7 +531,7 @@ function formatTable(report: Report): string {
 
 // ─── Main ────────────────────────────────────────────────────────────────────
 
-function cliRunner(cmd: readonly string[], env: Record<string, string | undefined>): Runner {
+export function cliRunner(cmd: readonly string[], env: Record<string, string | undefined>): Runner {
   return async (args, stdin) => {
     const started = Date.now();
     const proc = Bun.spawn([...cmd, ...args], {
@@ -571,7 +555,7 @@ async function main(): Promise<number> {
     options: {
       bin: { type: "string", default: "memindex" },
       db: { type: "string" },
-      golden: { type: "string", default: GOLDEN_PATH },
+      golden: { type: "string" },
       mode: { type: "string", default: "hybrid" },
       limit: { type: "string", default: "10" },
       runs: { type: "string", default: "1" },
@@ -587,7 +571,7 @@ async function main(): Promise<number> {
     process.stderr.write(`--limit must be an integer >= ${K} and --runs >= 1\n`);
     return 2;
   }
-  const golden = loadGolden(resolve(values.golden));
+  const golden = loadGolden(values.golden && resolve(values.golden));
   const only = values.only ? values.only.split(",").map((s) => s.trim()) : null;
   const unknown = only?.filter((id) => !golden.queries.some((q) => q.id === id)) ?? [];
   if (unknown.length) {
@@ -622,14 +606,15 @@ async function main(): Promise<number> {
     process.stdout.write(`report ${file}\n`);
   }
   if (values["save-baseline"]) {
+    const baselinePath = join(requireEvalDir(), "search-eval-baseline.json");
     const perQuery = Object.fromEntries(
       report.scores.map((s) => [s.id, { ndcg5: s.ndcg5, recall5: s.recall5, rr: s.rr, hit5: s.hit5 }]),
     );
     writeFileSync(
-      BASELINE_PATH,
+      baselinePath,
       `${JSON.stringify({ ...meta, options: report.options, summary: report.summary, perQuery }, null, 2)}\n`,
     );
-    process.stdout.write(`baseline ${BASELINE_PATH}\n`);
+    process.stdout.write(`baseline ${baselinePath}\n`);
   }
   return 0;
 }
