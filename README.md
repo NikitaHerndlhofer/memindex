@@ -107,7 +107,6 @@ and within tolerance of the baseline: a set's nDCG@5 and nDCG@10 may drop by at 
 max(run-to-run spread, `queryFraction` / queries).
 
 The eval dir holds:
-
 - `sets/<name>.json`: one graded set. Grades run 1 to `maxGrade`; grade 2 and up count toward recall.
   Copies or forks of one item share a `family` and count once.
 - `contamination.json`: eval chats quote eval queries, so they are dropped from results unless graded
