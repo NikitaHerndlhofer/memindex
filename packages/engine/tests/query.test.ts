@@ -451,7 +451,7 @@ describe("renderSkill", () => {
   test("lists every view, the hits columns and the contract version", () => {
     for (const v of VIEW_CONTRACT) expect(md).toContain(`- \`${v.name}\`: `);
     expect(md).toContain(
-      "Columns: `rank` (1 = best), `score` (1 = the best single moment; an item adds up to 0.75 for its 2nd and 3rd moments), `via` (keyword | fuzzy | semantic | hybrid), `chunk_id`",
+      "Columns: `rank` (1 = best), `score` (1 = the best single moment; an item adds up to 0.75 for its 2nd and 3rd moments, less when they are a small share of a long item), `via` (keyword | fuzzy | semantic | hybrid), `chunk_id`",
     );
     expect(md).toContain("`unit` (item (the whole chat or recording) | moment (one exchange or passage))");
     expect(md).toContain("View contract v2");

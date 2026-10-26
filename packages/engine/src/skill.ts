@@ -60,7 +60,8 @@ export const ITEM_COLUMNS: readonly ColumnDoc[] = [
 
 const HIT_MEANS = {
   rank: "1 = best",
-  score: "1 = the best single moment; an item adds up to 0.75 for its 2nd and 3rd moments",
+  score:
+    "1 = the best single moment; an item adds up to 0.75 for its 2nd and 3rd moments, less when they are a small share of a long item",
   via: "keyword | fuzzy | semantic | hybrid",
   chunk_id: "the best matching chunk",
   item_key: "its item",
@@ -364,6 +365,13 @@ words. Pulling raw chunks into the main context fills the window and loses the s
 narrow to exact tokens (function names, error strings, file paths, typos), \`semantic\` to paraphrases
 and other languages. Combine filters freely: \`--source\`,
 \`--kind meeting\`, \`--since 30d\`.
+
+When the user names what to search, pass it as a filter rather than only putting it in the query
+text: "meetings" or "calls" → \`--kind meeting\`; "dictations" or "voice notes" → \`--kind dictation\`;
+"chats", "agent sessions" or "conversations" → \`--kind conversation\`; a tool ("in Cursor", "Claude
+Code", "Super Whisper") → \`--source\`; a time ("last week", "in October", "yesterday") → \`--since\`, or a
+\`started_at\` range in SQL for a closed window. If the filtered search finds nothing, say so and
+retry without the filter before answering.
 
 ## Reading notices
 
