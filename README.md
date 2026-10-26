@@ -82,6 +82,49 @@ SQL
 `memindex q recipes` lists every ready-made query, and `memindex q <recipe> --sql` prints the SQL behind
 one so you can adapt it.
 
+## Why it exists
+
+Working with coding agents produces a lot of decisions that live nowhere but the chat: why a design was
+chosen, which approach was tried and dropped, what the fix for a weird bug was. Meetings and dictated
+notes hold the rest. Each tool keeps its own history in its own format, none of it is searchable
+together, and some of it disappears: Super Whisper prunes old recordings, chat histories get cleared.
+
+memindex started as two separate tools, one for Super Whisper and one for agent chats, and became one
+archive with a plugin per source, one search index and one skill that every agent shares.
+
+## Sources
+
+Each source is a plugin compiled into the binary. The watcher keeps all of them current; `memindex
+ingest` runs them once on demand.
+
+| Source        | What it captures                                                                                                                 | Where it reads                                                                                                      | How it stays current                                                                                                        |
+| ------------- | -------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| Super Whisper | Dictations and meetings: the processed text, the verbatim transcript, speaker turns of diarized meetings, mode, app and language | `~/Library/Application Support/superwhisper/database/superwhisper.sqlite` and `~/Documents/superwhisper/recordings` | Watches the database folder, polls every 5 minutes. Every revision's raw record is kept, so a parser fix can replay history |
+| Cursor        | Agent chats and their subagents: messages, thinking, commands run, files read and edited                                         | `state.vscdb` in Cursor's `globalStorage`, plus the agent-transcript files in `~/.cursor/projects`                  | Agent hooks, and a poll every 15 minutes                                                                                    |
+| Claude Code   | Sessions and their subagents: messages, thinking, tool use, repository and branch                                                | `~/.claude/projects`                                                                                                | Watches the folder for new and changed session files                                                                        |
+
+When a source deletes something (Super Whisper's retention, a cleared chat), the archive keeps it and
+marks it `source_gone`. Reprocessing the same recording keeps the newest version in search and the older
+ones in `items_all`.
+
+## Agent integration
+
+`memindex install` wires memindex into your agents. Re-running it is safe, and `memindex doctor`
+reports anything that drifted.
+- **Skill.** `SKILL.md` is written to `~/.cursor/skills/memindex/` and `~/.claude/skills/memindex/`. It
+  teaches the agent the views, the search flags, a set of SQL patterns, how to read long chats (search
+  first, then read the end of a long chat for its outcome) and when to hand retrieval to a subagent so
+  the main context stays clean. Install refreshes it on upgrade but leaves a copy you edited alone;
+  `memindex install-skill` replaces it and keeps your version as a `.bak` file.
+- **Cursor hooks.** Entries in `~/.cursor/hooks.json` run `memindex hook cursor <event>` on `stop`,
+  `subagentStop` and `workspaceOpen`, so a chat is in the archive moments after the agent finishes.
+  memindex only touches its own entries; your other hooks stay as they are.
+- **Watcher.** A launchd agent (`com.memindex.watch`) runs `memindex watch` at low priority: it ingests
+  on file events and timers, embeds new chunks in short slices, and runs maintenance (reparse, rechunk,
+  vector cleanup) in bounded steps.
+
+Skip any part with `memindex install --skip-hooks`, `--skip-watch` or `--skip-ollama`.
+
 ## Install
 
 memindex runs on macOS (Apple silicon or Intel) and installs with Homebrew:
@@ -141,6 +184,10 @@ memindex install --url postgresql://memindex:memindex@127.0.0.1:54329/memindex
 Steps you turn off with `memindex install --skip-ollama`, `--skip-watch` or `--skip-hooks` show as
 SKIPPED in `memindex doctor`, which then still exits 0.
 
+Source locations can be overridden per machine with `MEMINDEX_SUPERWHISPER_DB`,
+`MEMINDEX_SUPERWHISPER_DIR`, `MEMINDEX_CURSOR_DB`, `MEMINDEX_CURSOR_TRANSCRIPTS_DIR`,
+`MEMINDEX_CLAUDE_CODE_DIR` and `MEMINDEX_CURSOR_HOOKS_FILE`.
+
 ## Upgrade
 
 ```sh
@@ -179,6 +226,41 @@ chunks, not a whole batch.
   read-only transaction with a statement timeout.
 
 The design and its constraints are in [docs/architecture.md](docs/architecture.md).
+
+### Repository layout
+
+| Package               | What it holds                                                                                      |
+| --------------------- | -------------------------------------------------------------------------------------------------- |
+| `apps/memindex`       | The CLI: commands, the install wizard, launchd setup, output caps and notices                      |
+| `packages/engine`     | Ingest, the watcher loop, jobs (reparse, rechunk, vector cleanup), recipes and the skill generator |
+| `packages/sources`    | The source plugins: Super Whisper, Cursor (with its hooks), Claude Code                            |
+| `packages/chunkers`   | Stock chunkers for text, code, tool calls, diffs and transcripts                                   |
+| `packages/model`      | The content model: items, turns, parts, chunks, sightings                                          |
+| `packages/store`      | The Postgres store (Drizzle + postgres.js), the read-only query path and the generated migrations  |
+| `packages/embed`      | The Ollama client for `bge-m3`                                                                     |
+| `packages/tokenizer`  | An offline bge-m3 token counter, so every chunk fits the model's 512-token window                  |
+| `supabase/migrations` | The schema and the search functions, as SQL migrations                                             |
+| `scripts`             | Release, acceptance checks, the eval snapshot and the search quality gate                          |
+
+### Adding a source
+
+A source is a `SourcePlugin` (`packages/sources/src/contract.ts`). It answers four questions and the
+engine does everything else the same way for every source (triage against stored revisions, chunking,
+transactional writes, gone-marking, supersedence, embedding):
+- `locations(kit)`: where does this source live on this machine?
+- `scan(location, kit)`: a cheap, complete list of keys and revisions.
+- `read(sighting, location, kit)`: the full item for one key, mapped into items, turns and parts.
+- `parseCapture(capture)`: rebuild an item from a stored raw record, for sources whose history can
+  vanish.
+
+It also declares its item kinds, facet columns (they become `<source>_items` views), chunkers, triggers
+(paths to watch, a poll interval, optional agent hooks) and a short note for the skill. Register it in
+`packages/sources/src/index.ts`.
+
+### Status
+
+memindex is a personal project at 0.1.x, used daily on macOS. Expect the schema and recipes to keep
+moving; upgrades migrate the database for you.
 
 ## Development
 
