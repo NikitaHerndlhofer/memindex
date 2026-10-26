@@ -1,52 +1,116 @@
 # memindex
 
-**Your coding agents forget every conversation. Your dictation app deletes old recordings. memindex keeps
-all of it, on your machine, searchable by meaning, and hands it to your agents as a skill.**
+**Long-term memory for you and your coding agents.**
 
-memindex is a local archive of everything you dictate, record and discuss with AI coding agents. A
-background watcher captures new Super Whisper dictations and meetings, Cursor chats and Claude Code
-sessions as they happen, embeds them with a local model, and stores them in one Postgres database.
-Your agents query it with plain SQL plus hybrid search, so "what did we decide about the auth refresh
-flow?" gets answered from the actual chat where you decided it, weeks later, in a different project.
-- **One archive, every source.** Dictations, meetings (with speakers), agent chats and subagent runs,
-  including what the agent did: commands it ran, files it edited and read.
-- **The archive outlives the source.** Super Whisper prunes old recordings and chat apps lose history.
-  memindex keeps the only copy and marks what the source deleted.
-- **Search that understands questions.** Keyword, typo-tolerant and semantic search fused into one
-  ranking, with a multilingual embedding model, and long chats shown by their best and latest moments,
-  not ranked by their length.
-- **Built for agents.** It installs a skill for Cursor and Claude Code: read-only SQL over documented
-  views, ready-made query patterns, and output capped so one huge chat can't flood the context window.
-- **Local and private.** Postgres on your machine, embeddings by Ollama (`bge-m3`) on your machine.
-  Nothing leaves it.
-- **Light.** The watcher works in short low-priority slices, pauses on battery, and the database runs
-  happily with 128 MB of shared buffers.
-
-## What it looks like
-
-Ask your agent, in any chat:
-
-> What did we end up deciding about rate limiting the login endpoints?
-
-> Find the meeting last week where we talked about the Q4 roadmap and list the action items.
-
-> Which repo did I fix the flaky upload test in, and what was the cause?
-
-The agent reaches for the memindex skill and runs queries like these, which you can run yourself:
+Every decision you made with an AI agent, every meeting you recorded, every idea you dictated, in one
+archive on your Mac that your agents can search. Ask Cursor or Claude Code _"what did we decide about
+token refresh?"_ and get the answer from the chat where you decided it three weeks ago, in another
+repo, with the exact turns it came from.
 
 ```sh
-# Hybrid search across everything, best matches first
-memindex q search "rate limiting login endpoints" --json
-
-# Only meetings from the last 7 days
-memindex q search "Q4 roadmap" --kind meeting --since 7d --json
-
-# Only Cursor chats, then read the end of a long one, where the conclusion usually is
-memindex q search "flaky upload test" --source cursor --json
-memindex q item-tail cursor:3f1c… --json
+brew install nikitaherndlhofer/tap/memindex && memindex install
 ```
 
-Or with SQL. `--search` adds a ranked `hits` relation you can join to the views:
+Point it at a Postgres database ([three ways to get one](#database), Homebrew is two commands) and
+install does the rest: Ollama with the embedding model, the background watcher, agent hooks and the
+skill. From then on new chats, sessions and recordings land in the archive as they happen, and your
+agents have a `memindex` skill that knows how to use them.
+
+## The problem
+
+- Agent chats are where the real engineering decisions happen now: the trade-off you argued through,
+  the approach you dropped, the root cause of that one bug. They're also unsearchable, split across
+  tools, and gone the moment you start a new chat.
+- Meetings and voice notes hold the rest, and dictation apps quietly prune old recordings.
+- Your agent starts every session with amnesia, so you re-explain context you've already explained.
+
+memindex fixes that by keeping one archive of all of it, searchable by meaning, and teaching your
+agents to look things up before they ask you.
+
+## What your agent can do with it
+
+You talk to your agent the way you normally would. It reaches for memindex when the answer is in your
+history:
+
+> **You:** Why did we end up putting the rate limiter in front of the auth service instead of inside it?
+>
+> **Agent:** You decided that on Sep 14 in the "Login abuse" chat (cursor, `api-gateway` repo, turns
+> 212-230): limiting inside the service still let bursts reach the database, so you moved it to the
+> gateway and kept a per-account limit in the service as a backstop. You confirmed it in the
+> Sep 16 platform sync recording: "gateway limits by IP, the service only limits by account."
+
+More things you can ask:
+- _"Find the meeting last week about the Q4 roadmap and list the action items."_
+- _"Which repo did I fix the flaky upload test in, and what was the cause?"_
+- _"What did I dictate about the onboarding redesign this month?"_
+- _"Summarize everything I discussed about Postgres migrations, newest first."_
+- _"Show me the subagent runs from yesterday's refactor and what each one changed."_
+- _"Did we ever try a queue for webhooks? What happened?"_
+- _"What did Dana say about pricing in our last call? Quote her exactly."_
+
+## Features
+
+### Captures everything, automatically
+
+| Source            | What lands in the archive                                                                                                                                                                              |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **Cursor**        | Every agent chat and subagent run: your messages, the agent's replies and thinking, the commands it ran, the files it read and edited. In the archive seconds after the agent stops, via Cursor hooks. |
+| **Claude Code**   | Every session and subagent session, with its repository and branch.                                                                                                                                    |
+| **Super Whisper** | Dictations and meetings: the AI summary, the verbatim transcript, and per-speaker turns for diarized meetings.                                                                                         |
+
+Sources are plugins, so new ones slot in without touching search or storage (see
+[Adding a source](#adding-a-source)).
+
+### Search that understands what you mean
+
+Keyword, typo-tolerant and semantic search fused into one ranking. Ask in your own words, paste an error
+string, or quote an exact phrase:
+
+```sh
+memindex q search "why did the deploy keep failing" --json      # hybrid: meaning + keywords (default)
+memindex q keyword "ECONNRESET" --json                          # exact tokens, error strings, function names
+memindex q fuzzy "postgress" --json                             # typos and fragments of words
+memindex q search '"revoke the token family"' --json           # an exact phrase, in order
+memindex q recency-decay "embedding speed" --json               # relevance, weighted toward recent
+```
+
+Results come back as whole chats or recordings when the whole thing is about your query, and as single
+moments (the matching exchange, with the message that led into it and the reply) when only part of it
+is. Long chats don't win just by being long.
+
+### Scoped to what you ask for
+
+```sh
+memindex q search "Q4 roadmap" --kind meeting --since 7d --json        # only meetings, last week
+memindex q search "release process" --source cursor,claude-code --json # only agent chats
+memindex q recent --param days=1 --json                                # everything from yesterday on
+memindex q by-repo --param repo=api-gateway --json                     # one repository's chats
+```
+
+The skill maps your words to these filters: "meetings", "voice notes", "in Cursor", "last week".
+
+### Reads long conversations like you would
+
+A 2,000-turn agent chat or a two-hour meeting won't fit in a context window, and the answer is usually
+at the end. memindex gives agents the tools to read them in pieces:
+
+```sh
+memindex q item-tail cursor:3f1c… --json                      # the last prose turns: where conclusions are
+memindex q thread-page cursor:3f1c… --param from=200 --json   # page through turns from any point
+memindex q context <chunk_id> --json                          # the turns around a search hit
+memindex q turn cursor:3f1c… --param ord=41 --json            # one huge turn, a window at a time
+```
+
+Every result that gets cut says so, with the exact command for the rest:
+
+```text
+Turn 41 truncated: 2,000 of 51,234 chars shown. Rest: memindex q turn cursor:3f1c… --param ord=41 --param from=2000 --json
+```
+
+### Real SQL when recipes aren't enough
+
+Everything is plain Postgres views (`items`, `turns`, `chunks`, one per source), and `--search` adds a
+ranked `hits` relation you can join, filter and aggregate:
 
 ```sh
 memindex sql --json --search "auth token refresh" <<'SQL'
@@ -79,18 +143,33 @@ SQL
 ]
 ```
 
-`memindex q recipes` lists every ready-made query, and `memindex q <recipe> --sql` prints the SQL behind
-one so you can adapt it.
+SQL runs in a read-only transaction with a timeout, so an agent can explore freely and never break
+anything. 30+ ready-made recipes cover the common questions: `memindex q recipes` lists them, and
+`memindex q <recipe> --sql` prints any one as SQL to adapt.
 
-## Why it exists
+### Your history, quantified
 
-Working with coding agents produces a lot of decisions that live nowhere but the chat: why a design was
-chosen, which approach was tried and dropped, what the fix for a weird bug was. Meetings and dictated
-notes hold the rest. Each tool keeps its own history in its own format, none of it is searchable
-together, and some of it disappears: Super Whisper prunes old recordings, chat histories get cleared.
+```sh
+memindex q stats-daily --param days=30 --json     # items and recorded minutes per day and source
+memindex q stats-origins --json                   # which repos and apps your history comes from
+memindex q stats-preservation --json              # how much the archive kept after sources deleted it
+memindex q subagents --json                       # subagent runs and the chats that spawned them
+```
 
-memindex started as two separate tools, one for Super Whisper and one for agent chats, and became one
-archive with a plugin per source, one search index and one skill that every agent shares.
+### The archive outlives the source
+
+When Super Whisper prunes a recording or a chat history gets cleared, memindex keeps its copy and marks
+it `source_gone`. Reprocessed recordings keep every version. Raw source records are stored, so a parser
+improvement can replay history instead of losing it.
+
+### Local, private and light
+
+- **Nothing leaves your Mac.** Postgres runs locally (Homebrew, Docker or your own Supabase), and
+  embeddings come from Ollama's `bge-m3` on your machine.
+- **Light on resources.** The watcher runs at low priority in short slices and pauses on battery. The
+  database runs fine with 128 MB of shared buffers.
+- **Safe to re-run.** `memindex install` checks before it changes anything, and `memindex doctor` tells
+  you exactly what to fix.
 
 ## Sources
 
