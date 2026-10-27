@@ -1178,6 +1178,28 @@ export function runStoreContract(name: string, backend: () => ContractBackend): 
         });
         expect(scoped).toEqual([]);
       });
+
+      test("hybrid search ranks a chunk in another language with the query's meaning above a same-language chunk sharing one word", async () => {
+        const w = await writer();
+        const russian = draftOf(SW, "ru", [turnOf("u", "Когда лучше сажать помидоры в саду весной")]);
+        const english = draftOf(SW, "en", [turnOf("u", "Ana painted the garden fence on Sunday")]);
+        for (const d of [russian, english]) await w.apply(writeOf(SW, L1, d, rev("1")));
+        const query = vecNear(1);
+        await embedAll(w, (t) => (t.includes("помидоры") ? query : vecNear(1, 7)));
+        const req = {
+          text: "best time to plant tomatoes in the garden",
+          vector: query,
+          space: SPACE,
+          filter: {},
+          k: 5,
+        };
+        const sem = await w.search({ ...req, via: "vector" });
+        expect(sem.map((h) => h.itemKey)).toEqual([russian.key, english.key]);
+        const kw = await w.search({ ...req, via: "keyword" });
+        expect(kw.map((h) => h.itemKey)).toEqual([english.key]);
+        const hy = await w.search({ ...req, via: "hybrid" });
+        expect(hy.map((h) => h.itemKey)).toEqual([russian.key, english.key]);
+      });
     });
 
     describe("run()", () => {

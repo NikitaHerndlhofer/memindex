@@ -389,9 +389,9 @@ words. Pulling raw chunks into the main context fills the window and loses the s
    (\`item_key\`, turn \`ord\` ranges, \`origin\`, \`started_day\`).
 3. The main agent uses the summary; for more detail it dispatches another subagent with a narrower query.
 
-\`hybrid\` (the \`search\` default) covers both exact tokens and conceptual recall; \`keyword\` / \`fuzzy\`
-narrow to exact tokens (function names, error strings, file paths, typos), \`semantic\` to paraphrases
-and other languages.
+\`hybrid\` (the \`search\` default) covers exact tokens, conceptual recall and text in another language than
+the query; \`keyword\` / \`fuzzy\` narrow to exact tokens (function names, error strings, file paths, typos),
+\`semantic\` to paraphrases.
 
 When the user names what to search, pass it as a filter rather than only putting it in the query
 text: "meetings" or "calls" → \`--scope meetings\`; "dictations" or "voice notes" → \`--scope dictations\`;
