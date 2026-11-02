@@ -21,7 +21,7 @@ export type {
   SourcePlugin,
 } from "./contract.ts";
 export { pingCursorApi } from "./cursor/cloud/api.ts";
-export { readCursorApiKey, saveCursorApiKey } from "./cursor/cloud/key.ts";
+export { isCursorApiKey, readCursorApiKey, saveCursorApiKey } from "./cursor/cloud/key.ts";
 export { createSourceKit, type DisposableSourceKit, type SourceKitOptions } from "./kit.ts";
 
 /** Display order only. */

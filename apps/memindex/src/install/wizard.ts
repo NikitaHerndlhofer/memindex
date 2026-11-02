@@ -2,6 +2,7 @@ import { join } from "node:path";
 import {
   type Archive,
   type EmbedHealth,
+  isCursorApiKey,
   type MemindexConfig,
   type PullProgress,
   parseStoreUrl,
@@ -67,6 +68,14 @@ export interface InstallDeps {
   };
   readonly launchd: {
     install(t: PlistTemplate): Promise<string>;
+  };
+  readonly cursorApi: {
+    /** The stored key, or null. */
+    read(): string | null;
+    /** One authenticated read: "unreachable" is a network or server error, not a verdict on the key. */
+    ping(key: string): Promise<"ok" | "unauthorized" | "unreachable">;
+    /** Writes the key file (mode 0600). */
+    save(key: string): void;
   };
   /** Remembers which steps the user skipped, so doctor reports them as skipped rather than failed. */
   readonly saveSkipped: (steps: readonly SkippableStep[]) => Promise<void>;
@@ -141,7 +150,7 @@ class Steps {
 /**
  * `memindex install`: (a) a Postgres URL, checked for the extensions and search_path the migrations
  * need, then saved, (b) the schema migrated with the Supabase CLI, (c) Ollama with the embed model,
- * (d) the launchd watcher, (e) agent hooks, (f) the skill. Each step is
+ * (d) the launchd watcher, (e) agent hooks, (f) the Cursor API key, (g) the skill. Each step is
  * check-and-fix and idempotent; a failed step is reported and the rest still run where they can.
  * memindex never starts a database itself.
  */
@@ -177,6 +186,7 @@ export async function runInstall(d: InstallDeps, opts: InstallOptions): Promise<
   try {
     if (opts.skip.includes("hooks")) s.skip("hooks", "--skip-hooks");
     else await hooks(d, s, archive);
+    await cursorApi(d, s, opts);
     await skill(d, s, archive);
   } finally {
     await archive.close();
@@ -411,6 +421,59 @@ async function hooks(d: InstallDeps, s: Steps, archive: Pick<Archive, "hooks">):
   } catch (e) {
     s.fail("hooks", errorMessage(e), task);
   }
+}
+
+/** The key is typed at a masked prompt: never an argument, never in `--yes`, never in config.json or a log. */
+async function cursorApi(d: InstallDeps, s: Steps, opts: InstallOptions): Promise<void> {
+  if (opts.skip.includes("cursor-api")) {
+    s.skip("cursor-api", "--skip-cursor-api");
+    return;
+  }
+  const stored = d.cursorApi.read();
+  if (stored) {
+    const task = d.ui.task("Cursor API key");
+    const verdict = await d.cursorApi.ping(stored);
+    if (verdict !== "unauthorized") {
+      s.ok(
+        "cursor-api",
+        verdict === "ok" ? "stored and accepted" : "stored (Cursor is unreachable now)",
+        task,
+      );
+      return;
+    }
+    task.fail("Cursor rejected the stored key");
+  }
+  const typed = (
+    await d.ui.secret(
+      `Cursor API key (crsr_…) to archive cloud agents${stored ? ", replacing the rejected one" : ""}; blank to skip`,
+    )
+  ).trim();
+  if (!typed) {
+    await d.saveSkipped([...new Set([...opts.skip, "cursor-api" as const])]);
+    s.skip("cursor-api", "cloud agents are not archived until a key is stored");
+    return;
+  }
+  if (!isCursorApiKey(typed)) {
+    s.fail("cursor-api", "that is not a Cursor API key (expected crsr_…); nothing saved");
+    return;
+  }
+  const task = d.ui.task("Cursor API key");
+  const verdict = await d.cursorApi.ping(typed);
+  if (verdict === "unauthorized") {
+    s.fail("cursor-api", "Cursor rejected that key; nothing saved", task);
+    return;
+  }
+  try {
+    d.cursorApi.save(typed);
+  } catch (e) {
+    s.fail("cursor-api", errorMessage(e), task);
+    return;
+  }
+  s.ok(
+    "cursor-api",
+    verdict === "ok" ? "saved" : "saved (Cursor is unreachable, so it was not verified)",
+    task,
+  );
 }
 
 async function skill(d: InstallDeps, s: Steps, archive: Pick<Archive, "skill">): Promise<void> {

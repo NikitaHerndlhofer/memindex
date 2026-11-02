@@ -21,6 +21,8 @@ export interface Ui {
     readonly placeholder?: string;
     readonly initial?: string;
   }): Promise<string>;
+  /** Masked answer; non-interactive runs answer "" and never prompt. */
+  secret(message: string): Promise<string>;
   task(title: string): Task;
   info(msg: string): void;
   warn(msg: string): void;
@@ -49,6 +51,11 @@ export function clackUi(): Ui {
       if (p.isCancel(answer)) throw new InstallCancelled("install cancelled");
       return answer ?? "";
     },
+    async secret(message) {
+      const answer = await p.password({ message });
+      if (p.isCancel(answer)) throw new InstallCancelled("install cancelled");
+      return answer ?? "";
+    },
     task(title) {
       const s = p.spinner();
       s.start(title);
@@ -74,6 +81,7 @@ export function plainUi(log: ConsolaInstance): Ui {
       return true;
     },
     text: async (q) => q.initial ?? "",
+    secret: async () => "",
     task(title) {
       log.start(title);
       return {

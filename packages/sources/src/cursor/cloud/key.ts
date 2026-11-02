@@ -22,10 +22,11 @@ export function readCursorApiKey(where: Where): string | null {
   return (existsSync(path) && readFileSync(path, "utf8").trim()) || null;
 }
 
+export const isCursorApiKey = (key: string): boolean => /^crsr_\S+$/.test(key) && !key.includes("://");
+
 /** Throws without echoing the key when it does not look like one. */
 export function saveCursorApiKey(dir: string, key: string): void {
-  if (!/^crsr_\S+$/.test(key) || key.includes("://"))
-    throw new Error("that is not a Cursor API key (expected crsr_…)");
+  if (!isCursorApiKey(key)) throw new Error("that is not a Cursor API key (expected crsr_…)");
   mkdirSync(dir, { recursive: true });
   const path = join(dir, KEY_FILE);
   const tmp = `${path}.tmp-${process.pid}`;

@@ -90,8 +90,8 @@ describe("config", () => {
     expect(cfg.skippedSteps).toEqual([]);
     await saveSkippedSteps(cfg, ["watcher", "hooks"]);
     expect((await loadConfig(env)).skippedSteps).toEqual(["watcher", "hooks"]);
-    await saveSkippedSteps(cfg, ["ollama"]);
-    expect((await loadConfig(env)).skippedSteps).toEqual(["ollama"]);
+    await saveSkippedSteps(cfg, ["ollama", "cursor-api"]);
+    expect((await loadConfig(env)).skippedSteps).toEqual(["ollama", "cursor-api"]);
     await saveSkippedSteps(cfg, []);
     expect(JSON.parse(readFileSync(join(dir, "config.json"), "utf8"))).toEqual({
       disabledSources: ["cursor"],

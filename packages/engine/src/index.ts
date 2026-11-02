@@ -5,6 +5,7 @@
  *   jobs   = convergent derived-state jobs + one-shot data jobs
  */
 export type { EmbedHealth, PullProgress } from "@memindex/embed";
+export { isCursorApiKey, pingCursorApi, readCursorApiKey, saveCursorApiKey } from "@memindex/sources";
 export {
   type ExtensionCheck,
   ensureExtensionsSearchPath,

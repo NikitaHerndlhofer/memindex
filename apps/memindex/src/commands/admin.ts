@@ -10,8 +10,10 @@ import {
   type MemindexConfig,
   migrateArchive,
   openArchive,
+  pingCursorApi,
   probeStore,
   pullEmbedModel,
+  readCursorApiKey,
   redactUrl,
   type SkippableStep,
   type StoreProbe,
@@ -74,6 +76,7 @@ function statusText(
   watcher: boolean,
   pace: EmbedPace,
   access: AccessReport | null,
+  cursorKey: boolean,
 ): string {
   const lines = [
     `memindex ${VERSION}`,
@@ -99,6 +102,7 @@ function statusText(
     );
   for (const k of skills) lines.push(`skill     ${k.state.padEnd(8)} ${k.path}`);
   lines.push(`watcher   ${PLIST_LABEL} ${watcher ? "loaded" : "not loaded"}`);
+  lines.push(`cursor cloud  api key ${cursorKey ? "configured" : "not configured"}`);
   const notice = access ? accessNotice(access) : null;
   if (notice) lines.push(`superwhisper: ${notice.problem} (fix: ${notice.fix})`);
   return `${lines.join("\n")}\n`;
@@ -175,6 +179,7 @@ export const statusCommand = defineCommand({
               watcher,
               archive.config.embed.pace,
               await readAccessReport(installPaths(archive.config).superwhisperAccess),
+              readCursorApiKey({ env: process.env, home: archive.config.paths.home }) !== null,
             ),
       );
     });
@@ -283,6 +288,7 @@ const SKIP_FLAG: Readonly<Record<SkippableStep, string>> = {
   ollama: "--skip-ollama",
   watcher: "--skip-watch",
   hooks: "--skip-hooks",
+  "cursor-api": "--skip-cursor-api",
 };
 
 /** A failing probe of a step the last install skipped on purpose is reported as skipped, not failed. */
@@ -380,6 +386,12 @@ export async function runDoctor(
   if (access) checks.push(access);
   if (cfg.skippedSteps.includes("hooks"))
     checks.push({ name: "agent hooks", step: "hooks", ok: false, detail: "not installed" });
+  const cursorApi = await cursorApiCheck({
+    env: process.env,
+    home: cfg.paths.home,
+    skipped: cfg.skippedSteps.includes("cursor-api"),
+  });
+  if (cursorApi) checks.push(cursorApi);
   const settled = settleChecks(checks, cfg.skippedSteps);
   return { ok: settled.every((c) => c.status !== "failed"), checks: settled };
 }
@@ -421,6 +433,29 @@ export function documentsCheck(r: AccessReport | null): Probe | null {
     ok: notice === null,
     detail: notice?.problem ?? `the watcher (pid ${r.pid}) can read ${r.dir}`,
     ...(notice ? { hint: notice.fix } : {}),
+  };
+}
+
+/**
+ * The stored Cursor API key, verified with one read. A key that cannot be checked because Cursor is
+ * unreachable passes; a rejected one fails even when install skipped the step. No key: nothing to report
+ * unless install skipped it on purpose, so an upgrade that has not rerun install never turns doctor red.
+ */
+export async function cursorApiCheck(w: {
+  readonly env: Readonly<Record<string, string | undefined>>;
+  readonly home: string;
+  readonly skipped: boolean;
+}): Promise<Probe | null> {
+  const name = "Cursor API key (cloud agents)";
+  const key = readCursorApiKey(w);
+  if (key === null) return w.skipped ? { name, step: "cursor-api", ok: false, detail: "not stored" } : null;
+  const verdict = await pingCursorApi(key, w.env);
+  if (verdict === "unauthorized")
+    return { name, ok: false, detail: "stored, but Cursor rejected it", hint: "memindex install" };
+  return {
+    name,
+    ok: true,
+    detail: verdict === "ok" ? "stored and accepted" : "stored (Cursor is unreachable right now)",
   };
 }
 

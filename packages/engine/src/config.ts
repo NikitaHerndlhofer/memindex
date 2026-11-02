@@ -56,8 +56,8 @@ export const EMBED_DEFAULTS: EmbedPolicy = {
   onBattery: "defer",
 };
 
-/** `memindex install` steps the user turned off (`--skip-ollama`, `--skip-watch`, `--skip-hooks`). */
-const SKIPPABLE_STEPS = ["ollama", "watcher", "hooks"] as const;
+/** `memindex install` steps the user turned off (`--skip-ollama`, `--skip-watch`, `--skip-hooks`, `--skip-cursor-api`). */
+const SKIPPABLE_STEPS = ["ollama", "watcher", "hooks", "cursor-api"] as const;
 export type SkippableStep = (typeof SKIPPABLE_STEPS)[number];
 
 /** The archive's Postgres (Supabase or any Postgres with pgvector). */

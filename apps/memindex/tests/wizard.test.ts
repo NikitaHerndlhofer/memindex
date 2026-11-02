@@ -1,13 +1,16 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
   type EmbedHealth,
   loadConfig,
   type PullProgress,
+  readCursorApiKey,
   type SkippableStep,
   type StoreProbe,
+  saveCursorApiKey,
+  saveSkippedSteps,
 } from "@memindex/engine";
 import type { AccessReport } from "../src/install/documents.ts";
 import type { Task, Ui } from "../src/install/ui.ts";
@@ -38,7 +41,7 @@ function brewBin(bytes = "memindex 0.1.10"): string {
 const watcherCopy = () => join(home, "Library", "Application Support", "memindex", "bin", "memindex");
 const URL_ = "postgresql://memindex:s3cret@127.0.0.1:54329/memindex";
 
-function recordingUi(answer = true, texts: string[] = []): Ui & { lines: string[] } {
+function recordingUi(answer = true, texts: string[] = [], secrets: string[] = []): Ui & { lines: string[] } {
   const lines: string[] = [];
   const task = (title: string): Task => ({
     update: (m) => lines.push(`… ${title}: ${m}`),
@@ -57,6 +60,10 @@ function recordingUi(answer = true, texts: string[] = []): Ui & { lines: string[
     text: async (q) => {
       lines.push(`? ${q.message} [${q.initial ?? ""}]`);
       return texts.length > 0 ? (texts.shift() as string) : (q.initial ?? "");
+    },
+    secret: async (m) => {
+      lines.push(`?? ${m}`);
+      return secrets.shift() ?? "";
     },
     task,
     info: (m) => lines.push(m),
@@ -87,6 +94,7 @@ interface Harness {
   saved: string[];
   migrated: string[];
   skipped: (readonly SkippableStep[])[];
+  pings: string[];
   ui: ReturnType<typeof recordingUi>;
 }
 
@@ -99,6 +107,12 @@ async function harness(
     bin?: string | null;
     answer?: boolean;
     texts?: string[];
+    /** Answers to the masked Cursor API key prompt; none means blank. */
+    secrets?: string[];
+    /** The key file before install. */
+    storedKey?: string;
+    /** Cursor's verdict on a key; default accepts every key. */
+    ping?: (key: string) => "ok" | "unauthorized" | "unreachable";
     probe?: (url: string) => Promise<StoreProbe>;
     ensureSearchPath?: () => Promise<boolean>;
     migrate?: () => Promise<never>;
@@ -120,7 +134,10 @@ async function harness(
   const missing: EmbedHealth = { ok: false, reason: "model_missing", detail: "not pulled" };
   // The wizard checks once before asking about the download, then ensureOllama re-checks.
   const health = over.health ?? [missing, missing];
-  const ui = recordingUi(over.answer, over.texts);
+  const ui = recordingUi(over.answer, over.texts, over.secrets);
+  const pings: string[] = [];
+  const cfgDir = join(home, "cfg");
+  if (over.storedKey) saveCursorApiKey(cfgDir, over.storedKey);
   const present = { brew: true, supabase: true, ollama: true, ...over.which };
   const deps: InstallDeps = {
     paths: installPaths(config),
@@ -175,6 +192,14 @@ async function harness(
         return join(home, "Library", "LaunchAgents", "com.memindex.watch.plist");
       },
     },
+    cursorApi: {
+      read: () => readCursorApiKey({ env, home }),
+      ping: async (key) => {
+        pings.push(key);
+        return over.ping?.(key) ?? "ok";
+      },
+      save: (key) => saveCursorApiKey(cfgDir, key),
+    },
     saveSkipped: async (steps) => {
       skipped.push(steps);
     },
@@ -190,7 +215,7 @@ async function harness(
       close: async () => {},
     }),
   };
-  return { deps, commands, plists, plistEnv, hookBins, saved, migrated, skipped, ui };
+  return { deps, commands, plists, plistEnv, hookBins, saved, migrated, skipped, pings, ui };
 }
 
 const WITH_URL = { url: URL_, skip: [] };
@@ -208,6 +233,7 @@ describe("memindex install wizard", () => {
       watcher: "ok",
       documents: "ok",
       hooks: "ok",
+      "cursor-api": "skipped",
       skill: "ok",
     });
     expect(detail(results, "database")).toBe(
@@ -389,7 +415,10 @@ describe("memindex install wizard", () => {
     expect(results.filter((r) => r.status === "failed")).toEqual([]);
     expect(h.plists).toEqual([]);
     expect(h.hookBins).toEqual([]);
-    expect(h.skipped).toEqual([["watcher", "hooks"]]);
+    expect(h.skipped).toEqual([
+      ["watcher", "hooks"],
+      ["watcher", "hooks", "cursor-api"],
+    ]);
   });
 
   test("launchd runs a stable copy of the installed binary; hooks keep the Homebrew path", async () => {
@@ -490,5 +519,98 @@ describe("memindex install wizard", () => {
       skill: "skipped",
     });
     expect(h.hookBins).toEqual([]);
+  });
+
+  describe("Cursor API key step", () => {
+    const keyFile = () => join(home, "cfg", "cursor-api-key");
+    const NEW_KEY = "crsr_typed_new_1234";
+    const OLD_KEY = "crsr_stored_old_5678";
+    const run = (h: Harness, skip: SkippableStep[] = ["ollama", "watcher"]) =>
+      runInstall(h.deps, { ...WITH_URL, skip });
+    const noSecretsLeak = (h: Harness, ...keys: string[]) => {
+      for (const k of keys) expect(h.ui.lines.some((l) => l.includes(k))).toBe(false);
+    };
+
+    test("no key and a blank answer: skipped, remembered for doctor, nothing written", async () => {
+      const h = await harness();
+      const results = await run(h);
+      expect(statuses(results)["cursor-api"]).toBe("skipped");
+      expect(detail(results, "cursor-api")).toBe("cloud agents are not archived until a key is stored");
+      expect(existsSync(keyFile())).toBe(false);
+      expect(h.pings).toEqual([]);
+      expect(h.skipped.at(-1)).toEqual(["ollama", "watcher", "cursor-api"]);
+    });
+
+    test("--skip-cursor-api: no prompt, and the step stays in the saved skipped steps", async () => {
+      const h = await harness({ secrets: [NEW_KEY] });
+      const results = await run(h, ["ollama", "watcher", "cursor-api"]);
+      expect(detail(results, "cursor-api")).toBe("--skip-cursor-api");
+      expect(h.ui.lines.some((l) => l.startsWith("??"))).toBe(false);
+      expect(h.skipped).toEqual([["ollama", "watcher", "cursor-api"]]);
+      expect(existsSync(keyFile())).toBe(false);
+    });
+
+    test("a valid key is verified, then saved in a 0600 file; config.json never holds it", async () => {
+      const h = await harness({ secrets: [NEW_KEY] });
+      const deps = {
+        ...h.deps,
+        saveSkipped: (steps: readonly SkippableStep[]) => saveSkippedSteps(h.deps.config, steps),
+      };
+      const results = await runInstall(deps, { ...WITH_URL, skip: ["ollama", "watcher"] });
+      expect(statuses(results)["cursor-api"]).toBe("ok");
+      expect(h.pings).toEqual([NEW_KEY]);
+      expect(readFileSync(keyFile(), "utf8").trim()).toBe(NEW_KEY);
+      expect(statSync(keyFile()).mode & 0o777).toBe(0o600);
+      expect(
+        existsSync(join(home, "cfg", "config.json"))
+          ? readFileSync(join(home, "cfg", "config.json"), "utf8")
+          : "",
+      ).not.toContain("crsr_");
+      noSecretsLeak(h, NEW_KEY);
+    });
+
+    test("a rejected new key is not saved and the old key stays", async () => {
+      const h = await harness({ storedKey: OLD_KEY, secrets: [NEW_KEY], ping: () => "unauthorized" });
+      const results = await run(h);
+      expect(statuses(results)["cursor-api"]).toBe("failed");
+      expect(detail(results, "cursor-api")).toBe("Cursor rejected that key; nothing saved");
+      expect(h.pings).toEqual([OLD_KEY, NEW_KEY]);
+      expect(readFileSync(keyFile(), "utf8").trim()).toBe(OLD_KEY);
+      noSecretsLeak(h, NEW_KEY, OLD_KEY);
+    });
+
+    test("a stored key Cursor accepts, or cannot be asked about, is kept without a prompt", async () => {
+      for (const verdict of ["ok", "unreachable"] as const) {
+        const h = await harness({ storedKey: OLD_KEY, ping: () => verdict });
+        const results = await run(h);
+        expect(statuses(results)["cursor-api"]).toBe("ok");
+        expect(h.ui.lines.some((l) => l.startsWith("??"))).toBe(false);
+        expect(readFileSync(keyFile(), "utf8").trim()).toBe(OLD_KEY);
+        rmSync(keyFile());
+      }
+    });
+
+    test("a rejected stored key is replaced by a good new one", async () => {
+      const h = await harness({
+        storedKey: OLD_KEY,
+        secrets: [NEW_KEY],
+        ping: (k) => (k === OLD_KEY ? "unauthorized" : "ok"),
+      });
+      expect(statuses(await run(h))["cursor-api"]).toBe("ok");
+      expect(readFileSync(keyFile(), "utf8").trim()).toBe(NEW_KEY);
+    });
+
+    test("something that is not a key is refused before any request, and unreachable Cursor still saves a well-formed key", async () => {
+      const bad = await harness({ secrets: ["sk-not-a-cursor-key"] });
+      expect(statuses(await run(bad))["cursor-api"]).toBe("failed");
+      expect(bad.pings).toEqual([]);
+      expect(existsSync(keyFile())).toBe(false);
+      noSecretsLeak(bad, "sk-not-a-cursor-key");
+
+      const offline = await harness({ secrets: [NEW_KEY], ping: () => "unreachable" });
+      const results = await run(offline);
+      expect(detail(results, "cursor-api")).toContain("not verified");
+      expect(readFileSync(keyFile(), "utf8").trim()).toBe(NEW_KEY);
+    });
   });
 });

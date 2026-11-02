@@ -4,8 +4,11 @@ import {
   loadConfig,
   migrateArchive,
   openArchive,
+  pingCursorApi,
   probeStore,
   pullEmbedModel,
+  readCursorApiKey,
+  saveCursorApiKey,
   saveSkippedSteps,
   saveStore,
   storeConfig,
@@ -45,7 +48,7 @@ export const installCommand = defineCommand({
   meta: {
     name: "install",
     description:
-      "Connect and migrate a Postgres database, set up Ollama + bge-m3, the launchd watcher, agent hooks and the skill",
+      "Connect and migrate a Postgres database, set up Ollama + bge-m3, the launchd watcher, agent hooks, the Cursor API key and the skill",
   },
   args: {
     yes: { type: "boolean", alias: "y", description: "Non-interactive: accept every prompt (for scripts)" },
@@ -62,6 +65,10 @@ export const installCommand = defineCommand({
     "skip-ollama": { type: "boolean", description: "Don't start Ollama or pull the model" },
     "skip-watch": { type: "boolean", description: "Don't install the launchd watcher" },
     "skip-hooks": { type: "boolean", description: "Don't install agent hooks" },
+    "skip-cursor-api": {
+      type: "boolean",
+      description: "Don't ask for a Cursor API key (cloud agents are then not archived)",
+    },
   },
   run: action(async ({ args }) => {
     const interactive = process.stdin.isTTY === true && process.stdout.isTTY === true;
@@ -100,6 +107,11 @@ export const installCommand = defineCommand({
           health: () => checkEmbedder({ config }),
           pull: (onProgress) => pullEmbedModel(onProgress, { config }),
         },
+        cursorApi: {
+          read: () => readCursorApiKey({ env, home: config.paths.home }),
+          ping: (key) => pingCursorApi(key, env),
+          save: (key) => saveCursorApiKey(config.paths.configDir, key),
+        },
         launchd: { install: installLaunchAgent },
         saveSkipped: (steps) => saveSkippedSteps(config, steps),
         openArchive: (url) =>
@@ -111,6 +123,7 @@ export const installCommand = defineCommand({
           ...(args["skip-ollama"] ? ["ollama" as const] : []),
           ...(args["skip-watch"] ? ["watcher" as const] : []),
           ...(args["skip-hooks"] ? ["hooks" as const] : []),
+          ...(args["skip-cursor-api"] ? ["cursor-api" as const] : []),
         ],
       },
     );

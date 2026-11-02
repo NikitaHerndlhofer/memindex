@@ -3,7 +3,9 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import type { EmbedActivity, EmbedRuntime } from "@memindex/engine";
+import { type FakeApi, fakeCursorApi, TEST_KEY } from "../../../packages/sources/tests/fake-cursor-api.ts";
 import {
+  cursorApiCheck,
   doctorText,
   documentsCheck,
   embedderText,
@@ -194,5 +196,55 @@ describe("doctor: the watcher's macOS Documents permission for Super Whisper", (
     expect(await readAccessReport(file)).toBeNull();
     writeFileSync(file, "{not json");
     expect(await readAccessReport(file)).toBeNull();
+  });
+});
+
+describe("doctor: the Cursor API key", () => {
+  let api: FakeApi;
+  let home: string;
+  beforeEach(() => {
+    api = fakeCursorApi([]);
+    home = mkdtempSync(join(tmpdir(), "memindex-doctor-"));
+  });
+  afterEach(() => {
+    api.stop();
+    rmSync(home, { recursive: true, force: true });
+  });
+  const env = () => ({ MEMINDEX_CONFIG_DIR: join(home, "cfg"), MEMINDEX_CURSOR_API_URL: api.url });
+  const store = (key: string) => {
+    mkdirSync(join(home, "cfg"), { recursive: true });
+    writeFileSync(join(home, "cfg", "cursor-api-key"), `${key}\n`, { mode: 0o600 });
+  };
+  const verdict = async (skipped: boolean, over: Record<string, string> = {}) => {
+    const probe = await cursorApiCheck({ env: { ...env(), ...over }, home, skipped });
+    return probe ? settleChecks([probe], skipped ? ["cursor-api"] : []) : [];
+  };
+
+  test("an accepted key passes, and so does one Cursor cannot be asked about", async () => {
+    store(TEST_KEY);
+    expect((await verdict(false)).map((c) => c.status)).toEqual(["ok"]);
+    const refused = await verdict(false, { MEMINDEX_CURSOR_API_URL: "http://127.0.0.1:1" });
+    expect(refused.map((c) => c.status)).toEqual(["ok"]);
+    expect(refused[0]?.detail).toContain("unreachable");
+  });
+
+  test("a rejected key fails with the install fix, even when install skipped the step, and is never printed", async () => {
+    store("crsr_rejected_9999");
+    for (const skipped of [false, true]) {
+      const checks = await verdict(skipped);
+      expect(checks.map((c) => c.status)).toEqual(["failed"]);
+      const text = doctorText(checks);
+      expect(text).toContain("[FAIL   ] Cursor API key (cloud agents) — stored, but Cursor rejected it");
+      expect(text).toContain("fix: memindex install");
+      expect(text).not.toContain("crsr_rejected_9999");
+    }
+  });
+
+  test("no key: silent for an upgrade that has not rerun install, SKIPPED when install skipped it", async () => {
+    expect(await verdict(false)).toEqual([]);
+    const skipped = await verdict(true);
+    expect(skipped.map((c) => c.status)).toEqual(["skipped"]);
+    expect(doctorText(skipped)).toContain("(skipped: memindex install --skip-cursor-api)");
+    expect(api.requests).toEqual([]);
   });
 });
