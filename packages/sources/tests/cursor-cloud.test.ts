@@ -5,7 +5,7 @@ import { join } from "node:path";
 import type { Sighting } from "@memindex/model";
 import { CloudAuthError } from "../src/cursor/cloud/api.ts";
 import { cursorApiKeyPath, readCursorApiKey, saveCursorApiKey } from "../src/cursor/cloud/key.ts";
-import { parseSubagentReport } from "../src/cursor/cloud/notification.ts";
+import { parseSubagentReport, parseSystemEvent } from "../src/cursor/cloud/notification.ts";
 import { cursor } from "../src/cursor/index.ts";
 import type { Location } from "../src/index.ts";
 import { type FakeAgent, type FakeApi, fakeCursorApi, TEST_KEY } from "./fake-cursor-api.ts";
@@ -306,7 +306,10 @@ describe("cursor cloud subagent hand-offs", () => {
       messages: [
         { type: "user_message", text: "Fix the gate" },
         { type: "assistant_message", text: "Delegating the latch." },
-        { type: "user_message", text: notification(SUB, "Fix gate latch", REPORT) },
+        {
+          type: "user_message",
+          text: `${notification(SUB, "Fix gate latch", REPORT)}\n\n<user_query>Perform any necessary follow-up actions.</user_query>`,
+        },
         ...extra,
       ],
     });
@@ -341,6 +344,37 @@ describe("cursor cloud subagent hand-offs", () => {
     expect(parseSubagentReport("an ordinary message")).toBeNull();
   });
 
+  test("a GitHub event is a system turn named after its sender; only typed words stay `user`", async () => {
+    withKey();
+    const event = (comment: string) =>
+      `<timestamp>Monday, Oct 5, 2026, 9:00 AM (UTC)</timestamp>\n<system_notification source="github" pr="https://github.com/example-org/garden-site/pull/12" action="created" sender="reviewbot[bot]">\n${comment}\n</system_notification>`;
+    expect(parseSystemEvent(event("Rename the gate."))).toEqual({
+      speaker: "github: reviewbot[bot]",
+      body: "Rename the gate.",
+      rest: "",
+    });
+    expect(parseSystemEvent("plain words")).toBeNull();
+    api.agents[0] = agent(NORTH, "2026-10-02T10:00:00Z", {
+      messages: [
+        { type: "user_message", text: "Fix the gate" },
+        { type: "user_message", text: event("Rename the gate.") },
+        { type: "user_message", text: `${event("Rename the gate.")}\nok, rename it` },
+        { type: "user_message", text: "ok, rename it" },
+      ],
+    });
+    const loc = (await cloudLoc()) as Location;
+    const [s] = await listing(loc);
+    const d = await draftOf(loc, s as Sighting);
+    expect(d.turns.map((t) => [t.role, t.speaker, t.parts[0]?.kind, t.parts[0]?.text])).toEqual([
+      ["user", null, "text", "Fix the gate"],
+      ["system", "github: reviewbot[bot]", "tool_result", "Rename the gate."],
+      ["system", "github: reviewbot[bot]", "tool_result", "Rename the gate."],
+      ["system", "system", "tool_result", "ok, rename it"],
+      ["user", null, "text", "ok, rename it"],
+    ]);
+    expect(new Set(d.turns.map((t) => t.key)).size).toBe(5);
+  });
+
   test("a worker's chat keeps what it sent a subagent and what came back, each named after the subagent", async () => {
     withKey();
     api.agents[0] = worker(NORTH);
@@ -353,10 +387,16 @@ describe("cursor cloud subagent hand-offs", () => {
       ["assistant", null, "text", "Delegating the latch."],
       ["assistant", "to subagent: Fix gate latch", "subagent", PROMPT],
       ["tool", "subagent: Fix gate latch", "text", REPORT],
+      [
+        "system",
+        "system",
+        "tool_result",
+        "<user_query>Perform any necessary follow-up actions.</user_query>",
+      ],
     ]);
     expect(d.turns[2]?.parts[0]?.ref as string).toBe(`cursor:${SUB}`);
     expect(d.turns.some((t) => t.parts.some((p) => p.text.includes("system_notification")))).toBe(false);
-    expect(new Set(d.turns.map((t) => t.key)).size).toBe(4);
+    expect(new Set(d.turns.map((t) => t.key)).size).toBe(5);
   });
 
   test("the prompt is kept once per chat and fetched once; a subagent that answers twice keeps both replies; an unreadable one keeps its reply", async () => {

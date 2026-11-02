@@ -238,6 +238,7 @@ export const cursor: SourcePlugin<CursorMeta> = {
     "as text. List them with `item_key LIKE 'cursor:bc-%'`. Leaving the desktop window never marks an agent",
     "`source_gone`. A cloud chat holds its hand-offs inline: a turn whose `speaker` is `to subagent: <task>` (or",
     "`to worker: <task>`) is the prompt it sent, and `subagent: <task>` / `worker: <task>` (role `tool`) is what",
-    "came back. The subagents' own chats are not archived.",
+    "came back. The subagents' own chats are not archived. In a cloud chat `user` is only what the person typed:",
+    "GitHub and other Cursor notifications are role `system` with a `speaker` such as `github: <sender>`.",
   ].join("\n"),
 };

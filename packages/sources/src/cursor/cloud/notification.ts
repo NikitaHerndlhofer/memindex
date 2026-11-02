@@ -24,6 +24,8 @@ export interface SubagentReport {
 }
 
 const NOTIFICATION = /<system_notification>([\s\S]*?)<\/system_notification>/;
+const EVENT = /<system_notification([^>]*)>([\s\S]*?)<\/system_notification>/g;
+const TIMESTAMP = /<timestamp>[\s\S]*?<\/timestamp>/;
 const DETAIL = /\ndetail: ([\s\S]*?)\s*<\/task>/;
 const HEADER = /^This is the last output of the subagent:\s*/;
 const TRAILER = /\s*Agent ID: bc-\S+ \([^)]*\)\s*$/;
@@ -47,9 +49,28 @@ export function parseSubagentReport(text: string): { report: SubagentReport; res
       agentId,
       report: body,
     },
-    rest: text
-      .replace(note[0], "")
-      .replace(/<timestamp>[\s\S]*?<\/timestamp>/, "")
-      .trim(),
+    rest: text.replace(note[0], "").replace(TIMESTAMP, "").trim(),
+  };
+}
+
+export interface SystemEvent {
+  /** `github: coderabbitai[bot]`, or `system`. */
+  readonly speaker: string;
+  readonly body: string;
+  /** What the message holds besides notifications: the user's own words, if any. */
+  readonly rest: string;
+}
+
+/** Any other notification Cursor injects as a user message (a subscribed GitHub PR, a finished command). */
+export function parseSystemEvent(text: string): SystemEvent | null {
+  const events = [...text.matchAll(EVENT)];
+  const first = events[0];
+  if (!first) return null;
+  const attr = (name: string) => new RegExp(`${name}="([^"]*)"`).exec(first[1] ?? "")?.[1];
+  const source = attr("source");
+  return {
+    speaker: source ? `${source}${attr("sender") ? `: ${attr("sender")}` : ""}` : "system",
+    body: events.map((e) => (e[2] ?? "").trim()).join("\n\n"),
+    rest: text.replace(EVENT, "").replace(TIMESTAMP, "").trim(),
   };
 }

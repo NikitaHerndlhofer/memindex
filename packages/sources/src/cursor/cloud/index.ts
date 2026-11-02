@@ -30,7 +30,7 @@ import {
   fetchConversation,
 } from "./api.ts";
 import { cursorApiKeyPath, readCursorApiKey } from "./key.ts";
-import { parseSubagentReport } from "./notification.ts";
+import { parseSubagentReport, parseSystemEvent } from "./notification.ts";
 
 export const CLOUD_LABEL = "cursor cloud";
 const CLOUD_PATH = "cursor-api://cloud";
@@ -144,7 +144,9 @@ async function promptSentTo(api: CloudApi, agentId: string): Promise<string | nu
 }
 
 /**
- * One turn per message; identical role+text pairs repeat, so a key is content plus occurrence. A subagent's
+ * One turn per message; identical role+text pairs repeat, so a key is content plus occurrence. `user` is only
+ * what the person typed: Cursor's notifications arrive in that role too, and become `system` turns (a part
+ * that is not prose, so message views skip them and search still finds them). A subagent's
  * finished report arrives as a user-role notification: it becomes the prompt the worker sent (assistant)
  * and the subagent's reply (tool), both named after the subagent. The API says nothing of when the prompt
  * was sent, so it sits just before the reply.
@@ -188,8 +190,19 @@ async function turnsOf(
       const label = `${who}: ${title}${status === "success" ? "" : ` (${status})`}`;
       add("r", `reply\0${agentId}\0${report}`, "tool", label, [{ kind: "text", text: report }]);
     }
-    const text = handoff ? handoff.rest : m.text;
-    if (text.length > 0) add("c", `${role}\0${text}`, role, null, [{ kind: "text", text }]);
+    const event = role === "user" && !handoff ? parseSystemEvent(m.text) : null;
+    if (event)
+      add("e", `event\0${event.speaker}\0${event.body}`, "system", event.speaker, [
+        { kind: "tool_result", text: event.body, toolName: event.speaker },
+      ]);
+    const text = handoff ? handoff.rest : event ? event.rest : m.text;
+    if (text.length === 0) continue;
+    // Words that ride along with a notification are Cursor's own follow-up prompt, not the person's.
+    if (handoff || event)
+      add("e", `event\0system\0${text}`, "system", "system", [
+        { kind: "tool_result", text, toolName: "system" },
+      ]);
+    else add("c", `${role}\0${text}`, role, null, [{ kind: "text", text }]);
   }
   return turns;
 }

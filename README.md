@@ -214,6 +214,9 @@ in the cloud agent's VM.
   hand-off: the prompt it sent (a turn whose `speaker` is `to subagent: <task>` or `to worker: <task>`)
   and what came back (role `tool`, `speaker` `subagent: <task>` or `worker: <task>`). The prompt sits just
   before the first reply, because Cursor does not say when it was sent.
+- **Who said what.** In a cloud chat the `user` role is only what you typed. Cursor also delivers GitHub
+  events (for a PR the agent follows) and finished-command notices as user messages; memindex stores them as
+  role `system` with a `speaker` such as `github: <sender>`, so a search for your own decisions skips them.
 - **API key.** `memindex install` asks for it at a masked prompt (blank skips) and stores it in
   `~/.config/memindex/cursor-api-key`, readable only by you. It is never written to `config.json`, a
   launchd file or an environment variable. Without a key nothing contacts Cursor.
