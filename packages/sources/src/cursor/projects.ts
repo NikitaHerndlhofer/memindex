@@ -36,7 +36,7 @@ function readKey<T>(db: SourceDb, key: string, schema: z.ZodType<T>, kit: Source
   if (!row) return null;
   const parsed = schema.safeParse(parseJson(blobToString(row.value)));
   if (parsed.success) return parsed.data;
-  kit.log(`cursor: ignoring ItemTable key ${key}: unexpected shape`);
+  kit.log("cursor: ignoring an ItemTable key with an unexpected shape", { key });
   return null;
 }
 

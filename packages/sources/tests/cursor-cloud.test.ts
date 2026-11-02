@@ -80,7 +80,7 @@ describe("cursor cloud agents", () => {
       [`cursor:${GARDEN}`, 1, `bc:${GARDEN}`],
     ]);
     expect(result.kind === "listing" && result.complete).toBe(false);
-    expect(kit.logs).toContain("cursor cloud backfill: 2 agents");
+    expect(kit.logs).toContain("cursor cloud backfill");
     expect(api.requests.some((r) => r.path.includes(OLD))).toBe(false);
   });
 

@@ -101,13 +101,19 @@ const projectOf = (native: string) =>
   (store.items.get(`cursor:${native}` as never)?.item.draft.meta as { project?: string | null } | undefined)
     ?.project;
 
+const contentHashes = (native: string) =>
+  store.items.get(`cursor:${native}` as never)?.chunks.map((c) => c.contentHash);
+
 test("joining, renaming and leaving a project rewrite exactly the affected chats once", async () => {
   expect(await ingest()).toBe(2);
   expect(await ingest()).toBe(0);
+  const embedded = contentHashes(CHAT_A);
+  expect(embedded?.length).toBeGreaterThan(0);
 
   setMembership({ [CHAT_A]: GARDEN.id });
   expect(await ingest()).toBe(1);
   expect(projectOf(CHAT_A)).toBe("Garden Planner");
+  expect(contentHashes(CHAT_A)).toEqual(embedded); // vectors are keyed by content hash: no re-embedding
   expect(projectOf(CHAT_B)).toBeNull();
   expect(await ingest()).toBe(0);
 

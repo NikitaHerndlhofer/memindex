@@ -103,7 +103,7 @@ export async function scanCloud(loc: Location, kit: SourceKit, projects: Project
   }
 
   const live = agents.filter((a) => a.status !== ARCHIVED);
-  if (head === null) kit.log(`cursor cloud backfill: ${live.length} agents`);
+  if (head === null) kit.log("cursor cloud backfill", { agents: live.length });
   for (const a of live) remember(kit, a);
   return {
     kind: "listing",
