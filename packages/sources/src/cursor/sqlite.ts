@@ -33,6 +33,7 @@ import {
   repoFromRemote,
   UUID,
 } from "../util.ts";
+import { isCloudId } from "./cloud/index.ts";
 import type { CursorMeta } from "./meta.ts";
 import { foldProject, type ProjectIndex } from "./projects.ts";
 
@@ -132,8 +133,6 @@ function bubbleIdsHash(db: SourceDb, composerId: string): string | null {
 }
 
 /** Cloud agents (`bc-<uuid>`) are the cloud reader's items; their desktop stubs carry no bubbles. */
-const isCloudId = (composerId: string): boolean => composerId.startsWith("bc-");
-
 function sightingFor(
   db: SourceDb,
   h: Pick<HeaderRow, "composerId" | "lastUpdatedAt">,

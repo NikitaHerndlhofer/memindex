@@ -2,7 +2,7 @@ import { z } from "zod";
 
 export const CursorMeta = z.object({
   repository: z.string().nullable(),
-  /** composerData `_v` ("v18") for state.vscdb drafts; "jsonl-v1" for agent-transcripts. */
+  /** composerData `_v` ("v18") for state.vscdb drafts; "jsonl-v1" for agent-transcripts, "cloud-v0" for cloud agents. */
   agentVersion: z.string().nullable(),
   model: z.string().nullable(),
   isSubagent: z.boolean(),

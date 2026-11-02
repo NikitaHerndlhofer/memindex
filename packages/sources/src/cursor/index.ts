@@ -4,6 +4,7 @@ import { itemKey, locationId, parseItemKey, type Sighting, sha256Hex, sourceId }
 import { partsChunker } from "../agent-chat/chunker.ts";
 import type { Location, ScanResult, SourceDb, SourceKit, SourcePlugin } from "../contract.ts";
 import { type FileEntry, hashFile, listingFingerprint, listJsonl, mtimeNs } from "../util.ts";
+import { CLOUD_LABEL, cloudLocation, readCloud, scanCloud, sightCloud } from "./cloud/index.ts";
 import { cursorHooks } from "./hooks.ts";
 import { composerIdFromPath, isTranscriptPath, readTranscriptFile } from "./jsonl.ts";
 import { CursorMeta } from "./meta.ts";
@@ -157,6 +158,8 @@ export const cursor: SourcePlugin<CursorMeta> = {
     if (existsSync(db)) out.push({ id: locationId(db), path: db, label: DB_LABEL });
     const root = transcriptsRoot(kit);
     if (existsSync(root)) out.push({ id: locationId(root), path: root, label: JSONL_LABEL });
+    const cloud = cloudLocation(kit);
+    if (cloud) out.push(cloud);
     return out;
   },
 
@@ -166,44 +169,58 @@ export const cursor: SourcePlugin<CursorMeta> = {
         return scanDb(location, kit);
       case JSONL_LABEL:
         return scanTranscripts(location, kit);
+      case CLOUD_LABEL:
+        return scanCloud(location, kit, projectsFor(kit, dbPath(kit)));
       default:
         throw new Error(`cursor: unknown location ${location.label}`);
     }
   },
 
   async read(sighting, location, kit) {
-    if (location.label === JSONL_LABEL) {
-      const draft = readTranscriptFile(sighting.locator, projectsFor(kit, dbPath(kit)));
-      return draft ? { draft } : null;
-    }
-    const { native } = parseItemKey(sighting.key);
-    const projects = projectsFor(kit, location.path);
-    const db = kit.openDbReadonly(location.path);
-    try {
-      const draft = readComposer(db, native, projects);
-      return draft ? { draft } : null;
-    } finally {
-      db.close();
+    const projects = projectsFor(kit, dbPath(kit));
+    switch (location.label) {
+      case CLOUD_LABEL:
+        return readCloud(sighting, kit, projects);
+      case JSONL_LABEL: {
+        const draft = readTranscriptFile(sighting.locator, projects);
+        return draft ? { draft } : null;
+      }
+      case DB_LABEL: {
+        const db = kit.openDbReadonly(location.path);
+        try {
+          const draft = readComposer(db, parseItemKey(sighting.key).native, projects);
+          return draft ? { draft } : null;
+        } finally {
+          db.close();
+        }
+      }
+      default:
+        throw new Error(`cursor: unknown location ${location.label}`);
     }
   },
 
   async sight(native, location, kit) {
-    if (location.label === JSONL_LABEL) {
-      const path = findTranscript(location.path, native);
-      if (!path) return null;
-      const st = statSync(path);
-      return fileSighting(
-        { path, size: st.size, mtimeMs: Math.floor(st.mtimeMs) },
-        projectsFor(kit, dbPath(kit)),
-      );
-    }
-    const projects = projectsFor(kit, location.path);
-    const db = kit.openDbReadonly(location.path);
-    try {
-      const s = sightComposer(db, native, projects);
-      return s ? dbSighting(location.path, s) : null;
-    } finally {
-      db.close();
+    const projects = projectsFor(kit, dbPath(kit));
+    switch (location.label) {
+      case CLOUD_LABEL:
+        return sightCloud(native, kit, projects);
+      case JSONL_LABEL: {
+        const path = findTranscript(location.path, native);
+        if (!path) return null;
+        const st = statSync(path);
+        return fileSighting({ path, size: st.size, mtimeMs: Math.floor(st.mtimeMs) }, projects);
+      }
+      case DB_LABEL: {
+        const db = kit.openDbReadonly(location.path);
+        try {
+          const s = sightComposer(db, native, projects);
+          return s ? dbSighting(location.path, s) : null;
+        } finally {
+          db.close();
+        }
+      }
+      default:
+        throw new Error(`cursor: unknown location ${location.label}`);
     }
   },
 
