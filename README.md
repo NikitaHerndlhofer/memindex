@@ -209,6 +209,11 @@ in the cloud agent's VM.
 - **What is archived:** your messages and the agent's replies (text only, no tool calls or thinking).
   Agents Cursor has archived or deleted can no longer be fetched, so they are never archived. An agent
   that drops out of Cursor's list is never marked `source_gone`.
+- **Subagents and workers.** A cloud agent's list of chats leaves out the agents it delegated to, and
+  memindex does not archive their chats. Inside the delegating chat it keeps both sides of each
+  hand-off: the prompt it sent (a turn whose `speaker` is `to subagent: <task>` or `to worker: <task>`)
+  and what came back (role `tool`, `speaker` `subagent: <task>` or `worker: <task>`). The prompt sits just
+  before the first reply, because Cursor does not say when it was sent.
 - **API key.** `memindex install` asks for it at a masked prompt (blank skips) and stores it in
   `~/.config/memindex/cursor-api-key`, readable only by you. It is never written to `config.json`, a
   launchd file or an environment variable. Without a key nothing contacts Cursor.

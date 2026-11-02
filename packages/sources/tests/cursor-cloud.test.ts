@@ -5,6 +5,7 @@ import { join } from "node:path";
 import type { Sighting } from "@memindex/model";
 import { CloudAuthError } from "../src/cursor/cloud/api.ts";
 import { cursorApiKeyPath, readCursorApiKey, saveCursorApiKey } from "../src/cursor/cloud/key.ts";
+import { parseSubagentReport } from "../src/cursor/cloud/notification.ts";
 import { cursor } from "../src/cursor/index.ts";
 import type { Location } from "../src/index.ts";
 import { type FakeAgent, type FakeApi, fakeCursorApi, TEST_KEY } from "./fake-cursor-api.ts";
@@ -267,6 +268,142 @@ describe("cursor cloud agents", () => {
     } finally {
       cleanup(local);
     }
+  });
+});
+
+const notification = (agentId: string, title: string, report: string, kind = "subagent", reason?: string) =>
+  [
+    "<timestamp>Monday, Oct 5, 2026, 9:00 AM (UTC)</timestamp>",
+    "<system_notification>",
+    "The following task has finished.",
+    "",
+    "<task>",
+    `kind: ${kind}`,
+    "status: success",
+    ...(reason ? [`reason: ${reason}`] : []),
+    "task_id: toolu_0001",
+    `title: ${title}`,
+    `agent_id: ${agentId}`,
+    ...(reason
+      ? [`detail: ${report}`]
+      : [
+          "detail: This is the last output of the subagent:",
+          "",
+          report,
+          "",
+          `Agent ID: ${agentId} (can be used with the \`resume\` parameter to send a follow-up)`,
+        ]),
+    "</task>",
+    "</system_notification>",
+  ].join("\n");
+
+describe("cursor cloud subagent hand-offs", () => {
+  const SUB = "bc-5555eeee-0000-4000-8000-000000000005";
+  const REPORT = "Replaced the gate latch and pushed one branch.";
+  const PROMPT = "Fix the latch on the north gate. Work only in the gate worktree.";
+  const worker = (id: string, extra: { type: string; text: string }[] = []) =>
+    agent(id, "2026-10-02T10:00:00Z", {
+      messages: [
+        { type: "user_message", text: "Fix the gate" },
+        { type: "assistant_message", text: "Delegating the latch." },
+        { type: "user_message", text: notification(SUB, "Fix gate latch", REPORT) },
+        ...extra,
+      ],
+    });
+  const subagent = (extra: Partial<FakeAgent> = {}): FakeAgent =>
+    agent(SUB, "2026-10-02T09:00:00Z", {
+      hidden: true,
+      name: "Fix gate latch",
+      messages: [
+        { type: "user_message", text: PROMPT },
+        { type: "assistant_message", text: REPORT },
+      ],
+      ...extra,
+    });
+
+  test("the notification parses to the subagent, its report, and the text around it", () => {
+    const parsed = parseSubagentReport(`${notification(SUB, "Fix gate latch", REPORT)}\nthanks`);
+    expect(parsed).toEqual({
+      report: { title: "Fix gate latch", status: "success", fromWorker: false, agentId: SUB, report: REPORT },
+      rest: "thanks",
+    });
+    const message = parseSubagentReport(
+      notification(SUB, "Message from worker: Fix gate latch", REPORT, "subagent", "worker_message"),
+    );
+    expect(message?.report).toEqual({
+      title: "Fix gate latch",
+      status: "success",
+      fromWorker: true,
+      agentId: SUB,
+      report: REPORT,
+    });
+    expect(parseSubagentReport(notification(SUB, "Run tests", REPORT, "shell"))).toBeNull();
+    expect(parseSubagentReport("an ordinary message")).toBeNull();
+  });
+
+  test("a worker's chat keeps what it sent a subagent and what came back, each named after the subagent", async () => {
+    withKey();
+    api.agents[0] = worker(NORTH);
+    api.agents.push(subagent());
+    const loc = (await cloudLoc()) as Location;
+    const [s] = await listing(loc);
+    const d = await draftOf(loc, s as Sighting);
+    expect(d.turns.map((t) => [t.role, t.speaker, t.parts[0]?.kind, t.parts[0]?.text])).toEqual([
+      ["user", null, "text", "Fix the gate"],
+      ["assistant", null, "text", "Delegating the latch."],
+      ["assistant", "to subagent: Fix gate latch", "subagent", PROMPT],
+      ["tool", "subagent: Fix gate latch", "text", REPORT],
+    ]);
+    expect(d.turns[2]?.parts[0]?.ref as string).toBe(`cursor:${SUB}`);
+    expect(d.turns.some((t) => t.parts.some((p) => p.text.includes("system_notification")))).toBe(false);
+    expect(new Set(d.turns.map((t) => t.key)).size).toBe(4);
+  });
+
+  test("the prompt is kept once per chat and fetched once; a subagent that answers twice keeps both replies; an unreadable one keeps its reply", async () => {
+    withKey();
+    const again = "bc-6666ffff-0000-4000-8000-000000000006";
+    const deleted = "bc-7777aaaa-0000-4000-8000-000000000007";
+    api.agents[0] = agent(NORTH, "2026-10-02T10:00:00Z", {
+      messages: [
+        { type: "user_message", text: notification(again, "Check fences", "First pass done.") },
+        {
+          type: "user_message",
+          text: notification(
+            again,
+            "Message from worker: Check fences",
+            "Second pass done.",
+            "subagent",
+            "worker_message",
+          ),
+        },
+        { type: "user_message", text: notification(deleted, "Fix gate latch", REPORT) },
+      ],
+    });
+    api.agents.push(
+      agent(again, "2026-10-02T09:00:00Z", {
+        hidden: true,
+        messages: [{ type: "user_message", text: "Walk the fences." }],
+      }),
+      agent(deleted, "2026-10-02T08:00:00Z", { hidden: true, status: "ARCHIVED" }),
+    );
+    const loc = (await cloudLoc()) as Location;
+    const [s] = await listing(loc);
+    const first = await draftOf(loc, s as Sighting);
+    await draftOf(loc, s as Sighting);
+    expect(api.requests.filter((r) => r.path === `/v0/agents/${again}/conversation`)).toHaveLength(1);
+    expect(first.turns.map((t) => [t.role, t.parts[0]?.text])).toEqual([
+      ["assistant", "Walk the fences."],
+      ["tool", "First pass done."],
+      ["tool", "Second pass done."],
+      ["tool", REPORT],
+    ]);
+    expect(first.turns.map((t) => t.speaker)).toEqual([
+      "to subagent: Check fences",
+      "subagent: Check fences",
+      "worker: Check fences",
+      "subagent: Fix gate latch",
+    ]);
+    expect(new Set(first.turns.map((t) => t.key)).size).toBe(4);
   });
 });
 

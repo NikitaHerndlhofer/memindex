@@ -10,6 +10,8 @@ export interface FakeAgent {
   updatedAt: string;
   repoUrl?: string;
   messages?: { type: string; text: string }[];
+  /** Fetchable by id but missing from the list, like a subagent. */
+  hidden?: boolean;
 }
 
 export interface FakeApi {
@@ -47,7 +49,9 @@ export function fakeCursorApi(agents: FakeAgent[], pageSize = 100): FakeApi {
         repos: a.repoUrl ? [{ url: a.repoUrl }] : [],
       });
       if (u.pathname === "/v1/agents") {
-        const sorted = [...api.agents].sort((x, y) => Date.parse(y.updatedAt) - Date.parse(x.updatedAt));
+        const sorted = api.agents
+          .filter((a) => !a.hidden)
+          .sort((x, y) => Date.parse(y.updatedAt) - Date.parse(x.updatedAt));
         const from = Number(u.searchParams.get("cursor") ?? 0);
         const next = from + pageSize;
         return json({

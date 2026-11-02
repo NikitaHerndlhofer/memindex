@@ -236,6 +236,8 @@ export const cursor: SourcePlugin<CursorMeta> = {
     "(git origin name of the workspace) and project (the Cursor project the chat belongs to).",
     "Cloud agents are items too: `cursor:bc-<id>`, tagged `cloud`, with your messages and the agent's replies",
     "as text. List them with `item_key LIKE 'cursor:bc-%'`. Leaving the desktop window never marks an agent",
-    "`source_gone`.",
+    "`source_gone`. A cloud chat holds its hand-offs inline: a turn whose `speaker` is `to subagent: <task>` (or",
+    "`to worker: <task>`) is the prompt it sent, and `subagent: <task>` / `worker: <task>` (role `tool`) is what",
+    "came back. The subagents' own chats are not archived.",
   ].join("\n"),
 };

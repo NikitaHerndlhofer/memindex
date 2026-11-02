@@ -30,13 +30,14 @@ import {
   fetchConversation,
 } from "./api.ts";
 import { cursorApiKeyPath, readCursorApiKey } from "./key.ts";
+import { parseSubagentReport } from "./notification.ts";
 
 export const CLOUD_LABEL = "cursor cloud";
 const CLOUD_PATH = "cursor-api://cloud";
 const API_HEAD = "api_head";
 const PROJECT_FP = "proj_fp";
 /** Part of every revision hash: bump it when `readCloud` output changes. */
-const CLOUD_BODY_VERSION = 1;
+const CLOUD_BODY_VERSION = 2;
 const ARCHIVED = "ARCHIVED";
 
 const ROLES: Readonly<Record<string, Role>> = { user_message: "user", assistant_message: "assistant" };
@@ -125,27 +126,70 @@ export async function sightCloud(
   return sightingOf(agent, projects);
 }
 
-/** One turn per message; identical role+text pairs repeat, so a key is content plus occurrence. */
-function turnsOf(messages: readonly { type: string; text: string }[], kit: SourceKit): TurnDraft[] {
+/**
+ * What a worker sent a subagent: the subagent's first message. shortcut: kept for the process's life
+ * (one entry per subagent, a finished subagent's prompt never changes); a restart asks again.
+ */
+const sentPrompts = new Map<string, string | null>();
+
+async function promptSentTo(api: CloudApi, agentId: string): Promise<string | null> {
+  if (!sentPrompts.has(agentId)) {
+    const messages = await fetchConversation(api, agentId);
+    sentPrompts.set(
+      agentId,
+      messages === "gone" ? null : messages.find((m) => m.type === "user_message")?.text || null,
+    );
+  }
+  return sentPrompts.get(agentId) ?? null;
+}
+
+/**
+ * One turn per message; identical role+text pairs repeat, so a key is content plus occurrence. A subagent's
+ * finished report arrives as a user-role notification: it becomes the prompt the worker sent (assistant)
+ * and the subagent's reply (tool), both named after the subagent. The API says nothing of when the prompt
+ * was sent, so it sits just before the reply.
+ */
+async function turnsOf(
+  messages: readonly { type: string; text: string }[],
+  kit: SourceKit,
+  api: CloudApi,
+): Promise<TurnDraft[]> {
   const occurrences = new Map<string, number>();
+  const prompted = new Set<string>();
   const turns: TurnDraft[] = [];
+  const add = (
+    prefix: string,
+    identity: string,
+    role: Role,
+    speaker: string | null,
+    parts: TurnDraft["parts"],
+  ) => {
+    const digest = sha256Hex(identity).slice(0, 16);
+    const occ = occurrences.get(prefix + digest) ?? 0;
+    occurrences.set(prefix + digest, occ + 1);
+    turns.push({ key: turnKey(`${prefix}${digest}.${occ}`), role, at: null, speaker, parts });
+  };
   for (const m of messages) {
     const role = ROLES[m.type];
     if (!role) {
       kit.log("cursor cloud: skipping a message of an unknown type", { type: m.type });
       continue;
     }
-    if (m.text.length === 0) continue;
-    const digest = sha256Hex(`${role}\0${m.text}`).slice(0, 16);
-    const occ = occurrences.get(digest) ?? 0;
-    occurrences.set(digest, occ + 1);
-    turns.push({
-      key: turnKey(`c${digest}.${occ}`),
-      role,
-      at: null,
-      speaker: null,
-      parts: [{ kind: "text", text: m.text }],
-    });
+    const handoff = role === "user" ? parseSubagentReport(m.text) : null;
+    if (handoff) {
+      const { agentId, title, status, fromWorker, report } = handoff.report;
+      const who = fromWorker ? "worker" : "subagent";
+      const prompt = prompted.has(agentId) ? null : await promptSentTo(api, agentId);
+      prompted.add(agentId);
+      if (prompt)
+        add("s", `sent\0${agentId}`, "assistant", `to ${who}: ${title}`, [
+          { kind: "subagent", text: prompt, toolName: "subagent", ref: itemKey("cursor", agentId) },
+        ]);
+      const label = `${who}: ${title}${status === "success" ? "" : ` (${status})`}`;
+      add("r", `reply\0${agentId}\0${report}`, "tool", label, [{ kind: "text", text: report }]);
+    }
+    const text = handoff ? handoff.rest : m.text;
+    if (text.length > 0) add("c", `${role}\0${text}`, role, null, [{ kind: "text", text }]);
   }
   return turns;
 }
@@ -160,7 +204,7 @@ export async function readCloud(
   const agent = seen.get(kit)?.get(id) ?? (await fetchAgent(api, id));
   const messages = agent ? await fetchConversation(api, id) : "gone";
   if (!agent || messages === "gone") return null;
-  const turns = turnsOf(messages, kit);
+  const turns = await turnsOf(messages, kit, api);
   if (turns.length === 0) return null;
   const firstUser = turns
     .find((t) => t.role === "user")
