@@ -20,7 +20,10 @@ Nested `AGENTS.md` files in `supabase/` and `packages/engine/` add rules for tho
 3. Run the tests you affected. New behavior gets a test that fails on the previous code; check
    that it does.
 4. Check the diff, untracked files included, for archive content (see Privacy).
-5. Don't commit, push or release unless asked.
+5. Keep `README.md` true to the change: what a source captures, what a user must do (install steps, keys,
+   flags, env vars), what `doctor` and `status` show. A design decision goes in `docs/architecture.md`.
+   Same change, never "later".
+6. Don't commit, push or release unless asked.
 
 ## Generated files
 

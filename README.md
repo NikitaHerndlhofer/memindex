@@ -52,11 +52,11 @@ More things you can ask:
 
 ### Captures everything, automatically
 
-| Source            | What lands in the archive                                                                                                                                                                              |
-| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **Cursor**        | Every agent chat and subagent run: your messages, the agent's replies and thinking, the commands it ran, the files it read and edited. In the archive seconds after the agent stops, via Cursor hooks. |
-| **Claude Code**   | Every session and subagent session, with its repository and branch.                                                                                                                                    |
-| **Super Whisper** | Dictations and meetings: the AI summary, the verbatim transcript, and per-speaker turns for diarized meetings.                                                                                         |
+| Source            | What lands in the archive                                                                                                                                                                                                                                                                                                                              |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **Cursor**        | Every agent chat and subagent run: your messages, the agent's replies and thinking, the commands it ran, the files it read and edited, and the Cursor project it belongs to. In the archive seconds after the agent stops, via Cursor hooks. Cloud agents (with your Cursor API key) are archived as text, with each hand-off to a worker or subagent. |
+| **Claude Code**   | Every session and subagent session, with its repository and branch.                                                                                                                                                                                                                                                                                    |
+| **Super Whisper** | Dictations and meetings: the AI summary, the verbatim transcript, and per-speaker turns for diarized meetings.                                                                                                                                                                                                                                         |
 
 Sources are plugins, so new ones slot in without touching search or storage (see
 [Adding a source](#adding-a-source)).
