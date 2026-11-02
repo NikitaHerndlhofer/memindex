@@ -4,7 +4,7 @@
  *   <system_notification> … <task>
  *   kind: subagent
  *   status: success
- *   reason: worker_message          (only when a worker messages its parent mid-turn; `detail` is then the message)
+ *   reason: worker_message          (a worker messaging its parent mid-turn; `detail` is then the message)
  *   title: <task name>
  *   agent_id: bc-<uuid>
  *   detail: This is the last output of the subagent:
@@ -18,7 +18,6 @@
 export interface SubagentReport {
   readonly title: string;
   readonly status: string;
-  readonly fromWorker: boolean;
   readonly agentId: string;
   readonly report: string;
 }
@@ -45,7 +44,6 @@ export function parseSubagentReport(text: string): { report: SubagentReport; res
     report: {
       title: (field(task, "title") ?? agentId).replace(/^Message from worker: /, ""),
       status: field(task, "status") ?? "unknown",
-      fromWorker: field(task, "reason") === "worker_message",
       agentId,
       report: body,
     },

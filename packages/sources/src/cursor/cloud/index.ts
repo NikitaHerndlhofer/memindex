@@ -147,8 +147,9 @@ async function promptSentTo(api: CloudApi, agentId: string): Promise<string | nu
  * One turn per message; identical role+text pairs repeat, so a key is content plus occurrence. `user` is only
  * what the person typed: Cursor's notifications arrive in that role too, and become `system` turns (a part
  * that is not prose, so message views skip them and search still finds them). A subagent's
- * finished report arrives as a user-role notification: it becomes the prompt the worker sent (assistant)
- * and the subagent's reply (tool), both named after the subagent. The API says nothing of when the prompt
+ * finished report arrives as a user-role notification: it becomes the prompt the chat sent (assistant)
+ * and the agent's reply (tool), both named after the task; whether that agent is a worker with a chat of its
+ * own shows in the prompt part's `ref`. The API says nothing of when the prompt
  * was sent, so it sits just before the reply.
  */
 async function turnsOf(
@@ -179,15 +180,14 @@ async function turnsOf(
     }
     const handoff = role === "user" ? parseSubagentReport(m.text) : null;
     if (handoff) {
-      const { agentId, title, status, fromWorker, report } = handoff.report;
-      const who = fromWorker ? "worker" : "subagent";
+      const { agentId, title, status, report } = handoff.report;
       const prompt = prompted.has(agentId) ? null : await promptSentTo(api, agentId);
       prompted.add(agentId);
       if (prompt)
-        add("s", `sent\0${agentId}`, "assistant", `to ${who}: ${title}`, [
+        add("s", `sent\0${agentId}`, "assistant", `to agent: ${title}`, [
           { kind: "subagent", text: prompt, toolName: "subagent", ref: itemKey("cursor", agentId) },
         ]);
-      const label = `${who}: ${title}${status === "success" ? "" : ` (${status})`}`;
+      const label = `agent: ${title}${status === "success" ? "" : ` (${status})`}`;
       add("r", `reply\0${agentId}\0${report}`, "tool", label, [{ kind: "text", text: report }]);
     }
     const event = role === "user" && !handoff ? parseSystemEvent(m.text) : null;

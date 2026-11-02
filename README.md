@@ -209,11 +209,11 @@ in the cloud agent's VM.
 - **What is archived:** your messages and the agent's replies (text only, no tool calls or thinking).
   Agents Cursor has archived or deleted can no longer be fetched, so they are never archived. An agent
   that drops out of Cursor's list is never marked `source_gone`.
-- **Subagents and workers.** A cloud agent's list of chats leaves out the agents it delegated to, and
-  memindex does not archive their chats. Inside the delegating chat it keeps both sides of each
-  hand-off: the prompt it sent (a turn whose `speaker` is `to subagent: <task>` or `to worker: <task>`)
-  and what came back (role `tool`, `speaker` `subagent: <task>` or `worker: <task>`). The prompt sits just
-  before the first reply, because Cursor does not say when it was sent.
+- **Workers and subagents.** An agent a cloud chat delegates to is archived as its own chat when it
+  appears in Cursor's list (a worker you can open and write in). The hidden subagents are not archived.
+  Inside the delegating chat memindex keeps both sides of each hand-off: the prompt it sent (a turn whose
+  `speaker` is `to agent: <task>`) and what came back (role `tool`, `speaker` `agent: <task>`). The prompt
+  sits just before the first reply, because Cursor does not say when it was sent.
 - **Who said what.** In a cloud chat the `user` role is only what you typed. Cursor also delivers GitHub
   events (for a PR the agent follows) and finished-command notices as user messages; memindex stores them as
   role `system` with a `speaker` such as `github: <sender>`, so a search for your own decisions skips them.

@@ -327,7 +327,7 @@ describe("cursor cloud subagent hand-offs", () => {
   test("the notification parses to the subagent, its report, and the text around it", () => {
     const parsed = parseSubagentReport(`${notification(SUB, "Fix gate latch", REPORT)}\nthanks`);
     expect(parsed).toEqual({
-      report: { title: "Fix gate latch", status: "success", fromWorker: false, agentId: SUB, report: REPORT },
+      report: { title: "Fix gate latch", status: "success", agentId: SUB, report: REPORT },
       rest: "thanks",
     });
     const message = parseSubagentReport(
@@ -336,7 +336,6 @@ describe("cursor cloud subagent hand-offs", () => {
     expect(message?.report).toEqual({
       title: "Fix gate latch",
       status: "success",
-      fromWorker: true,
       agentId: SUB,
       report: REPORT,
     });
@@ -385,8 +384,8 @@ describe("cursor cloud subagent hand-offs", () => {
     expect(d.turns.map((t) => [t.role, t.speaker, t.parts[0]?.kind, t.parts[0]?.text])).toEqual([
       ["user", null, "text", "Fix the gate"],
       ["assistant", null, "text", "Delegating the latch."],
-      ["assistant", "to subagent: Fix gate latch", "subagent", PROMPT],
-      ["tool", "subagent: Fix gate latch", "text", REPORT],
+      ["assistant", "to agent: Fix gate latch", "subagent", PROMPT],
+      ["tool", "agent: Fix gate latch", "text", REPORT],
       [
         "system",
         "system",
@@ -438,10 +437,10 @@ describe("cursor cloud subagent hand-offs", () => {
       ["tool", REPORT],
     ]);
     expect(first.turns.map((t) => t.speaker)).toEqual([
-      "to subagent: Check fences",
-      "subagent: Check fences",
-      "worker: Check fences",
-      "subagent: Fix gate latch",
+      "to agent: Check fences",
+      "agent: Check fences",
+      "agent: Check fences",
+      "agent: Fix gate latch",
     ]);
     expect(new Set(first.turns.map((t) => t.key)).size).toBe(4);
   });
