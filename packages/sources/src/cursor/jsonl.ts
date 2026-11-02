@@ -24,6 +24,7 @@ import {
 import { blockToPart } from "../agent-chat/blocks.ts";
 import { asRecord, asString, parseJson, repoFromPath, resolveDashedPath, UUID } from "../util.ts";
 import type { CursorMeta } from "./meta.ts";
+import type { ProjectIndex } from "./projects.ts";
 
 export function composerIdFromPath(path: string): string | null {
   const base = basename(path).replace(/\.jsonl$/i, "");
@@ -103,6 +104,7 @@ function parseTranscript(
   contents: string,
   mtimeMs: number,
   birthtimeMs: number,
+  projects: ProjectIndex,
   children: ReadonlyMap<string, string> = new Map(),
 ): ItemDraft<CursorMeta> {
   const composerId = composerIdFromPath(path);
@@ -135,6 +137,7 @@ function parseTranscript(
   const resolved = wsName ? resolveDashedPath(wsName) : null;
   const repository = resolved ? repoFromPath(resolved) : wsName ? (wsName.split("-").pop() ?? wsName) : null;
   const parent = parentFromPath(path);
+  const project = projects.of(composerId);
   const started = Number.isFinite(birthtimeMs) && birthtimeMs > 0 ? Math.min(birthtimeMs, mtimeMs) : mtimeMs;
 
   return {
@@ -153,6 +156,8 @@ function parseTranscript(
       model: null,
       isSubagent: parent !== null,
       workspace: resolved ?? wsName,
+      project: project?.name ?? null,
+      projectId: project?.id ?? null,
     },
     turns,
   };
@@ -182,7 +187,7 @@ function subagentPrompts(path: string): Map<string, string> {
   return out;
 }
 
-export function readTranscriptFile(path: string): ItemDraft<CursorMeta> | null {
+export function readTranscriptFile(path: string, projects: ProjectIndex): ItemDraft<CursorMeta> | null {
   let contents: string;
   let st: ReturnType<typeof statSync>;
   try {
@@ -192,5 +197,5 @@ export function readTranscriptFile(path: string): ItemDraft<CursorMeta> | null {
     return null;
   }
   const children = parentFromPath(path) ? new Map<string, string>() : subagentPrompts(path);
-  return parseTranscript(path, contents, st.mtimeMs, st.birthtimeMs, children);
+  return parseTranscript(path, contents, st.mtimeMs, st.birthtimeMs, projects, children);
 }

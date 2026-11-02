@@ -2,7 +2,7 @@ import { Database } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { cpSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { compareRevision, itemKey, producerId, type Sighting } from "@memindex/model";
+import { compareRevision, itemKey, producerId, type Sighting, sha256Hex } from "@memindex/model";
 import { partsChunker } from "../src/agent-chat/chunker.ts";
 import { cursor } from "../src/cursor/index.ts";
 import type { Location } from "../src/index.ts";
@@ -19,15 +19,17 @@ const B = {
 
 let dir: string;
 let kit: TestKit;
+let env: Record<string, string>;
 let dbLoc: Location;
 let jsonlLoc: Location;
 
 beforeEach(async () => {
   dir = tmpCopy("cursor");
-  kit = makeKit({
+  env = {
     MEMINDEX_CURSOR_DB: join(dir, "cursor", "v1-sample.vscdb"),
     MEMINDEX_CURSOR_TRANSCRIPTS_DIR: join(FIXTURES, "cursor-projects"),
-  });
+  };
+  kit = makeKit(env);
   const locs = await cursor.locations(kit);
   dbLoc = locs.find((l) => l.label === "state.vscdb") as Location;
   jsonlLoc = locs.find((l) => l.label === "agent-transcripts") as Location;
@@ -45,6 +47,26 @@ function writable<T>(fn: (db: Database) => T): T {
   } finally {
     db.close();
   }
+}
+
+/** A new kit over the same files and cursor values: the project index is read once per kit. */
+function nextRun(): void {
+  const prev = kit;
+  kit = makeKit(env);
+  for (const [k, v] of prev.cursorValues) kit.cursorValues.set(k, v);
+  prev.dispose();
+}
+
+const GARDEN = { id: "p-garden", name: "Garden Planner" };
+
+function setProjects(projects: unknown[], membership: Record<string, string>): void {
+  writable((db) => {
+    db.run("CREATE TABLE IF NOT EXISTS ItemTable (key TEXT UNIQUE ON CONFLICT REPLACE, value BLOB)");
+    const put = (key: string, value: unknown) =>
+      db.run("INSERT INTO ItemTable (key, value) VALUES (?, ?)", [key, Buffer.from(JSON.stringify(value))]);
+    put("glass.localAgentProjects.v1", projects);
+    put("glass.localAgentProjectMembership.v1", membership);
+  });
 }
 
 function putKv(db: Database, key: string, value: unknown): void {
@@ -243,6 +265,88 @@ describe("cursor state.vscdb", () => {
   test("sight looks up one composer; unknown ids are null", async () => {
     expect((await cursor.sight?.(CID, dbLoc, kit))?.key as string).toBe(`cursor:${CID}`);
     expect(await cursor.sight?.("ffffffff-0000-4000-8000-000000000000", dbLoc, kit)).toBeNull();
+  });
+});
+
+describe("cursor projects", () => {
+  const sighted = async (loc: Location) => (await collect(await cursor.scan(loc, kit)))[0] as Sighting;
+
+  test("a member chat carries its project in meta; a chat in no project carries null", async () => {
+    setProjects([GARDEN], { [CID]: GARDEN.id });
+    nextRun();
+    expect((await readOne(dbLoc, await sighted(dbLoc))).meta).toMatchObject({
+      project: "Garden Planner",
+      projectId: "p-garden",
+    });
+    expect((await readOne(jsonlLoc, await sighted(jsonlLoc))).meta).toMatchObject({
+      project: "Garden Planner",
+    });
+    setProjects([GARDEN], {});
+    nextRun();
+    expect((await readOne(dbLoc, await sighted(dbLoc))).meta).toMatchObject({
+      project: null,
+      projectId: null,
+    });
+  });
+
+  test("a chat in no project keeps its exact sighting hash; joining a project changes it", async () => {
+    const bubbleIds = writable((db) =>
+      db
+        .query<{ key: string }, [string, string]>(
+          "SELECT key FROM cursorDiskKV WHERE key >= ? AND key < ? ORDER BY key",
+        )
+        .all(`bubbleId:${CID}:`, `bubbleId:${CID};`)
+        .map((r) => r.key.slice(`bubbleId:${CID}:`.length)),
+    );
+    const before = (await sighted(dbLoc)).revision.hash;
+    expect(before).toBe(sha256Hex(bubbleIds.join("\n")));
+    setProjects([GARDEN], { [CID]: GARDEN.id });
+    nextRun();
+    expect((await sighted(dbLoc)).revision.hash).not.toBe(before);
+    setProjects([GARDEN], { [CID]: "no-such-project" });
+    nextRun();
+    expect((await sighted(dbLoc)).revision.hash).toBe(before);
+  });
+
+  test("renaming a project changes its members' hashes, in both locations", async () => {
+    setProjects([GARDEN], { [CID]: GARDEN.id });
+    nextRun();
+    const [db1, jsonl1] = [(await sighted(dbLoc)).revision.hash, (await sighted(jsonlLoc)).revision.hash];
+    setProjects([{ ...GARDEN, name: "Garden Planner 2" }], { [CID]: GARDEN.id });
+    nextRun();
+    expect((await sighted(dbLoc)).revision.hash).not.toBe(db1);
+    expect((await sighted(jsonlLoc)).revision.hash).not.toBe(jsonl1);
+  });
+
+  test("a membership change alone defeats the JSONL unchanged fast path", async () => {
+    const first = await cursor.scan(jsonlLoc, kit);
+    await collect(first);
+    if (first.kind === "listing") commit(kit, jsonlLoc.id, first.commit);
+    nextRun();
+    expect(await cursor.scan(jsonlLoc, kit)).toEqual({ kind: "unchanged" });
+    setProjects([GARDEN], { [CID]: GARDEN.id });
+    nextRun();
+    expect((await cursor.scan(jsonlLoc, kit)).kind).toBe("listing");
+  });
+
+  test("a missing ItemTable, bad JSON or a wrong shape reads as no projects and never throws", async () => {
+    const plain = (await sighted(dbLoc)).revision.hash;
+    expect((await readOne(dbLoc, await sighted(dbLoc))).meta).toMatchObject({ project: null });
+    expect(kit.logs.some((l) => l.includes("project membership"))).toBe(true);
+    writable((db) => {
+      db.run("CREATE TABLE ItemTable (key TEXT UNIQUE ON CONFLICT REPLACE, value BLOB)");
+      db.run("INSERT INTO ItemTable VALUES ('glass.localAgentProjects.v1', ?)", [Buffer.from("{not json")]);
+      db.run("INSERT INTO ItemTable VALUES ('glass.localAgentProjectMembership.v1', ?)", [
+        Buffer.from(JSON.stringify({ [CID]: 7 })),
+      ]);
+    });
+    nextRun();
+    expect((await sighted(dbLoc)).revision.hash).toBe(plain);
+    expect(kit.logs.filter((l) => l.includes("unexpected shape"))).toHaveLength(2);
+  });
+
+  test("scan on a location with an unknown label throws instead of listing nothing", async () => {
+    await expect(cursor.scan({ ...dbLoc, label: "elsewhere" }, kit)).rejects.toThrow(/unknown location/);
   });
 });
 

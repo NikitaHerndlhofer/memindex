@@ -72,6 +72,14 @@ describe("integration: fixtures → Supabase store → recipes", () => {
     const url = withDb(ADMIN_URL, DB_NAME);
     await migrateStore({ backend: "postgres", url });
     const f = join(dir, "fixtures");
+    const cursorDb = new Database(join(f, "cursor", "v1-sample.vscdb"));
+    cursorDb.run("CREATE TABLE ItemTable (key TEXT UNIQUE ON CONFLICT REPLACE, value BLOB)");
+    for (const [key, value] of [
+      ["glass.localAgentProjects.v1", [{ id: "p1", name: "Garden Planner" }]],
+      ["glass.localAgentProjectMembership.v1", { "00000000-0000-4000-8000-000000000001": "p1" }],
+    ] as const)
+      cursorDb.run("INSERT INTO ItemTable VALUES (?, ?)", [key, JSON.stringify(value)]);
+    cursorDb.close();
     const env = {
       HOME: dir,
       MEMINDEX_CONFIG_DIR: join(dir, "cfg"),
@@ -118,6 +126,12 @@ describe("integration: fixtures → Supabase store → recipes", () => {
     const again = await live().ingest();
     expect(again.errors).toEqual([]);
     expect(again.outcomes.applied).toBe(0);
+  });
+
+  test.skipIf(storeNotReady)("a chat in a Cursor project carries it in cursor_items", async () => {
+    expect(await rows({ sql: "SELECT project FROM cursor_items WHERE project IS NOT NULL" })).toEqual([
+      { project: "Garden Planner" },
+    ]);
   });
 
   test.skipIf(storeNotReady)("embed job drains the backlog", async () => {

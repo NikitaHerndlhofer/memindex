@@ -34,6 +34,7 @@ import {
   UUID,
 } from "../util.ts";
 import type { CursorMeta } from "./meta.ts";
+import { foldProject, type ProjectIndex } from "./projects.ts";
 
 interface HeaderRow {
   composerId: string;
@@ -130,30 +131,45 @@ function bubbleIdsHash(db: SourceDb, composerId: string): string | null {
   return sha256Hex(keys.map((k) => k.key.slice(prefix.length)).join("\n"));
 }
 
+/** Cloud agents (`bc-<uuid>`) are the cloud reader's items; their desktop stubs carry no bubbles. */
+const isCloudId = (composerId: string): boolean => composerId.startsWith("bc-");
+
 function sightingFor(
   db: SourceDb,
   h: Pick<HeaderRow, "composerId" | "lastUpdatedAt">,
+  projects: ProjectIndex,
 ): ComposerSighting | null {
+  if (isCloudId(h.composerId)) return null;
   const hash = bubbleIdsHash(db, h.composerId);
-  return hash ? { composerId: h.composerId, lastUpdatedAt: h.lastUpdatedAt, hash } : null;
+  return hash
+    ? {
+        composerId: h.composerId,
+        lastUpdatedAt: h.lastUpdatedAt,
+        hash: foldProject(hash, projects.of(h.composerId)),
+      }
+    : null;
 }
 
-export function* listComposers(db: SourceDb): Generator<ComposerSighting> {
+export function* listComposers(db: SourceDb, projects: ProjectIndex): Generator<ComposerSighting> {
   const headers = db.all<Pick<HeaderRow, "composerId" | "lastUpdatedAt">>(
     "SELECT composerId, lastUpdatedAt FROM composerHeaders ORDER BY composerId",
   );
   for (const h of headers) {
-    const s = sightingFor(db, h);
+    const s = sightingFor(db, h, projects);
     if (s) yield s;
   }
 }
 
-export function sightComposer(db: SourceDb, composerId: string): ComposerSighting | null {
+export function sightComposer(
+  db: SourceDb,
+  composerId: string,
+  projects: ProjectIndex,
+): ComposerSighting | null {
   const h = db.get<Pick<HeaderRow, "composerId" | "lastUpdatedAt">>(
     "SELECT composerId, lastUpdatedAt FROM composerHeaders WHERE composerId = ?",
     [composerId],
   );
-  return h ? sightingFor(db, h) : null;
+  return h ? sightingFor(db, h, projects) : null;
 }
 
 // ─── Parsing ──────────────────────────────────────────────────────────────────
@@ -318,7 +334,11 @@ function subagentsByToolCall(db: SourceDb, composerData: Record<string, unknown>
   return out;
 }
 
-export function readComposer(db: SourceDb, composerId: string): ItemDraft<CursorMeta> | null {
+export function readComposer(
+  db: SourceDb,
+  composerId: string,
+  projects: ProjectIndex,
+): ItemDraft<CursorMeta> | null {
   const header = db.get<HeaderRow>(
     "SELECT composerId, createdAt, lastUpdatedAt, isSubagent, value FROM composerHeaders WHERE composerId = ?",
     [composerId],
@@ -361,6 +381,7 @@ export function readComposer(db: SourceDb, composerId: string): ItemDraft<Cursor
     ? pickText(asRecord(headerValue?.subagentInfo)?.parentComposerId, asRecord(cd.context)?.parentComposerId)
     : null;
   const { workspace, repository } = workspaceAndRepo(headerValue ?? cd);
+  const project = projects.of(composerId);
   const startedAt =
     toIso(header?.createdAt) ?? toIso(cd.createdAt) ?? turns.find((t) => t.at)?.at ?? isoTime(0);
 
@@ -380,6 +401,8 @@ export function readComposer(db: SourceDb, composerId: string): ItemDraft<Cursor
       model: modelName(cd, bubbles),
       isSubagent,
       workspace,
+      project: project?.name ?? null,
+      projectId: project?.id ?? null,
     },
     turns,
   };

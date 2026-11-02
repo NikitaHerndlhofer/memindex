@@ -1,12 +1,13 @@
 import { existsSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { itemKey, locationId, parseItemKey, type Sighting, sourceId } from "@memindex/model";
+import { itemKey, locationId, parseItemKey, type Sighting, sha256Hex, sourceId } from "@memindex/model";
 import { partsChunker } from "../agent-chat/chunker.ts";
 import type { Location, ScanResult, SourceDb, SourceKit, SourcePlugin } from "../contract.ts";
 import { type FileEntry, hashFile, listingFingerprint, listJsonl, mtimeNs } from "../util.ts";
 import { cursorHooks } from "./hooks.ts";
 import { composerIdFromPath, isTranscriptPath, readTranscriptFile } from "./jsonl.ts";
 import { CursorMeta } from "./meta.ts";
+import { foldProject, type ProjectIndex, projectsFor } from "./projects.ts";
 import {
   type ComposerSighting,
   hasCursorTables,
@@ -38,12 +39,16 @@ function dbSighting(path: string, s: ComposerSighting): Sighting {
   };
 }
 
-async function fileSighting(f: FileEntry): Promise<Sighting | null> {
+async function fileSighting(f: FileEntry, projects: ProjectIndex): Promise<Sighting | null> {
   const composerId = composerIdFromPath(f.path);
   if (!composerId || !existsSync(f.path)) return null;
   return {
     key: itemKey("cursor", composerId),
-    revision: { fidelity: 1, at: f.mtimeMs, hash: await hashFile(f.path, "sha256") },
+    revision: {
+      fidelity: 1,
+      at: f.mtimeMs,
+      hash: foldProject(await hashFile(f.path, "sha256"), projects.of(composerId)),
+    },
     locator: f.path,
   };
 }
@@ -56,9 +61,9 @@ function* closing<T>(db: SourceDb, it: Iterable<T>): Generator<T> {
   }
 }
 
-async function* fileSightings(files: readonly FileEntry[]): AsyncGenerator<Sighting> {
+async function* fileSightings(files: readonly FileEntry[], projects: ProjectIndex): AsyncGenerator<Sighting> {
   for (const f of files) {
-    const s = await fileSighting(f);
+    const s = await fileSighting(f, projects);
     if (s) yield s;
   }
 }
@@ -66,6 +71,7 @@ async function* fileSightings(files: readonly FileEntry[]): AsyncGenerator<Sight
 async function scanDb(location: Location, kit: SourceKit): Promise<ScanResult> {
   const fp = `${mtimeNs(location.path) ?? 0}:${mtimeNs(`${location.path}-wal`) ?? 0}`;
   if ((await kit.cursor.get(location.id, CURSOR_FP)) === fp) return { kind: "unchanged" };
+  const projects = projectsFor(kit, location.path);
   const db = kit.openDbReadonly(location.path);
   if (!hasCursorTables(db)) {
     db.close();
@@ -75,7 +81,7 @@ async function scanDb(location: Location, kit: SourceKit): Promise<ScanResult> {
   const sightings = closing(
     db,
     (function* () {
-      for (const s of listComposers(db)) yield dbSighting(location.path, s);
+      for (const s of listComposers(db, projects)) yield dbSighting(location.path, s);
     })(),
   );
   return { kind: "listing", sightings, complete: true, commit: { [CURSOR_FP]: fp } };
@@ -95,11 +101,13 @@ function newestPerComposer(files: readonly FileEntry[]): FileEntry[] {
 
 async function scanTranscripts(location: Location, kit: SourceKit): Promise<ScanResult> {
   const files = listJsonl(location.path, isTranscriptPath);
-  const fp = listingFingerprint(files);
+  const projects = projectsFor(kit, dbPath(kit));
+  // A project change leaves the transcripts directory untouched, so the fingerprint carries it.
+  const fp = sha256Hex(`${listingFingerprint(files)}|${projects.fingerprint}`);
   if ((await kit.cursor.get(location.id, CURSOR_FP)) === fp) return { kind: "unchanged" };
   return {
     kind: "listing",
-    sightings: fileSightings(newestPerComposer(files)),
+    sightings: fileSightings(newestPerComposer(files), projects),
     complete: true,
     commit: { [CURSOR_FP]: fp },
   };
@@ -138,7 +146,7 @@ export const cursor: SourcePlugin<CursorMeta> = {
   id: sourceId("cursor"),
   kinds: ["conversation"],
   meta: CursorMeta,
-  facets: { repository: "text" },
+  facets: { repository: "text", project: "text" },
   chunkers: { default: partsChunker },
   parserVersion: 1,
   capture: "never",
@@ -152,19 +160,27 @@ export const cursor: SourcePlugin<CursorMeta> = {
     return out;
   },
 
-  scan(location, kit) {
-    return location.label === DB_LABEL ? scanDb(location, kit) : scanTranscripts(location, kit);
+  async scan(location, kit) {
+    switch (location.label) {
+      case DB_LABEL:
+        return scanDb(location, kit);
+      case JSONL_LABEL:
+        return scanTranscripts(location, kit);
+      default:
+        throw new Error(`cursor: unknown location ${location.label}`);
+    }
   },
 
   async read(sighting, location, kit) {
     if (location.label === JSONL_LABEL) {
-      const draft = readTranscriptFile(sighting.locator);
+      const draft = readTranscriptFile(sighting.locator, projectsFor(kit, dbPath(kit)));
       return draft ? { draft } : null;
     }
     const { native } = parseItemKey(sighting.key);
+    const projects = projectsFor(kit, location.path);
     const db = kit.openDbReadonly(location.path);
     try {
-      const draft = readComposer(db, native);
+      const draft = readComposer(db, native, projects);
       return draft ? { draft } : null;
     } finally {
       db.close();
@@ -176,11 +192,15 @@ export const cursor: SourcePlugin<CursorMeta> = {
       const path = findTranscript(location.path, native);
       if (!path) return null;
       const st = statSync(path);
-      return fileSighting({ path, size: st.size, mtimeMs: Math.floor(st.mtimeMs) });
+      return fileSighting(
+        { path, size: st.size, mtimeMs: Math.floor(st.mtimeMs) },
+        projectsFor(kit, dbPath(kit)),
+      );
     }
+    const projects = projectsFor(kit, location.path);
     const db = kit.openDbReadonly(location.path);
     try {
-      const s = sightComposer(db, native);
+      const s = sightComposer(db, native, projects);
       return s ? dbSighting(location.path, s) : null;
     } finally {
       db.close();
@@ -195,7 +215,7 @@ export const cursor: SourcePlugin<CursorMeta> = {
 
   skillNotes: [
     "Cursor: one item per chat (`cursor:<composerId>`), turns keyed by bubble id. A subagent chat's",
-    "`parent_key` is the chat that spawned it, and the spawning turn has a `subagent` chunk. Facet: repository",
-    "(git origin name of the workspace).",
+    "`parent_key` is the chat that spawned it, and the spawning turn has a `subagent` chunk. Facets: repository",
+    "(git origin name of the workspace) and project (the Cursor project the chat belongs to).",
   ].join("\n"),
 };

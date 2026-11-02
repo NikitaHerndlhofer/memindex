@@ -2,6 +2,7 @@ import type { Embedder } from "@memindex/embed";
 import {
   type Capture,
   type ChunkDraft,
+  type Chunker,
   type ChunkerId,
   type ContentHash,
   chunkDraft,
@@ -326,7 +327,10 @@ export function fakeChunker(id: ChunkerId = chunkerId("fake", 1)) {
   };
 }
 
-export function fakeRegistry(plugins: SourcePlugin[], chunkers = [fakeChunker()]): Registry {
+export function fakeRegistry(
+  plugins: SourcePlugin[],
+  chunkers: readonly Chunker[] = [fakeChunker()],
+): Registry {
   const chunker = (id: ChunkerId) => {
     const c = chunkers.find((x) => x.id === id);
     if (!c) throw new Error(`no chunker ${id}`);

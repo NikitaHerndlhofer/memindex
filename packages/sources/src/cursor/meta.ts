@@ -7,5 +7,8 @@ export const CursorMeta = z.object({
   model: z.string().nullable(),
   isSubagent: z.boolean(),
   workspace: z.string().nullable(),
+  /** The Cursor project the chat belongs to; defaults keep rows stored before projects parsing. */
+  project: z.string().nullable().default(null),
+  projectId: z.string().nullable().default(null),
 });
 export type CursorMeta = z.infer<typeof CursorMeta>;

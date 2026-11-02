@@ -34,7 +34,7 @@ test("one source list; the registry derives facets, plugin-owned chunkers and wa
   for (const id of Object.values(IDS)) expect(reg.chunker(id as ChunkerId).id as string).toBe(id);
   expect(Object.fromEntries(reg.facets())).toEqual({
     superwhisper: { mode: "text", appName: "text", language: "text", durationMs: "real" },
-    cursor: { repository: "text" },
+    cursor: { repository: "text", project: "text" },
     "claude-code": { repository: "text", gitBranch: "text" },
   });
   const watch = reg
