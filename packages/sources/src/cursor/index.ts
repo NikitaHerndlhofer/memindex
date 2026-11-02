@@ -234,5 +234,8 @@ export const cursor: SourcePlugin<CursorMeta> = {
     "Cursor: one item per chat (`cursor:<composerId>`), turns keyed by bubble id. A subagent chat's",
     "`parent_key` is the chat that spawned it, and the spawning turn has a `subagent` chunk. Facets: repository",
     "(git origin name of the workspace) and project (the Cursor project the chat belongs to).",
+    "Cloud agents are items too: `cursor:bc-<id>`, tagged `cloud`, with your messages and the agent's replies",
+    "as text. List them with `item_key LIKE 'cursor:bc-%'`. Leaving the desktop window never marks an agent",
+    "`source_gone`.",
   ].join("\n"),
 };

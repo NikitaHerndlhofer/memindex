@@ -187,15 +187,37 @@ improvement can replay history instead of losing it.
 Each source is a plugin compiled into the binary. The watcher keeps all of them current; `memindex
 ingest` runs them once on demand.
 
-| Source        | What it captures                                                                                                                 | Where it reads                                                                                                      | How it stays current                                                                                                        |
-| ------------- | -------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
-| Super Whisper | Dictations and meetings: the processed text, the verbatim transcript, speaker turns of diarized meetings, mode, app and language | `~/Library/Application Support/superwhisper/database/superwhisper.sqlite` and `~/Documents/superwhisper/recordings` | Watches the database folder, polls every 5 minutes. Every revision's raw record is kept, so a parser fix can replay history |
-| Cursor        | Agent chats and their subagents: messages, thinking, commands run, files read and edited                                         | `state.vscdb` in Cursor's `globalStorage`, plus the agent-transcript files in `~/.cursor/projects`                  | Agent hooks, and a poll every 15 minutes                                                                                    |
-| Claude Code   | Sessions and their subagents: messages, thinking, tool use, repository and branch                                                | `~/.claude/projects`                                                                                                | Watches the folder for new and changed session files                                                                        |
+| Source        | What it captures                                                                                                                                         | Where it reads                                                                                                                   | How it stays current                                                                                                        |
+| ------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| Super Whisper | Dictations and meetings: the processed text, the verbatim transcript, speaker turns of diarized meetings, mode, app and language                         | `~/Library/Application Support/superwhisper/database/superwhisper.sqlite` and `~/Documents/superwhisper/recordings`              | Watches the database folder, polls every 5 minutes. Every revision's raw record is kept, so a parser fix can replay history |
+| Cursor        | Agent chats and their subagents, local and cloud agents: messages, thinking, commands run, files read and edited, and the Cursor project each belongs to | `state.vscdb` in Cursor's `globalStorage`, the agent-transcript files in `~/.cursor/projects`, and Cursor's API for cloud agents | Agent hooks, and a poll every 15 minutes (the poll also fetches cloud agents)                                               |
+| Claude Code   | Sessions and their subagents: messages, thinking, tool use, repository and branch                                                                        | `~/.claude/projects`                                                                                                             | Watches the folder for new and changed session files                                                                        |
 
 When a source deletes something (Super Whisper's retention, a cleared chat), the archive keeps it and
 marks it `source_gone`. Reprocessing the same recording keeps the newest version in search and the older
 ones in `items_all`.
+
+## Cursor cloud agents and projects
+
+Cursor chats, local and cloud, carry the name of the Cursor project they belong to: it is the `project`
+column of `cursor_items`, next to `repository`.
+
+Cursor cloud agents run on Cursor's servers, so their chats never reach your Mac's files. memindex reads
+them through Cursor's API with your own API key and archives each one as `cursor:bc-<agent id>`, tagged
+`cloud`, in the same archive as your local chats. The watcher does it on its 15-minute poll; nothing runs
+in the cloud agent's VM.
+- **What is archived:** your messages and the agent's replies (text only, no tool calls or thinking).
+  Agents Cursor has archived or deleted can no longer be fetched, so they are never archived. An agent
+  that drops out of Cursor's list is never marked `source_gone`.
+- **API key.** `memindex install` asks for it at a masked prompt (blank skips) and stores it in
+  `~/.config/memindex/cursor-api-key`, readable only by you. It is never written to `config.json`, a
+  launchd file or an environment variable. Without a key nothing contacts Cursor.
+  `memindex install --skip-cursor-api` skips the prompt; `memindex doctor` then shows SKIPPED.
+  To replace the key, run `memindex install` again after deleting the file; to stop archiving cloud
+  agents, delete the file.
+- **Requests.** memindex only sends read requests to `api.cursor.com`. The first poll reads every cloud
+  agent, which takes a while (about 15 minutes for 600 agents); after that only agents that changed are
+  read.
 
 ## Agent integration
 
@@ -213,7 +235,7 @@ reports anything that drifted.
   on file events and timers, embeds new chunks in short slices, and runs maintenance (reparse, rechunk,
   vector cleanup) in bounded steps.
 
-Skip any part with `memindex install --skip-hooks`, `--skip-watch` or `--skip-ollama`.
+Skip any part with `memindex install --skip-hooks`, `--skip-watch`, `--skip-ollama` or `--skip-cursor-api`.
 
 ## Install
 
@@ -271,12 +293,13 @@ memindex install --url postgresql://memindex:memindex@127.0.0.1:54329/memindex
 **Supabase**: use your project's session pooler URL (port 5432).
 
 `memindex doctor` and `memindex status` show the database, its extension versions and the schema.
-Steps you turn off with `memindex install --skip-ollama`, `--skip-watch` or `--skip-hooks` show as
-SKIPPED in `memindex doctor`, which then still exits 0.
+Steps you turn off with `memindex install --skip-ollama`, `--skip-watch`, `--skip-hooks` or
+`--skip-cursor-api` show as SKIPPED in `memindex doctor`, which then still exits 0.
 
 Source locations can be overridden per machine with `MEMINDEX_SUPERWHISPER_DB`,
 `MEMINDEX_SUPERWHISPER_DIR`, `MEMINDEX_CURSOR_DB`, `MEMINDEX_CURSOR_TRANSCRIPTS_DIR`,
-`MEMINDEX_CLAUDE_CODE_DIR` and `MEMINDEX_CURSOR_HOOKS_FILE`.
+`MEMINDEX_CLAUDE_CODE_DIR` and `MEMINDEX_CURSOR_HOOKS_FILE`. `MEMINDEX_CURSOR_API_URL` replaces
+`https://api.cursor.com`, for tests.
 
 ## Upgrade
 

@@ -42,8 +42,14 @@ The design honors these:
   agent did; bulk tool output stays in turns, unchunked (see `packages/chunkers/src/tools.ts`).
 - **Install is check-and-fix.** Each `memindex install` step is idempotent and reports ok, skipped
   or failed; a failed step doesn't stop the rest. Steps the user turns off (`--skip-ollama`,
-  `--skip-watch`, `--skip-hooks`) are saved in the config, and `memindex doctor` reports them as
+  `--skip-watch`, `--skip-hooks`, `--skip-cursor-api`) are saved in the config, and `memindex doctor` reports them as
   SKIPPED instead of FAIL.
+- **Cursor cloud agents are items of the cursor source.** A cloud agent's chat lives only on Cursor's
+  servers, so the cursor plugin reads it through Cursor's API on its 15-minute poll, as
+  `cursor:bc-<uuid>` in the same key space. The cloud location's listing is never `complete`: an agent
+  missing from it was either not paged (the walk stops at the newest agent already seen) or deleted
+  by Cursor, and neither is proof the archive should forget it. The API key is one file
+  (`cursor-api-key`, mode 0600) beside `config.json`, written only by `memindex install`.
 
 ## Usage (caller's view)
 
