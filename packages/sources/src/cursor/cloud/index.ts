@@ -35,7 +35,8 @@ import { parseSubagentReport, parseSystemEvent } from "./notification.ts";
 export const CLOUD_LABEL = "cursor cloud";
 const CLOUD_PATH = "cursor-api://cloud";
 const API_HEAD = "api_head";
-const PROJECT_FP = "proj_fp";
+/** A full walk is due when this changes: a project moved, or `readCloud` output did (CLOUD_BODY_VERSION). */
+const WALK_FP = "proj_fp";
 /** Part of every revision hash: bump it when `readCloud` output changes. */
 const CLOUD_BODY_VERSION = 2;
 const ARCHIVED = "ARCHIVED";
@@ -80,10 +81,12 @@ function remember(kit: SourceKit, agent: CloudAgent): void {
   seen.set(kit, known);
 }
 
+const walkFingerprint = (projects: ProjectIndex): string => `${projects.fingerprint}:${CLOUD_BODY_VERSION}`;
+
 export async function scanCloud(loc: Location, kit: SourceKit, projects: ProjectIndex): Promise<ScanResult> {
   const api = apiFor(kit);
   const head = await kit.cursor.get(loc.id, API_HEAD);
-  const full = head === null || (await kit.cursor.get(loc.id, PROJECT_FP)) !== projects.fingerprint;
+  const full = head === null || (await kit.cursor.get(loc.id, WALK_FP)) !== walkFingerprint(projects);
   const headMs = head === null ? 0 : Date.parse(head);
 
   const agents: CloudAgent[] = [];
@@ -110,7 +113,7 @@ export async function scanCloud(loc: Location, kit: SourceKit, projects: Project
     kind: "listing",
     sightings: live.map((a) => sightingOf(a, projects)),
     complete: false,
-    commit: { ...(newest ? { [API_HEAD]: newest } : {}), [PROJECT_FP]: projects.fingerprint },
+    commit: { ...(newest ? { [API_HEAD]: newest } : {}), [WALK_FP]: walkFingerprint(projects) },
   };
 }
 

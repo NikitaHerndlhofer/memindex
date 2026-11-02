@@ -160,6 +160,20 @@ describe("cursor cloud agents", () => {
     expect(api.requests.filter((r) => r.path.startsWith("/v0/"))).toHaveLength(1);
   });
 
+  test("a commit from an older body format forces a full walk; the same format stays steady", async () => {
+    withKey();
+    const loc = (await cloudLoc()) as Location;
+    const first = await cursor.scan(loc, kit);
+    await collect(first);
+    if (first.kind === "listing") commit(kit, loc.id, first.commit);
+    expect(first.kind === "listing" && first.commit?.proj_fp).toMatch(/:2$/);
+    kit.cursorValues.set(
+      `${loc.id}|proj_fp`,
+      (first.kind === "listing" && first.commit?.proj_fp?.replace(/:2$/, ":1")) || "",
+    );
+    expect(await listing(loc)).toHaveLength(2);
+  });
+
   test("a full walk pages through every page", async () => {
     withKey();
     api.stop();
