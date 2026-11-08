@@ -713,6 +713,54 @@ export function runStoreContract(name: string, backend: () => ContractBackend): 
         expect(await w.vectors.backlogSize(SPACE)).toBe(1);
       });
 
+      test("opening with a new vector space replaces every other: vectors, index, ledger entry and registry row", async () => {
+        const w = await writer();
+        await w.apply(writeOf(CUR, L1, draftOf(CUR, "swap", [turnOf("a", "swap text")]), rev("1")));
+        const [pending] = await w.vectors.backlog(SPACE, { limit: 1 });
+        await w.vectors.put(SPACE, [{ hash: pending?.hash as ContentHash, vector: vecNear(0) }]);
+        const count = async (where: string) =>
+          (await b.admin(`SELECT count(*)::int AS n FROM memindex.chunk_vector WHERE ${where}`))[0]?.n;
+        const spaces = async () =>
+          (await b.admin("SELECT space_id FROM memindex.vector_space ORDER BY 1")).map((r) => r.space_id);
+        const indexes = async () =>
+          (
+            await b.admin(
+              "SELECT indexname FROM pg_indexes WHERE schemaname = 'memindex' AND indexname LIKE 'chunk_vector_hnsw%'",
+            )
+          ).length;
+        expect(await spaces()).toEqual([SPACE.id]);
+        expect(await count(`space = '${SPACE.id}'`)).toBe(1);
+
+        const next = vectorSpace("next", 4);
+        const n = await openStore(b.config, {
+          mode: "write",
+          producer: P1,
+          binaryVersion: "test",
+          facets: NO_FACETS,
+          vectorSpace: next,
+        });
+        open.push(n);
+        expect(await spaces()).toEqual([next.id]);
+        expect(await count("true")).toBe(0);
+        expect(await indexes()).toBe(1);
+        expect(
+          (await b.admin("SELECT name FROM memindex.derived_object WHERE kind = 'vector_index'")).length,
+        ).toBe(1);
+        expect(await n.vectors.backlogSize(next)).toBe(1);
+
+        await n.vectors.put(next, [{ hash: pending?.hash as ContentHash, vector: vecNear(1) }]);
+        const again = await openStore(b.config, {
+          mode: "write",
+          producer: P1,
+          binaryVersion: "test",
+          facets: NO_FACETS,
+          vectorSpace: next,
+        });
+        open.push(again);
+        expect(await spaces()).toEqual([next.id]);
+        expect(await count(`space = '${next.id}'`)).toBe(1);
+      });
+
       test("gc examines at most `limit` vectors per call, resumes after `next`, and keeps referenced vectors", async () => {
         const w = await writer();
         const ds = ["one", "two"].map((n) => draftOf(CUR, `gc-${n}`, [turnOf("a", `gc kept ${n}`)]));

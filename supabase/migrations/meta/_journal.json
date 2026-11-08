@@ -190,6 +190,13 @@
       "when": 1793071594206,
       "tag": "20261027032634_memindex_cross_language",
       "breakpoints": true
+    },
+    {
+      "idx": 27,
+      "version": "7",
+      "when": 1793998264024,
+      "tag": "20261106205104_memindex_replace_vector_space",
+      "breakpoints": true
     }
   ]
 }
