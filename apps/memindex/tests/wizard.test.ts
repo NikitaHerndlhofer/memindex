@@ -5,6 +5,7 @@ import { dirname, join } from "node:path";
 import {
   type EmbedHealth,
   loadConfig,
+  OLLAMA_DEFAULTS,
   type PullProgress,
   readCursorApiKey,
   type SkippableStep,
@@ -179,7 +180,7 @@ async function harness(
         }),
     },
     ollama: {
-      health: async () => health.shift() ?? { ok: true, model: "bge-m3" },
+      health: async () => health.shift() ?? { ok: true, model: OLLAMA_DEFAULTS.model },
       pull: async (onProgress: (p: PullProgress) => void) => {
         commands.push("ollama-pull");
         onProgress({ status: "downloading", total: 2, completed: 1 });
@@ -251,7 +252,9 @@ describe("memindex install wizard", () => {
     expect(Object.keys(JSON.parse(readFileSync(join(home, "cfg", "skills.json"), "utf8")))).toContain(
       join(home, ".cursor", "skills", "memindex", "SKILL.md"),
     );
-    expect(h.ui.lines.some((l) => l.includes("pulling bge-m3: downloading 50%"))).toBe(true);
+    expect(h.ui.lines.some((l) => l.includes(`pulling ${OLLAMA_DEFAULTS.model}: downloading 50%`))).toBe(
+      true,
+    );
   });
 
   test("no --url: asks, defaulting to the configured database", async () => {

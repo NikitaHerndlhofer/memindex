@@ -49,6 +49,25 @@ describe("createOllamaEmbedder", () => {
     expect(requests[0]?.body).toMatchObject({ input: ["a", "b"], truncate: true, keep_alive: "5m" });
   });
 
+  test("a query carries the configured instruction; a document, and a query without one, do not", async () => {
+    const host = serve((_, body) => ok(body));
+    const e = createOllamaEmbedder({
+      host,
+      model: "m",
+      dim: 3,
+      queryInstruction: "Instruct: find it\nQuery:",
+    });
+    expect(vectors([await e.embedQuery("why did the deploy fail")])).toHaveLength(1);
+    await e.embed(["why did the deploy fail"]);
+    expect(requests.map((r) => r.body?.input[0])).toEqual([
+      "Instruct: find it\nQuery:why did the deploy fail",
+      "why did the deploy fail",
+    ]);
+
+    await createOllamaEmbedder({ host, model: "m", dim: 3 }).embedQuery("plain");
+    expect(requests.at(-1)?.body?.input).toEqual(["plain"]);
+  });
+
   test("splits into batchSize requests", async () => {
     const host = serve((_, body) => ok(body));
     const e = createOllamaEmbedder({ host, model: "m", dim: 3, batchSize: 2 });

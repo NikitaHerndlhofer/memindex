@@ -311,9 +311,9 @@ export interface Sighting {
 
 // ─── Embedding space ───────────────────────────────────────────────────────────
 
-/** Vectors from different models never mix; switching models adds a space, never wipes one. */
+/** Vectors from different models never mix: registering a new space deletes every other one's vectors and index. */
 export interface VectorSpace {
-  /** e.g. "bge-m3@1024". Also names the backing table (slugged). */
+  /** e.g. "qwen3-embedding:0.6b@1024". Also names the backing table (slugged). */
   readonly id: string;
   readonly model: string;
   readonly dim: number;

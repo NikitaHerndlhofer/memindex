@@ -14,6 +14,8 @@ export interface Embedder {
    * that input. Oversized batches are split; a refused input never fails its neighbours.
    */
   embed(texts: readonly string[]): Promise<readonly EmbedOutcome[]>;
+  /** The vector for one search query: `embed` of the text with the model's query instruction, if it has one. */
+  embedQuery(text: string): Promise<EmbedOutcome>;
   health(): Promise<EmbedHealth>;
 }
 
@@ -48,6 +50,8 @@ export interface OllamaOptions {
   readonly host: string;
   readonly model: string;
   readonly dim: number;
+  /** Put before the text of a search query (`embedQuery`), never before a document. Default: nothing. */
+  readonly queryInstruction?: string;
   readonly batchSize?: number;
   /** Batches in flight at once. Default 2. */
   readonly concurrency?: number;

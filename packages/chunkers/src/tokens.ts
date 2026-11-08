@@ -15,9 +15,12 @@ export interface TokenCounter {
   count(text: string, limit?: number): number;
 }
 
-/** bge-m3 retrieves best on passages of at most 512 tokens; one vector over more averages topics away. */
-export const DEFAULT_MAX_TOKENS = 512;
-/** ~12% of the budget, so the sentence or line that straddles a cut lands in both pieces. */
+/**
+ * Long enough that an answer and the reasoning around it share a vector, short enough that one vector still
+ * covers one topic: retrieval studies favour 512 to 1,024 tokens when answers depend on their context.
+ */
+export const DEFAULT_MAX_TOKENS = 1024;
+/** ~6% of the budget, so the sentence or line that straddles a cut lands in both pieces and a phrase across it still matches keyword search. */
 export const DEFAULT_OVERLAP_TOKENS = 64;
 
 export interface TokenBudget {

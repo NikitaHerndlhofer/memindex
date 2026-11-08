@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { EMBEDDING_MODEL } from "@memindex/tokenizer";
 import { readEmbedPace } from "../src/config.ts";
 import {
   ensureProducerId,
@@ -24,13 +25,29 @@ beforeEach(() => {
 afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
 describe("config", () => {
-  test("defaults: no database until install names one, bge-m3@1024, no producer yet", async () => {
+  test("defaults: no database until install names one, the embedding model's description, no producer yet", async () => {
     const cfg = await loadConfig({ HOME: dir, MEMINDEX_CONFIG_DIR: join(dir, "cfg") });
     expect(cfg.store).toBeNull();
     expect(() => storeConfig(cfg)).toThrow(/no database configured/);
-    expect(cfg.ollama).toEqual({ host: "http://127.0.0.1:11434", model: "bge-m3", dim: 1024 });
+    expect(cfg.ollama).toEqual({
+      host: "http://127.0.0.1:11434",
+      model: EMBEDDING_MODEL.model,
+      dim: EMBEDDING_MODEL.dim,
+      queryInstruction: EMBEDDING_MODEL.queryInstruction,
+    });
     expect(cfg.producerId).toBeNull();
     expect(cfg.paths.configFile).toBe(join(dir, "cfg", "config.json"));
+  });
+
+  test("a model other than the described one gets no query instruction", async () => {
+    const env = { HOME: dir, MEMINDEX_CONFIG_DIR: join(dir, "cfg") };
+    expect((await loadConfig({ ...env, MEMINDEX_EMBED_MODEL: "other-model" })).ollama).toMatchObject({
+      model: "other-model",
+      queryInstruction: "",
+    });
+    expect(
+      (await loadConfig({ ...env, MEMINDEX_EMBED_MODEL: EMBEDDING_MODEL.model })).ollama.queryInstruction,
+    ).toBe(EMBEDDING_MODEL.queryInstruction);
   });
 
   test("producer id is minted once and persisted alongside existing fields", async () => {

@@ -176,7 +176,7 @@ improvement can replay history instead of losing it.
 ### Local, private and light
 
 - **Nothing leaves your Mac.** Postgres runs locally (Homebrew, Docker or your own Supabase), and
-  embeddings come from Ollama's `bge-m3` on your machine.
+  embeddings come from Ollama's `qwen3-embedding:0.6b` on your machine.
 - **Light on resources.** The watcher runs at low priority in short slices and pauses on battery. The
   database runs fine with 128 MB of shared buffers.
 - **Safe to re-run.** `memindex install` checks before it changes anything, and `memindex doctor` tells
@@ -255,8 +255,15 @@ memindex install
 ```
 
 `memindex install` asks for a Postgres URL (see [Database](#database)), migrates it, sets up Ollama
-with the `bge-m3` model, installs the background watcher, agent hooks and the agent skill, then runs
+with the `qwen3-embedding:0.6b` model, installs the background watcher, agent hooks and the agent skill, then runs
 `memindex doctor`. Every step checks before it changes anything, so re-running install is safe.
+
+**Upgrading from a release that used `bge-m3`:** `memindex install` pulls the new model. The first time the
+new release opens the archive it deletes the old model's vectors and their index (about a minute). The
+watcher then re-chunks every chat and recording and embeds them in the background: about 4 hours of embedding
+for ~380k chunks on an M4 Pro. `memindex status` shows the backlog, `memindex pace full` speeds it up, and
+embedding waits while you are on battery. Until it drains, semantic and hybrid search see only what is
+embedded; keyword and fuzzy search are unaffected. Going back to the old model means re-embedding.
 
 If you use Super Whisper, macOS asks once whether memindex may access files in your Documents folder,
 where Super Whisper keeps its recordings. Click Allow. Install waits for the answer and says so if the
@@ -339,7 +346,7 @@ chunks, not a whole batch.
 
 - **Plugins** read each source (`packages/sources`) and map it into one content model: items (a chat, a
   recording), turns (messages, speaker runs) and parts (text, thinking, tool calls, diffs, transcripts).
-- **Chunkers** cut turns into search units of at most 512 bge-m3 tokens. Bulk tool output stays in the
+- **Chunkers** cut turns into search units of at most 1,024 Qwen3 tokens. Bulk tool output stays in the
   turn, unchunked, so search covers what was said and done, not megabytes of logs.
 - **Search runs in Postgres**: a full-text, a trigram and an HNSW vector index, fused by reciprocal rank
   fusion, then shaped into whole items or single moments with the exchange around them.
@@ -350,18 +357,18 @@ The design and its constraints are in [docs/architecture.md](docs/architecture.m
 
 ### Repository layout
 
-| Package               | What it holds                                                                                      |
-| --------------------- | -------------------------------------------------------------------------------------------------- |
-| `apps/memindex`       | The CLI: commands, the install wizard, launchd setup, output caps and notices                      |
-| `packages/engine`     | Ingest, the watcher loop, jobs (reparse, rechunk, vector cleanup), recipes and the skill generator |
-| `packages/sources`    | The source plugins: Super Whisper, Cursor (with its hooks), Claude Code                            |
-| `packages/chunkers`   | Stock chunkers for text, code, tool calls, diffs and transcripts                                   |
-| `packages/model`      | The content model: items, turns, parts, chunks, sightings                                          |
-| `packages/store`      | The Postgres store (Drizzle + postgres.js), the read-only query path and the generated migrations  |
-| `packages/embed`      | The Ollama client for `bge-m3`                                                                     |
-| `packages/tokenizer`  | An offline bge-m3 token counter, so every chunk fits the model's 512-token window                  |
-| `supabase/migrations` | The schema and the search functions, as SQL migrations                                             |
-| `scripts`             | Release, acceptance checks, the eval snapshot and the search quality gate                          |
+| Package               | What it holds                                                                                                 |
+| --------------------- | ------------------------------------------------------------------------------------------------------------- |
+| `apps/memindex`       | The CLI: commands, the install wizard, launchd setup, output caps and notices                                 |
+| `packages/engine`     | Ingest, the watcher loop, jobs (reparse, rechunk, vector cleanup), recipes and the skill generator            |
+| `packages/sources`    | The source plugins: Super Whisper, Cursor (with its hooks), Claude Code                                       |
+| `packages/chunkers`   | Stock chunkers for text, code, tool calls, diffs and transcripts                                              |
+| `packages/model`      | The content model: items, turns, parts, chunks, sightings                                                     |
+| `packages/store`      | The Postgres store (Drizzle + postgres.js), the read-only query path and the generated migrations             |
+| `packages/embed`      | The Ollama client for `qwen3-embedding:0.6b`                                                                  |
+| `packages/tokenizer`  | The embedding model's description (tag, dimension, query instruction, chunk size) and its exact token counter |
+| `supabase/migrations` | The schema and the search functions, as SQL migrations                                                        |
+| `scripts`             | Release, acceptance checks, the eval snapshot and the search quality gate                                     |
 
 ### Adding a source
 
@@ -404,6 +411,7 @@ tracked. The gate exits 2 with a message if that directory is missing.
 bun scripts/eval-snapshot.ts --from postgresql://…/memindex     # once
 bun scripts/search-gate.ts --record-baseline                       # the current code, as the baseline
 bun scripts/search-gate.ts --candidate-bin "bun apps/memindex/src/cli.ts"   # a change, on a clone
+bun scripts/gate-model.ts                                          # a new embedding model or chunker
 ```
 
 `--candidate-bin` clones the snapshot, migrates the clone with that binary, scores it and drops it (it
@@ -412,6 +420,12 @@ needs the same disk headroom as `eval-snapshot.ts`). Each run prints one line pe
 under its long-chat ceilings (share of top-5 slots on items of 300+ turns, median turns of the top 5),
 and within tolerance of the baseline: a set's nDCG@5 and nDCG@10 may drop by at most
 max(run-to-run spread, `queryFraction` / queries).
+
+A new embedding model or chunker needs chunks and vectors the snapshot does not have, so a clone is not enough.
+`scripts/gate-model.ts` copies the snapshot to `<snapshot>_cand`, lets the candidate binary migrate, re-chunk and
+re-embed the copy (hours: the embedding of the whole snapshot), freezes it and runs the gate on it. The copy carries
+the snapshot's comment, so `baseline.json` applies to it. The copy is dropped afterwards (`--keep` leaves it) and an
+interrupted run continues with `--resume`.
 
 Re-record the baseline after every snapshot restore: a restored vector index is rebuilt with different
 approximate neighbours, so scores move without any code change.

@@ -19,6 +19,7 @@ import { SQL } from "bun";
 import { redactUrl } from "../packages/engine/src/config.ts";
 import { readEmbedRuntime } from "../packages/engine/src/embed-duty.ts";
 import { MIGRATIONS } from "../packages/store/src/migrations.gen.ts";
+import { EMBEDDING_MODEL } from "../packages/tokenizer/src/index.ts";
 import { measureFreeSpace, shortfalls } from "./disk-headroom.ts";
 import { EvalDirError, requireEvalDir } from "./eval-dir.ts";
 import { formatReport, GateRefusal, gateVerdict, loadEvalData, runGate } from "./search-gate.ts";
@@ -309,7 +310,8 @@ export function requiredParams(spec: string): string[] {
 
 const REPO = resolve(import.meta.dir, "..");
 const OLLAMA = "http://127.0.0.1:11434";
-const SPACE = "bge-m3@1024";
+const MODEL = EMBEDDING_MODEL.model;
+const SPACE = `${MODEL}@${EMBEDDING_MODEL.dim}`;
 const HOMEBREW_SQLITE = "/opt/homebrew/opt/sqlite/lib/libsqlite3.dylib";
 
 interface CliRun {
@@ -635,7 +637,7 @@ async function ollamaHasModel(): Promise<string | null> {
   try {
     const res = await fetch(`${OLLAMA}/api/tags`, { signal: AbortSignal.timeout(3000) });
     const body = (await res.json()) as { models?: { name: string }[] };
-    return body.models?.some((m) => m.name.split(":")[0] === "bge-m3") ? null : "bge-m3 not pulled";
+    return body.models?.some((m) => m.name === MODEL) ? null : `${MODEL} not pulled`;
   } catch (e) {
     return `unreachable: ${e instanceof Error ? e.message : String(e)}`;
   }
@@ -651,7 +653,7 @@ const vectorsOf = (h: Harness) =>
 
 const embed: Clause = {
   id: "embed",
-  title: "the embed job shrinks the backlog by exactly what it embedded, at dim 1024",
+  title: "the embed job shrinks the backlog by exactly what it embedded, at the model's dimension",
   requires: ["schema"],
   async run(h) {
     const ollama = await ollamaHasModel();
@@ -685,7 +687,7 @@ const embed: Clause = {
       WHERE space = ${SPACE} AND created_at >= ${t0?.t} GROUP BY 1`) as { dim: number; n: number }[];
     const shrank = backlog0 - backlog1;
     const added = vectors1 - vectors0;
-    const dimOk = dims.length === 1 && dims[0]?.dim === 1024 && dims[0]?.n === added;
+    const dimOk = dims.length === 1 && dims[0]?.dim === EMBEDDING_MODEL.dim && dims[0]?.n === added;
     return {
       verdict: check(added === expected && shrank === added && reportedDone === added && dimOk && !error),
       evidence: `backlog ${backlog0} -> ${backlog1} (shrank ${shrank}); vectors +${added} of ${expected} asked; CLI reported ${reportedDone} in ${r.ms} ms; new vector dims ${JSON.stringify(dims.map((d) => `${d.dim}x${d.n}`))}${error ? `; error: ${String(error)}` : ""}`,
@@ -853,7 +855,7 @@ const PARAM_SAMPLES: Readonly<Record<string, string>> = {
 async function warmEmbedder(): Promise<void> {
   await fetch(`${OLLAMA}/api/embed`, {
     method: "POST",
-    body: JSON.stringify({ model: "bge-m3", input: "warm up" }),
+    body: JSON.stringify({ model: MODEL, input: "warm up" }),
     signal: AbortSignal.timeout(120_000),
   }).catch(() => {});
 }

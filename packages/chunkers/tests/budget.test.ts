@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { type ItemDraft, isoTime, itemKey, type Part, turnKey } from "@memindex/model";
-import { bgeM3 } from "@memindex/tokenizer";
+import { qwen3 } from "@memindex/tokenizer";
 import { type Chunker, partsChunker, speakerTurnChunker, transcriptChunker } from "../src/index.ts";
 import { golden } from "./golden.ts";
 
@@ -117,7 +117,7 @@ function chunkers(maxTokens: number): Chunker[] {
   const dictation = transcriptChunker({
     owner: "test",
     name: "dictation",
-    tokens: bgeM3,
+    tokens: qwen3,
     maxTokens,
     overlapTokens,
     embedPrefix: "[{meta.mode}] ",
@@ -125,13 +125,13 @@ function chunkers(maxTokens: number): Chunker[] {
     keywordOnly: [],
   });
   return [
-    partsChunker({ owner: "test", name: "parts", tokens: bgeM3, maxTokens, overlapTokens }),
+    partsChunker({ owner: "test", name: "parts", tokens: qwen3, maxTokens, overlapTokens }),
     dictation,
     speakerTurnChunker({
       owner: "test",
       name: "speaker",
       summary: dictation,
-      tokens: bgeM3,
+      tokens: qwen3,
       maxTokens,
       overlapTokens,
     }),
@@ -140,12 +140,12 @@ function chunkers(maxTokens: number): Chunker[] {
 
 describe("no embedded chunk exceeds maxTokens", () => {
   const drafts = inputs();
-  for (const maxTokens of [512, 128, 48]) {
+  for (const maxTokens of [1024, 128, 48]) {
     test(`maxTokens ${maxTokens}`, () => {
       for (const chunker of chunkers(maxTokens))
         for (const draft of drafts) {
           const chunks = chunker.chunk(draft);
-          const over = chunks.filter((c) => c.embed && bgeM3.count(c.embedText) > maxTokens);
+          const over = chunks.filter((c) => c.embed && qwen3.count(c.embedText) > maxTokens);
           expect(over.map((c) => `${chunker.id} ${c.turnKey}/${c.partIdx}/${c.sub}`)).toEqual([]);
           expect(chunker.chunk(draft)).toEqual(chunks);
         }

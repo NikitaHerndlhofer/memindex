@@ -5,6 +5,7 @@ import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { type ProducerId, producerId, type SourceId, sourceId } from "@memindex/model";
 import { type StoreConfig, StoreError } from "@memindex/store";
+import { EMBEDDING_MODEL } from "@memindex/tokenizer";
 import { z } from "zod";
 
 export type Env = Readonly<Record<string, string | undefined>>;
@@ -21,6 +22,8 @@ export interface OllamaConfig {
   readonly host: string;
   readonly model: string;
   readonly dim: number;
+  /** Put before a search query; "" unless the model is the one `EMBEDDING_MODEL` describes. */
+  readonly queryInstruction: string;
   readonly keepAlive?: string;
 }
 
@@ -122,7 +125,11 @@ const ConfigFile = z
   .strict();
 type ConfigFile = z.infer<typeof ConfigFile>;
 
-export const OLLAMA_DEFAULTS = { host: "http://127.0.0.1:11434", model: "bge-m3", dim: 1024 } as const;
+export const OLLAMA_DEFAULTS = {
+  host: "http://127.0.0.1:11434",
+  model: EMBEDDING_MODEL.model,
+  dim: EMBEDDING_MODEL.dim,
+} as const;
 
 export function resolvePaths(env: Env = process.env): MemindexPaths {
   const home = env.HOME ?? homedir();
@@ -196,6 +203,7 @@ export async function loadConfig(env: Env = process.env): Promise<MemindexConfig
   const paths = resolvePaths(env);
   const file = await readConfigFile(paths.configFile);
   const host = env.MEMINDEX_OLLAMA_HOST ?? env.OLLAMA_HOST ?? file.ollama?.host ?? OLLAMA_DEFAULTS.host;
+  const model = env.MEMINDEX_EMBED_MODEL ?? file.ollama?.model ?? OLLAMA_DEFAULTS.model;
   return {
     search: searchScope(env, file),
     paths,
@@ -203,8 +211,9 @@ export async function loadConfig(env: Env = process.env): Promise<MemindexConfig
     store: env.MEMINDEX_STORE ? parseStoreUrl(env.MEMINDEX_STORE, "MEMINDEX_STORE") : (file.store ?? null),
     ollama: {
       host: /^https?:\/\//.test(host) ? host : `http://${host}`,
-      model: env.MEMINDEX_EMBED_MODEL ?? file.ollama?.model ?? OLLAMA_DEFAULTS.model,
+      model,
       dim: file.ollama?.dim ?? OLLAMA_DEFAULTS.dim,
+      queryInstruction: model === EMBEDDING_MODEL.model ? EMBEDDING_MODEL.queryInstruction : "",
       ...(env.MEMINDEX_OLLAMA_KEEP_ALIVE ? { keepAlive: env.MEMINDEX_OLLAMA_KEEP_ALIVE } : {}),
     },
     disabledSources: (file.disabledSources ?? []).map(sourceId),

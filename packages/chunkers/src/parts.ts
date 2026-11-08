@@ -75,7 +75,7 @@ export const DEFAULT_PART_SPLITS: Readonly<Partial<Record<PartKind, SplitStrateg
 interface BudgetOptions {
   /** The embedding model's tokenizer. */
   readonly tokens: TokenCounter;
-  /** No embedded chunk counts more tokens than this. Default 512. */
+  /** No embedded chunk counts more tokens than this. Default 1024. */
   readonly maxTokens?: number;
   /** Tokens shared by consecutive pieces. Default 64. */
   readonly overlapTokens?: number;

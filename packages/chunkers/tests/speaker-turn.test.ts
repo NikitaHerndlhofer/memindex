@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { type ItemDraft, isoTime, itemKey, turnKey } from "@memindex/model";
-import { bgeM3 } from "@memindex/tokenizer";
+import { qwen3 } from "@memindex/tokenizer";
 import { speakerTurnChunker, transcriptChunker } from "../src/index.ts";
 import { dictation, meeting } from "./configs.ts";
 import { golden, plain } from "./golden.ts";
@@ -21,11 +21,11 @@ test("the summary turn is delegated to the nested chunker, whose id is part of t
   const otherSummary = transcriptChunker({
     owner: "test",
     name: "dictation",
-    tokens: bgeM3,
+    tokens: qwen3,
     embedPrefix: "",
   });
   expect(
-    speakerTurnChunker({ owner: "test", name: "speaker", summary: otherSummary, tokens: bgeM3 }).id,
+    speakerTurnChunker({ owner: "test", name: "speaker", summary: otherSummary, tokens: qwen3 }).id,
   ).not.toBe(meeting.id);
 });
 
@@ -48,7 +48,7 @@ test("a transcript without speaker turns chunks exactly like its summary chunker
   expect(meeting.chunk(undiarized)).toEqual(dictation.chunk(undiarized) as never);
 });
 
-test("speaker turns: [speaker] prefix, windows ending at sentences within 512 tokens, short turns keyword-only", () => {
+test("speaker turns: [speaker] prefix, windows ending at sentences within 1024 tokens, short turns keyword-only", () => {
   const chunks = meeting.chunk(MEETING).filter((c) => c.turnKey !== "u");
   expect(chunks.find((c) => c.turnKey === "s0")).toMatchObject({
     text: "Yeah, okay.",
@@ -56,14 +56,14 @@ test("speaker turns: [speaker] prefix, windows ending at sentences within 512 to
     embed: false,
   });
   const long = chunks.filter((c) => c.turnKey === "s3");
-  expect(long.length).toBeGreaterThan(2);
+  expect(long.length).toBeGreaterThan(1);
   long.forEach((c, i) => {
     expect(c.embed).toBe(true);
     expect(c.embedText).toBe(`[Nikita] ${c.text}`);
     expect(c.text.endsWith(".")).toBe(true);
-    const tokens = bgeM3.count(c.embedText);
-    expect(tokens).toBeLessThanOrEqual(512);
-    if (i < long.length - 1) expect(tokens).toBeGreaterThan(400);
+    const tokens = qwen3.count(c.embedText);
+    expect(tokens).toBeLessThanOrEqual(1024);
+    if (i < long.length - 1) expect(tokens).toBeGreaterThan(800);
   });
 });
 
@@ -95,7 +95,7 @@ test("minEmbedWords: a turn of exactly that many words is embedded; one fewer is
     owner: "test",
     name: "speaker",
     summary: dictation,
-    tokens: bgeM3,
+    tokens: qwen3,
     minEmbedWords: 1,
   });
   expect(strict.chunk(turnOf(1))[0]?.embed).toBe(true);

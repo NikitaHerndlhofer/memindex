@@ -1,18 +1,18 @@
 #!/usr/bin/env bun
 /**
- * Checks `bgeM3.count` against Ollama: for real chunk texts sampled read-only from the archive (chat prose,
+ * Checks the embedding model's token counter (`EMBEDDING_MODEL.tokens`) against Ollama: for real chunk texts sampled read-only from the archive (chat prose,
  * tool calls and results, Cyrillic, Claude Code, Super Whisper transcripts) plus edge cases, compares the count
  * with the `prompt_eval_count` Ollama reports for embedding that text alone. Exits 1 on any mismatch.
  *
- *   bun scripts/check-tokenizer.ts [--store postgres://…] [--ollama http://127.0.0.1:11434] [--per 40]
+ *   bun scripts/check-tokenizer.ts [--store postgres://…] [--ollama http://127.0.0.1:11434] [--model <ollama tag>] [--per 40]
  *
- * Ollama caps an embed input at 2048 tokens, so texts it reports at the cap are skipped.
+ * Ollama truncates an embed input at the model's context (32,767 tokens), so texts it reports at the cap are skipped.
  */
 import { parseArgs } from "node:util";
 import { SQL } from "bun";
-import { bgeM3 } from "../packages/tokenizer/src/index.ts";
+import { EMBEDDING_MODEL } from "../packages/tokenizer/src/index.ts";
 
-const OLLAMA_INPUT_CAP = 2048;
+const OLLAMA_INPUT_CAP = 32_767;
 
 const { values } = parseArgs({
   options: {
@@ -21,6 +21,7 @@ const { values } = parseArgs({
       default: process.env.MEMINDEX_STORE ?? "postgres://memindex:memindex@127.0.0.1:54329/memindex",
     },
     ollama: { type: "string", default: "http://127.0.0.1:11434" },
+    model: { type: "string", default: EMBEDDING_MODEL.model },
     per: { type: "string", default: "40" },
   },
 });
@@ -48,7 +49,8 @@ const EDGE_CASES = [
   "a\u0000b\u0007c zero\u200bwidth",
   "𝔘𝔫𝔦𝔠𝔬𝔡𝔢 math 𝐀𝐁 and 𓀀𓀁",
   "मराठी क्या हाल है مرحبا بالعالم",
-  "literal <s> and </s> and <unk> <pad> <mask>",
+  "literal <|endoftext|> and <|im_start|> and <think> and <tool_call>",
+  "e\u0301 decomposed and caf\u00e9 composed",
 ];
 
 async function sample(): Promise<{ stratum: string; text: string }[]> {
@@ -72,7 +74,7 @@ async function sample(): Promise<{ stratum: string; text: string }[]> {
 async function ollamaCount(text: string): Promise<number> {
   const res = await fetch(`${values.ollama}/api/embed`, {
     method: "POST",
-    body: JSON.stringify({ model: "bge-m3", input: [text] }),
+    body: JSON.stringify({ model: values.model, input: [text] }),
   });
   const body = (await res.json()) as { prompt_eval_count?: number; error?: string };
   if (!res.ok || body.prompt_eval_count === undefined) throw new Error(`ollama: ${body.error ?? res.status}`);
@@ -92,7 +94,7 @@ for (const { stratum, text } of texts) {
     skipped++;
     continue;
   }
-  const ours = bgeM3.count(text);
+  const ours = EMBEDDING_MODEL.tokens.count(text);
   const s = byStratum.get(stratum) ?? { n: 0, exact: 0 };
   byStratum.set(stratum, s);
   s.n++;
@@ -109,7 +111,7 @@ for (const { stratum, text } of texts) {
 for (const [name, s] of byStratum) console.log(`${name.padEnd(24)} ${s.exact}/${s.n} exact`);
 for (const m of mismatches) console.log(`MISMATCH ${m}`);
 console.log(
-  `${bgeM3.id}: ${exact}/${compared} exact (${((100 * exact) / compared).toFixed(1)}%), max deviation ${maxDeviation}` +
+  `${EMBEDDING_MODEL.tokens.id}: ${exact}/${compared} exact (${((100 * exact) / compared).toFixed(1)}%), max deviation ${maxDeviation}` +
     `, ${skipped} skipped at Ollama's ${OLLAMA_INPUT_CAP}-token cap`,
 );
 process.exit(mismatches.length === 0 ? 0 : 1);

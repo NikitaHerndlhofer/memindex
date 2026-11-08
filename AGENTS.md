@@ -47,6 +47,8 @@ The archive is the only copy of data its sources already deleted. Treat it as pr
   the user's store. The release preflight refuses a set `MEMINDEX_STORE`.
 - Evaluate retrieval read-only on the live archive with the installed CLI. Gate ranking changes on the
   snapshot; the live archive moves and contains the eval chats themselves.
+- A new embedding model or chunker needs vectors the snapshot lacks: `bun scripts/gate-model.ts` copies the
+  snapshot, lets the candidate binary re-chunk and re-embed the copy (hours), gates it and drops it.
 - Name scratch databases `memindex_<purpose>` and drop them when done. Keep 25 GB free (`df -h /`)
   before copying a database.
 

@@ -363,6 +363,10 @@ export function fakeEmbedder(dim = 8, fail = false): Embedder & { calls: string[
         return v.map((x) => x / n);
       });
     },
+    async embedQuery(text) {
+      const [v] = await this.embed([text]);
+      return v ?? { rejected: "no vector" };
+    },
     async health() {
       return { ok: true, model: "fake" } as const;
     },

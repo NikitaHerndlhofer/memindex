@@ -8,7 +8,7 @@
 import { mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { bgeM3 } from "../src/index.ts";
+import { EMBEDDING_MODEL } from "../src/index.ts";
 
 const TEXTS = ["Hello world", "Здравствуйте, как дела?", "const x = (a: number) => a * 2;\n", "a <s> b"];
 const dir = mkdtempSync(join(tmpdir(), "memindex-tok-"));
@@ -18,7 +18,7 @@ try {
   const without = join(dir, "without.ts");
   writeFileSync(
     withTok,
-    `import { bgeM3 } from ${JSON.stringify(index)};\nconsole.log(JSON.stringify(${JSON.stringify(TEXTS)}.map((t) => bgeM3.count(t))));\n`,
+    `import { EMBEDDING_MODEL } from ${JSON.stringify(index)};\nconsole.log(JSON.stringify(${JSON.stringify(TEXTS)}.map((t) => EMBEDDING_MODEL.tokens.count(t))));\n`,
   );
   writeFileSync(without, `console.log(JSON.stringify(${JSON.stringify(TEXTS)}.map((t) => t.length)));\n`);
   const compile = (entry: string, out: string) => {
@@ -33,7 +33,7 @@ try {
   const sizeWithout = compile(without, join(dir, "without"));
   const run = Bun.spawnSync([join(dir, "with")], { cwd: "/", stdout: "pipe", stderr: "inherit" });
   const got = run.stdout.toString().trim();
-  const want = JSON.stringify(TEXTS.map((t) => bgeM3.count(t)));
+  const want = JSON.stringify(TEXTS.map((t) => EMBEDDING_MODEL.tokens.count(t)));
   if (run.exitCode !== 0 || got !== want) throw new Error(`compiled counts ${got || "(none)"} != ${want}`);
   console.log(`compiled binary counts match: ${got}`);
   console.log(

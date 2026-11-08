@@ -5,7 +5,7 @@ import { claudeCode } from "../src/claude-code/index.ts";
 import { cursor } from "../src/cursor/index.ts";
 
 test("Cursor and Claude Code share the agent-chat parts chunker", () => {
-  expect(partsChunker.id as string).toBe("agent-chat.parts@2+89225d");
+  expect(partsChunker.id as string).toBe("agent-chat.parts@2+f535f3");
   expect(cursor.chunkers.default).toBe(partsChunker);
   expect(claudeCode.chunkers.default).toBe(partsChunker);
 });

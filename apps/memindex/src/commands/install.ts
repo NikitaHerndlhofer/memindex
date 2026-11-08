@@ -48,7 +48,7 @@ export const installCommand = defineCommand({
   meta: {
     name: "install",
     description:
-      "Connect and migrate a Postgres database, set up Ollama + bge-m3, the launchd watcher, agent hooks, the Cursor API key and the skill",
+      "Connect and migrate a Postgres database, set up Ollama + Qwen3-Embedding, the launchd watcher, agent hooks, the Cursor API key and the skill",
   },
   args: {
     yes: { type: "boolean", alias: "y", description: "Non-interactive: accept every prompt (for scripts)" },

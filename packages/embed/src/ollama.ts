@@ -24,9 +24,9 @@ const PullEvent = z.object({
 });
 
 /**
- * Ollama serves bge-m3 one input at a time, first come first served, so a query embed waits behind
- * every input already queued: batchSize × concurrency. Small requests bound that wait (~8 inputs, well
- * under a second); two in flight keep the next one queued, so the GPU never idles between them.
+ * Ollama serves embeds first come first served, so a query embed waits behind every input already queued:
+ * batchSize × concurrency. Small requests bound that wait (~8 inputs, well under a second); two in flight
+ * keep the next one queued, so the GPU never idles between them.
  */
 const DEFAULTS = {
   batchSize: 4,
@@ -44,7 +44,7 @@ const HEALTH_TIMEOUT_MS = 2_000;
  */
 class BatchRejected extends Error {}
 const REJECTED_STATUSES = new Set([400, 413]);
-/** A prefix well under bge-m3's 2,048-token runner batch even for dense text (~3 chars per token). */
+/** A prefix well under a runner's batch even for dense text (~3 chars per token). */
 const SAFE_PREFIX_CHARS = 6_000;
 
 /** `ollama`'s ResponseError isn't exported; it carries the HTTP status as `status_code`. */
@@ -67,6 +67,8 @@ function client(host: string, timeoutMs: number | null): Ollama {
 export function createOllamaEmbedder(opts: OllamaOptions): OllamaEmbedder {
   const host = opts.host.replace(/\/+$/, "");
   const space = vectorSpace(opts.model, opts.dim);
+  // Instruction-aware models embed a query as `<instruction><query>` and a document as is.
+  const queryInstruction = opts.queryInstruction ?? "";
   const batchSize = Math.max(1, opts.batchSize ?? DEFAULTS.batchSize);
   const keepAlive = opts.keepAlive ?? DEFAULTS.keepAlive;
   const retries = opts.retries ?? DEFAULTS.retries;
@@ -156,12 +158,17 @@ export function createOllamaEmbedder(opts: OllamaOptions): OllamaEmbedder {
     }
   }
 
+  async function embed(texts: readonly string[]): Promise<EmbedOutcome[]> {
+    const batches: (readonly string[])[] = [];
+    for (let i = 0; i < texts.length; i += batchSize) batches.push(texts.slice(i, i + batchSize));
+    return (await Promise.all(batches.map((b) => limit(() => embedBatch(b))))).flat();
+  }
+
   return {
     space,
-    async embed(texts) {
-      const batches: (readonly string[])[] = [];
-      for (let i = 0; i < texts.length; i += batchSize) batches.push(texts.slice(i, i + batchSize));
-      return (await Promise.all(batches.map((b) => limit(() => embedBatch(b))))).flat();
+    embed,
+    async embedQuery(text) {
+      return (await embed([`${queryInstruction}${text}`]))[0] ?? { rejected: "ollama returned no vector" };
     },
     async health(): Promise<EmbedHealth> {
       let raw: unknown;

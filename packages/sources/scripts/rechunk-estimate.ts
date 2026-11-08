@@ -1,19 +1,21 @@
 /**
  * Read-only estimate of what re-chunking the archive with the current chunkers costs: per source and kind,
  * re-chunks every Super Whisper and Claude Code item and a sample of Cursor items as stored in the archive,
- * then reports chunks, embedded chunks, embedded chunks with no vector yet and their bge-m3 tokens (the
- * re-embed cost: Ollama embeds ~6.8k tokens/s), embedded chunks over the token budget, and the CPU time spent
+ * then reports chunks, embedded chunks, embedded chunks with no vector yet and their tokens (the
+ * re-embed cost: see TOKENS_PER_SECOND), embedded chunks over the token budget, and the CPU time spent
  * in `chunk()`. Sampled strata are extrapolated by item count.
  *
  *   bun packages/sources/scripts/rechunk-estimate.ts [--store postgres://…] [--cursor 300]
  */
 import { parseArgs } from "node:util";
-import { bgeM3 } from "@memindex/tokenizer";
+import { EMBEDDING_MODEL } from "@memindex/tokenizer";
 import { buildRegistry } from "../src/index.ts";
 import { archiveItems, DEFAULT_STORE, openArchive } from "./archive-sample.ts";
 
-const SPACE = "bge-m3@1024";
-const BUDGET = 512;
+/** Ollama's embedding rate for the current model on an M4 Pro (measured: ~36 chunks/s); re-measure after a model swap. */
+const TOKENS_PER_SECOND = 4200;
+const SPACE = `${EMBEDDING_MODEL.model}@${EMBEDDING_MODEL.dim}`;
+const BUDGET = EMBEDDING_MODEL.chunkTokens;
 
 const { values } = parseArgs({
   options: {
@@ -85,7 +87,7 @@ for await (const batch of archiveItems(sql, keys)) {
     for (const c of chunks) {
       if (!c.embed) continue;
       s.embedded++;
-      if (bgeM3.count(c.embedText, BUDGET) > BUDGET) s.overBudget++;
+      if (EMBEDDING_MODEL.tokens.count(c.embedText, BUDGET) > BUDGET) s.overBudget++;
       pending.push({ stratum: s, hash: c.contentHash, text: c.embedText });
     }
   }
@@ -102,7 +104,7 @@ for await (const batch of archiveItems(sql, keys)) {
   for (const p of pending) {
     if (have.has(p.hash)) continue;
     p.stratum.needVector++;
-    p.stratum.needTokens += bgeM3.count(p.text);
+    p.stratum.needTokens += EMBEDDING_MODEL.tokens.count(p.text);
   }
 }
 await sql.close();
@@ -113,7 +115,7 @@ console.log(
   `chunkers: ${[...new Set(registry.all.flatMap((p) => Object.values(p.chunkers).map((c) => c?.id)))].join(", ")}`,
 );
 console.log(
-  "stratum                    items(sampled/all)  stored  chunks  embedded  need-vector  need-tokens  over-512  chunk-cpu-ms",
+  "stratum                    items(sampled/all)  stored  chunks  embedded  need-vector  need-tokens  over-budget  chunk-cpu-ms",
 );
 for (const [name, s] of [...strata].sort()) {
   const cols = [
@@ -139,6 +141,6 @@ for (const [name, s] of [...strata].sort()) {
 console.log(
   `extrapolated to the archive: stored chunks ${total.storedChunks}, chunks after rechunk ${total.chunks} ` +
     `(${total.embedded} embedded), embedded chunks without a vector ${total.needVector} ` +
-    `(${(total.needTokens / 1e6).toFixed(0)}M tokens, ~${(total.needTokens / 6800 / 3600).toFixed(0)} h at 6.8k tokens/s), ` +
+    `(${(total.needTokens / 1e6).toFixed(0)}M tokens, ~${(total.needTokens / TOKENS_PER_SECOND / 3600).toFixed(1)} h at ${TOKENS_PER_SECOND} tokens/s), ` +
     `chunk() CPU ${(total.cpuMs / 1000).toFixed(1)} s`,
 );

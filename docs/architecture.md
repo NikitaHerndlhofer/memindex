@@ -38,8 +38,16 @@ The design honors these:
   parser changes. Version bumps are data updates that an older binary can't lower.
 - **Each machine is a producer** with a UUID minted once and kept in its config. No Ollama call
   happens inside a database transaction.
-- **Ollama bge-m3 is the only embedder.** Agent-chat chunks cover the conversation and what the
-  agent did; bulk tool output stays in turns, unchunked (see `packages/chunkers/src/tools.ts`).
+- **Ollama Qwen3-Embedding-0.6B is the only embedder** (1024-d, 100+ languages, 32K context). A search
+  query is embedded with the model's English query instruction; documents are embedded as is.
+  Agent-chat chunks cover the conversation and what the agent did; bulk tool output stays in turns,
+  unchunked (see `packages/chunkers/src/tools.ts`).
+- **One embedding model per archive.** Vectors are keyed by content hash within a vector space (the model
+  and its dimension), and registering a new space deletes every other space's vectors and index in one
+  transaction (`ensure_vector_space`), so a model switch replaces the vectors instead of leaving a second
+  copy behind. Every machine writing to one archive must use the same model: one configured differently
+  would replace the others' vectors each time it opened the archive. A binary older than the schema
+  cannot write, so it cannot undo a swap; upgrade machines together.
 - **Install is check-and-fix.** Each `memindex install` step is idempotent and reports ok, skipped
   or failed; a failed step doesn't stop the rest. Steps the user turns off (`--skip-ollama`,
   `--skip-watch`, `--skip-hooks`, `--skip-cursor-api`) are saved in the config, and `memindex doctor` reports them as
@@ -70,7 +78,7 @@ MEMINDEX_STORE=postgres://…pooler.supabase.com:5432/postgres memindex migrate 
 Agents that have database credentials but not the binary can call the same search directly:
 
 ```sql
-SELECT * FROM memindex.search_results('rate limiter', :query_embedding, 'bge-m3@1024', 'hybrid',
+SELECT * FROM memindex.search_results('rate limiter', :query_embedding, 'qwen3-embedding:0.6b@1024', 'hybrid',
                                       '{"sources": ["cursor"]}', 20);
 ```
 
@@ -108,13 +116,17 @@ configures a stock chunker from `@memindex/chunkers` or implements `Chunker` its
   turns and parts), `transcriptChunker`, `speakerTurnChunker`, `recursiveTextChunker`, plus the
   building blocks they're made from (a synchronous port of `@langchain/textsplitters` checked
   against the library, `fitPieces`, `[kind i/n]` headers) for custom chunkers.
-- **Sizes are bge-m3 tokens.** No embedded chunk's embed text (embed prefix and `[kind i/n]`
-  header included) exceeds `maxTokens` (default 512): bge-m3 retrieves best on passages of that
-  length, and one vector over more averages its topics away. Chunkers get the tokenizer injected
-  as a `TokenCounter`; `@memindex/tokenizer` counts exactly what Ollama counts (BOS and EOS
-  included) from bge-m3's SentencePiece model, embedded in the binary. Splitting stays
-  structure-aware and only the size test is tokens; pieces overlap by `overlapTokens` (default
-  64). Keyword-only parts are never split or budgeted.
+- **Sizes are Qwen3 tokens.** No embedded chunk's embed text (embed prefix and `[kind i/n]`
+  header included) exceeds `maxTokens` (default 1,024): long enough that an answer and the reasoning
+  around it usually share a vector, short enough that one vector still covers one topic. Studies
+  favour 512 to 1,024 tokens when answers depend on their context, and one test of a long-context
+  model found whole 8K-token documents retrieve worse than chunks. Chunkers get the tokenizer
+  injected as a `TokenCounter`; `@memindex/tokenizer` counts exactly what Ollama counts (the
+  end-of-text token included) with a byte-level BPE counter over Qwen3's `merges.txt`, embedded in
+  the binary. Splitting stays structure-aware and only the size test is tokens; pieces overlap by
+  `overlapTokens` (default 64, ~6%), so a phrase that straddles a cut still matches keyword search
+  (overlap does little for vector search in the studies). Keyword-only parts are never split or
+  budgeted.
 - **Ids are derived, never hand-bumped.** A stock chunker's id is
   `<owner>.<name>@<stockVersion>+<hash of resolved options>`, and the resolved options include the
   tokenizer's id and the budget, so changing an option, the tokenizer or a stock algorithm
@@ -147,7 +159,7 @@ configures a stock chunker from `@memindex/chunkers` or implements `Chunker` its
 - `apply` runs one transaction per item under `SELECT … FOR UPDATE`. Concurrent writers
   serialize; stale writes are no-ops.
 - The vector row's existence is the embed marker; the backlog is a query. Producers embed locally
-  with Ollama bge-m3 (multilingual, 1024-d) and write vectors with insert-if-absent.
+  with Ollama Qwen3-Embedding-0.6B (multilingual, 1024-d) and write vectors with insert-if-absent.
 
 ## What Supabase provides, and how memindex uses it
 
@@ -171,19 +183,19 @@ per-plugin maintenance becomes useful.
 
 Use a maintained library wherever it replaces code we would otherwise own.
 
-| Concern                  | Tool                                   | Why                                                                                                                                                                                                      |
-| ------------------------ | -------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Postgres driver          | `postgres` (postgres.js)               | The driver Supabase and Drizzle document; handles the transaction pooler with `prepare: false`                                                                                                           |
-| Schema, queries          | Drizzle ORM                            | TypeScript schema is the single source of truth; typed CRUD; raw `sql` for search and locking                                                                                                            |
-| Migrations               | drizzle-kit + Supabase CLI             | drizzle-kit generates Supabase-prefixed files into `supabase/migrations`; the CLI is the only migrator and ledger                                                                                        |
-| Ollama                   | `ollama` (official client)             | `embed` with `truncate`/`keep_alive`, plus `list` and streamed `pull` for `install` and `doctor`                                                                                                         |
-| Retries, concurrency     | `p-retry`, `p-limit`                   | Backoff on Ollama and network errors; bounded parallel embedding                                                                                                                                         |
-| Prose and code splitting | `@langchain/textsplitters`             | Separator tables and the recursive algorithm behind every stock chunker, sized in tokens                                                                                                                 |
-| Token counting           | own SentencePiece Unigram counter      | Reads bge-m3's `sentencepiece.bpe.model` (5 MB, embedded); matches Ollama's counts exactly. `@huggingface/tokenizers` approximates the normalizer (3% of texts off) and costs ~240 MB of RSS vs ~32 MB   |
-| CLI                      | `citty` + `consola` + `@clack/prompts` | Commands, leveled logging, and the `install` wizard                                                                                                                                                      |
-| File watching            | `chokidar`                             | Small trees only (Super Whisper, Claude Code): under Bun its setup is quadratic in directories and blocks the event loop, so trees over 300 directories and Cursor (hooks plus a 15-min poll) are polled |
-| Validation               | `zod`                                  | Config, plugin meta, Ollama and hook payloads at the boundary                                                                                                                                            |
-| Lint, dead code          | Biome, `knip`                          | Formatting and lint; unused exports and dependencies                                                                                                                                                     |
+| Concern                  | Tool                                   | Why                                                                                                                                                                                                                                                        |
+| ------------------------ | -------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Postgres driver          | `postgres` (postgres.js)               | The driver Supabase and Drizzle document; handles the transaction pooler with `prepare: false`                                                                                                                                                             |
+| Schema, queries          | Drizzle ORM                            | TypeScript schema is the single source of truth; typed CRUD; raw `sql` for search and locking                                                                                                                                                              |
+| Migrations               | drizzle-kit + Supabase CLI             | drizzle-kit generates Supabase-prefixed files into `supabase/migrations`; the CLI is the only migrator and ledger                                                                                                                                          |
+| Ollama                   | `ollama` (official client)             | `embed` with `truncate`/`keep_alive`, plus `list` and streamed `pull` for `install` and `doctor`                                                                                                                                                           |
+| Retries, concurrency     | `p-retry`, `p-limit`                   | Backoff on Ollama and network errors; bounded parallel embedding                                                                                                                                                                                           |
+| Prose and code splitting | `@langchain/textsplitters`             | Separator tables and the recursive algorithm behind every stock chunker, sized in tokens                                                                                                                                                                   |
+| Token counting           | own byte-level BPE counter             | Reads Qwen3-Embedding's `merges.txt` (1.7 MB, embedded); the vocabulary isn't needed, since every merged symbol is a token. Matches Ollama's counts exactly (`scripts/check-tokenizer.ts`), no Unicode normalization, near-linear on huge unbroken strings |
+| CLI                      | `citty` + `consola` + `@clack/prompts` | Commands, leveled logging, and the `install` wizard                                                                                                                                                                                                        |
+| File watching            | `chokidar`                             | Small trees only (Super Whisper, Claude Code): under Bun its setup is quadratic in directories and blocks the event loop, so trees over 300 directories and Cursor (hooks plus a 15-min poll) are polled                                                   |
+| Validation               | `zod`                                  | Config, plugin meta, Ollama and hook payloads at the boundary                                                                                                                                                                                              |
+| Lint, dead code          | Biome, `knip`                          | Formatting and lint; unused exports and dependencies                                                                                                                                                                                                       |
 
 Not adopted: a job queue (`pg-boss`, pgmq), because convergent jobs are predicates over the data
 and a queue would be a second source of truth; an MCP server is a strong follow-up once recipes
@@ -236,10 +248,13 @@ list that everything else derives from.
 ## Embedding and ingest performance
 
 Measured on an M4 Pro (20-core GPU, 48 GB). Raw data and scripts are kept outside the repo.
-- **Embedding is bound by bge-m3's GPU compute in Ollama**, about 12 chunks/s (~6.8k tokens/s),
-  flat across batch size, client concurrency and server slots. A fresh archive's ~1M chunks take
-  about 23 h once; daily ingest is small.
-- **Faster paths were measured under a no-quality-loss gate** (cosine >= 0.999 to today's
+- **Embedding is bound by the model's GPU compute in Ollama.** Qwen3-Embedding-0.6B (Q8_0) embeds
+  ~4-5k tokens/s: the chunk rate of bge-m3 on short chunks (~35/s) and ~15% slower on chunks of 500+
+  tokens (12 vs 14/s), on ~20% fewer tokens for the same text. Changing the model re-chunks and
+  re-embeds the whole archive once, into a new vector space that replaces the old one; `packages/sources/scripts/rechunk-estimate.ts`
+  prints that cost for an archive (an archive of ~4.8k chats and ~2.3k recordings: ~380k chunks, 67M
+  tokens, about 4 h). Daily ingest is small.
+- **For bge-m3, faster paths were measured under a no-quality-loss gate** (cosine >= 0.999 to today's
   vectors; >= 95% top-10 agreement overall, on non-English queries and on Super Whisper queries;
   7,714 chunks, 150 queries). MLX fp16 passed at 1.34x and a Neural Engine + MLX split at 1.59x;
   Ollama Q4, embeddinggemma and granite failed (76%, 32%, 27% agreement). Both passing paths need
@@ -254,6 +269,19 @@ Measured on an M4 Pro (20-core GPU, 48 GB). Raw data and scripts are kept outsid
 - **Ingest applies up to 4 items concurrently.** A pinned 300-chat subset went from 51.7 s to
   19.9 s (median of 5) with byte-identical stored rows; the store's index maintenance in Postgres
   is the limit, not reading sources.
+
+## Swapping the embedding model
+
+1. Edit `EMBEDDING_MODEL` in `packages/tokenizer/src/index.ts`: `model`, `dim` (at most 4,000, the vector index
+   limit), `queryInstruction`, `chunkTokens` and `tokens`. A byte-level BPE model needs only a new merges file
+   (`vendored.ts`), pre-tokenizer pattern and added-token list for `bpeCounter`; a SentencePiece model needs a
+   unigram counter (the one written for bge-m3 is in git history).
+2. `bun scripts/check-tokenizer.ts` must match Ollama's `prompt_eval_count` on every sample.
+3. `bun scripts/gate-model.ts` scores the model on the eval sets, on a copy of the snapshot it re-chunks and
+   re-embeds. `packages/sources/scripts/rechunk-estimate.ts` prices the re-embed; re-measure its
+   `TOKENS_PER_SECOND` for the new model.
+4. Release. The first write-open replaces the old model's vectors, and the watcher re-chunks and re-embeds in the
+   background (see the README's upgrade note).
 
 ## Verification
 

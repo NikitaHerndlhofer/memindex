@@ -15,9 +15,9 @@ import { buildRegistry, SOURCES, type SourcePlugin } from "../src/index.ts";
 import { makeKit } from "./helpers.ts";
 
 const IDS = {
-  dictation: "superwhisper.dictation@2+823365",
-  speaker: "superwhisper.speaker@2+e7752a",
-  parts: "agent-chat.parts@2+89225d",
+  dictation: "superwhisper.dictation@2+f1561d",
+  speaker: "superwhisper.speaker@2+d56a2f",
+  parts: "agent-chat.parts@2+f535f3",
 };
 
 test("one source list; the registry derives facets, plugin-owned chunkers and watch paths", () => {

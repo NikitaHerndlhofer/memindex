@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { contentHash, type ItemDraft, isoTime, itemKey, turnKey } from "@memindex/model";
-import { bgeM3 } from "@memindex/tokenizer";
+import { EMBEDDING_MODEL } from "@memindex/tokenizer";
 import { dictationChunker, speakerChunker } from "../../src/superwhisper/chunkers.ts";
 import { FIXTURES } from "../helpers.ts";
 import { DICTATION_INPUTS, dictationItem } from "./dictation-inputs.ts";
@@ -14,8 +14,8 @@ const GOLDEN = JSON.parse(readFileSync(join(FIXTURES, "golden", "dictation.json"
 
 test("derived chunker ids, owned by the plugin", () => {
   expect([dictationChunker.id, speakerChunker.id] as string[]).toEqual([
-    "superwhisper.dictation@2+823365",
-    "superwhisper.speaker@2+e7752a",
+    "superwhisper.dictation@2+f1561d",
+    "superwhisper.speaker@2+d56a2f",
   ]);
 });
 
@@ -30,7 +30,7 @@ describe("golden: the dictation chunker's output is pinned", () => {
       for (const c of chunks) {
         expect(c.embed).toBe(true);
         expect(c.embedText).toBe(`${PREFIX[c.kind]}${c.text}`);
-        expect(bgeM3.count(c.embedText)).toBeLessThanOrEqual(512);
+        expect(EMBEDDING_MODEL.tokens.count(c.embedText)).toBeLessThanOrEqual(EMBEDDING_MODEL.chunkTokens);
       }
     });
   }
@@ -115,7 +115,7 @@ describe("superwhisper.dictation", () => {
     ]);
   });
 
-  test("long raw transcript: several embedded windows, each at most 512 tokens with its prefix", () => {
+  test("long raw transcript: several embedded windows, each within the chunk budget with its prefix", () => {
     const raw = (DICTATION_INPUTS.meetingBare ?? "").toLowerCase();
     const rawChunks = dictationChunker
       .chunk(swItem("Short summary.", { mode: "Meeting", raw }))
@@ -123,18 +123,19 @@ describe("superwhisper.dictation", () => {
     expect(rawChunks.length).toBeGreaterThan(1);
     rawChunks.forEach((c, i) => {
       expect(c).toMatchObject({ sub: i, embed: true, embedText: `[Meeting raw] ${c.text}` });
-      expect(bgeM3.count(c.embedText)).toBeLessThanOrEqual(512);
+      expect(EMBEDDING_MODEL.tokens.count(c.embedText)).toBeLessThanOrEqual(EMBEDDING_MODEL.chunkTokens);
     });
   });
 
-  test("long body: windows of at most 512 tokens including the prefix, numbered by sub", () => {
+  test("long body: windows within the chunk budget including the prefix, numbered by sub", () => {
     const body = DICTATION_INPUTS.meetingBracketed ?? "";
     const embedded = dictationChunker
       .chunk(swItem(body, { mode: "Meeting", raw: "x" }))
       .filter((c) => c.kind === "transcript");
     expect(embedded.length).toBeGreaterThan(1);
     expect(embedded.map((c) => c.sub)).toEqual(embedded.map((_, i) => i));
-    for (const c of embedded) expect(bgeM3.count(c.embedText)).toBeLessThanOrEqual(512);
+    for (const c of embedded)
+      expect(EMBEDDING_MODEL.tokens.count(c.embedText)).toBeLessThanOrEqual(EMBEDDING_MODEL.chunkTokens);
   });
 
   test("blank body produces no chunk", () => {

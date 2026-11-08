@@ -37,7 +37,7 @@ export const SPEAKER_LABEL = String.raw`(?:Speaker|SPEAKER) \d+:|\[(?:Speaker|SP
 export interface TranscriptChunkerOptions extends StockIdentity {
   /** The embedding model's tokenizer. */
   readonly tokens: TokenCounter;
-  /** No embedded chunk counts more tokens than this, prefix included. Default 512. */
+  /** No embedded chunk counts more tokens than this, prefix included. Default 1024. */
   readonly maxTokens?: number;
   /** Tokens shared by consecutive windows. Default 64. */
   readonly overlapTokens?: number;

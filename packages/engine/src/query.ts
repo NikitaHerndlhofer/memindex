@@ -163,10 +163,8 @@ async function toStoreSearch(deps: SearchDeps, spec: SearchSpec): Promise<StoreS
     k: spec.limit ?? DEFAULT_HIT_LIMIT,
   };
   if (spec.mode === "keyword" || spec.mode === "fuzzy") return { ...base, via: spec.mode, text: spec.text };
-  const [vector] = await deps.embedder.embed([spec.text]);
-  if (!(vector instanceof Float32Array)) {
-    throw new Error(`cannot embed the query: ${vector ? vector.rejected : "embedder returned no vector"}`);
-  }
+  const vector = await deps.embedder.embedQuery(spec.text);
+  if (!(vector instanceof Float32Array)) throw new Error(`cannot embed the query: ${vector.rejected}`);
   const space = deps.embedder.space;
   return spec.mode === "semantic"
     ? { ...base, via: "vector", vector, space }

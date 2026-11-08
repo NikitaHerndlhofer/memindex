@@ -1,19 +1,19 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import { join } from "node:path";
 import type { ChunkDraft, ItemDraft } from "@memindex/model";
-import { bgeM3 } from "@memindex/tokenizer";
+import { EMBEDDING_MODEL } from "@memindex/tokenizer";
 import { archiveItems, openArchive } from "../scripts/archive-sample.ts";
 import { buildRegistry, type SourcePlugin } from "../src/index.ts";
 import { cleanup, collect, FIXTURES, makeKit, tmpCopy } from "./helpers.ts";
 
-const MAX_TOKENS = 512;
+const MAX_TOKENS = EMBEDDING_MODEL.chunkTokens;
 const registry = buildRegistry();
 const archive = await openArchive().catch(() => null);
 
 function overBudget(source: string, draft: ItemDraft): string[] {
   const chunks: readonly ChunkDraft[] = registry.chunkerFor(source as never, draft.kind).chunk(draft);
   return chunks
-    .filter((c) => c.embed && bgeM3.count(c.embedText, MAX_TOKENS) > MAX_TOKENS)
+    .filter((c) => c.embed && EMBEDDING_MODEL.tokens.count(c.embedText, MAX_TOKENS) > MAX_TOKENS)
     .map((c) => `${draft.key} ${c.turnKey}/${c.partIdx}/${c.sub}`);
 }
 
@@ -32,7 +32,7 @@ async function fixtureDrafts(plugin: SourcePlugin, env: Record<string, string>):
   }
 }
 
-describe("no embedded chunk exceeds 512 bge-m3 tokens", () => {
+describe("no embedded chunk exceeds the embedding model's chunk budget", () => {
   const sw = tmpCopy("superwhisper");
   const cur = tmpCopy("cursor");
   afterAll(() => {

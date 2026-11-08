@@ -8,12 +8,12 @@ import {
   type TurnDraft,
   turnKey,
 } from "@memindex/model";
-import { bgeM3 } from "@memindex/tokenizer";
+import { qwen3 } from "@memindex/tokenizer";
 import { argsLanguage, fenceLanguage, partsChunker, recursiveTextChunker } from "../src/index.ts";
 import { chat } from "./configs.ts";
 import { golden, plain } from "./golden.ts";
 
-const MAX_TOKENS = 512;
+const MAX_TOKENS = 1024;
 
 function turn(key: string, parts: Part[]): TurnDraft {
   return { key: turnKey(key), role: "assistant", at: null, speaker: null, parts };
@@ -60,22 +60,22 @@ test("small parts stay whole, one chunk each, text = embedText", () => {
 });
 
 test("a part of exactly maxTokens stays whole; one more token splits it", () => {
-  const exact = "word ".repeat(MAX_TOKENS - 2);
-  expect(bgeM3.count(exact)).toBe(MAX_TOKENS);
+  const exact = `word${" word".repeat(MAX_TOKENS - 2)}`;
+  expect(qwen3.count(exact)).toBe(MAX_TOKENS);
   expect(chat.chunk(item(turn("b", [{ kind: "text", text: exact }])))).toHaveLength(1);
-  expect(bgeM3.count(`${exact}word`)).toBe(MAX_TOKENS + 1);
-  expect(chat.chunk(item(turn("b", [{ kind: "text", text: `${exact}word` }]))).length).toBeGreaterThan(1);
+  expect(qwen3.count(`${exact} word`)).toBe(MAX_TOKENS + 1);
+  expect(chat.chunk(item(turn("b", [{ kind: "text", text: `${exact} word` }]))).length).toBeGreaterThan(1);
 });
 
 test("long prose splits on paragraphs then sentence ends, with [kind i/n] headers, inside the budget", () => {
   const sentence = (i: number) => `Sentence number ${i} talks about the rate limiter design in some detail.`;
-  const prose = Array.from({ length: 80 }, (_, i) => sentence(i)).join(" ");
+  const prose = Array.from({ length: 200 }, (_, i) => sentence(i)).join(" ");
   const chunks = chat.chunk(item(turn("b", [{ kind: "thinking", text: prose }])));
   const n = chunks.length;
   expect(n).toBeGreaterThan(2);
   chunks.forEach((c, i) => {
     expect(c.sub).toBe(i);
-    expect(bgeM3.count(c.embedText)).toBeLessThanOrEqual(MAX_TOKENS);
+    expect(qwen3.count(c.embedText)).toBeLessThanOrEqual(MAX_TOKENS);
     expect(c.text.endsWith(".")).toBe(true);
     expect(c.text.startsWith("Sentence number")).toBe(true);
     expect(c.embedText).toBe(`[thinking ${i + 1}/${n}]\n${c.text}`);
@@ -85,8 +85,8 @@ test("long prose splits on paragraphs then sentence ends, with [kind i/n] header
 });
 
 test("tokens, not characters, decide: compact JSON splits where longer English prose stays whole", () => {
-  const english = "The deploy finished and the queue drained. ".repeat(40);
-  const json = '{"id":"a1b2c3","ok":true},'.repeat(40);
+  const english = "The deploy finished and the queue drained. ".repeat(110);
+  const json = '{"id":"a1b2c3","ok":true},'.repeat(100);
   expect(json.length).toBeLessThan(english.length);
   expect(chat.chunk(item(turn("b", [{ kind: "text", text: english }])))).toHaveLength(1);
   expect(chat.chunk(item(turn("b", [{ kind: "tool_result", text: json }]))).length).toBeGreaterThan(1);
@@ -146,18 +146,18 @@ test("golden: chunks and the derived id are pinned byte for byte", () => {
 });
 
 test("a per-kind strategy override changes output and id; spelling out a default does not", () => {
-  const ts = Array.from({ length: 60 }, (_, i) => `Result ${i} came back fine for the request.`).join(" ");
+  const ts = Array.from({ length: 150 }, (_, i) => `Result ${i} came back fine for the request.`).join(" ");
   const asProse = partsChunker({
     owner: "test",
     name: "parts",
-    tokens: bgeM3,
+    tokens: qwen3,
     split: { tool_result: "prose" },
   });
   const explicit = partsChunker({
     owner: "test",
     name: "parts",
-    tokens: bgeM3,
-    maxTokens: 512,
+    tokens: qwen3,
+    maxTokens: 1024,
     overlapTokens: 64,
     split: {
       code: "fenced-code",
@@ -177,17 +177,17 @@ test("a per-kind strategy override changes output and id; spelling out a default
 test("the tokenizer and the budget are part of the id", () => {
   const other = { id: "other-tokenizer@1", count: (t: string) => t.length };
   expect(partsChunker({ owner: "test", name: "parts", tokens: other }).id).not.toBe(chat.id);
-  expect(partsChunker({ owner: "test", name: "parts", tokens: bgeM3, maxTokens: 256 }).id).not.toBe(chat.id);
-  expect(partsChunker({ owner: "test", name: "parts", tokens: bgeM3, overlapTokens: 32 }).id).not.toBe(
+  expect(partsChunker({ owner: "test", name: "parts", tokens: qwen3, maxTokens: 256 }).id).not.toBe(chat.id);
+  expect(partsChunker({ owner: "test", name: "parts", tokens: qwen3, overlapTokens: 32 }).id).not.toBe(
     chat.id,
   );
-  expect(() => partsChunker({ owner: "test", name: "parts", tokens: bgeM3, overlapTokens: 512 })).toThrow(
+  expect(() => partsChunker({ owner: "test", name: "parts", tokens: qwen3, overlapTokens: 1024 })).toThrow(
     /overlapTokens < maxTokens/,
   );
 });
 
 test("keywordOnly kinds are never embedded, and never split however long", () => {
-  const c = partsChunker({ owner: "test", name: "parts", tokens: bgeM3, keywordOnly: ["thinking"] });
+  const c = partsChunker({ owner: "test", name: "parts", tokens: qwen3, keywordOnly: ["thinking"] });
   const long = "A thought that goes on. ".repeat(400);
   const out = c.chunk(
     item(
@@ -204,7 +204,7 @@ test("keywordOnly kinds are never embedded, and never split however long", () =>
 });
 
 test("embedOnlyProse: tool JSON and fragments under 6 words are keyword-only, prose is embedded", () => {
-  const proseOnly = partsChunker({ owner: "test", name: "parts", tokens: bgeM3, embedOnlyProse: true });
+  const proseOnly = partsChunker({ owner: "test", name: "parts", tokens: qwen3, embedOnlyProse: true });
   const draft = item(
     turn("b", [
       { kind: "tool_result", text: '{"rejected":{},"merge":true}', toolName: "mcp_x" },
@@ -222,13 +222,13 @@ test("embedOnlyProse: tool JSON and fragments under 6 words are keyword-only, pr
     plain(chat.chunk(draft).map(({ embed: _, ...c }) => c)),
   );
   expect(proseOnly.id).not.toBe(chat.id);
-  expect(partsChunker({ owner: "test", name: "parts", tokens: bgeM3, embedOnlyProse: false }).id).toBe(
+  expect(partsChunker({ owner: "test", name: "parts", tokens: qwen3, embedOnlyProse: false }).id).toBe(
     chat.id,
   );
 });
 
 test("embedOnlyProse judges each piece of a split part by its own text", () => {
-  const proseOnly = partsChunker({ owner: "test", name: "parts", tokens: bgeM3, embedOnlyProse: true });
+  const proseOnly = partsChunker({ owner: "test", name: "parts", tokens: qwen3, embedOnlyProse: true });
   const log = `["build","started"]\n${lines(400, (i) => `12:00:${String(i % 60).padStart(2, "0")} WARN dropped request ${i}`)}`;
   const out = proseOnly.chunk(item(turn("b", [{ kind: "tool_result", text: log, toolName: "Shell" }])));
   expect(out.length).toBeGreaterThan(2);
@@ -239,7 +239,7 @@ test("recursiveTextChunker: one strategy for every part, headers counted inside 
   const c = recursiveTextChunker({
     owner: "test",
     name: "text",
-    tokens: bgeM3,
+    tokens: qwen3,
     maxTokens: 40,
     overlapTokens: 0,
     split: "lines",
@@ -249,7 +249,7 @@ test("recursiveTextChunker: one strategy for every part, headers counted inside 
   const out = c.chunk(item(turn("b", [{ kind: "transcript", text }])));
   expect(out.length).toBeGreaterThan(1);
   for (const x of out) {
-    expect(bgeM3.count(x.embedText)).toBeLessThanOrEqual(40);
+    expect(qwen3.count(x.embedText)).toBeLessThanOrEqual(40);
     for (const l of x.text.split("\n")) expect(l).toMatch(/^line number \d+ of the log$/);
   }
   expect(out[0]?.embedText.startsWith(`[transcript 1/${out.length}]\n`)).toBe(true);

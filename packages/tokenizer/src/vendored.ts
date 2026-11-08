@@ -10,12 +10,12 @@ export interface VendoredFile {
   readonly path: string;
 }
 
-const BGE_M3_REVISION = "5617a9f61b028005a4858fdac845db406aefb181";
+const QWEN3_EMBEDDING_REVISION = "97b0c614be4d77ee51c0cef4e5f07c00f9eb65b3";
 
-export const BGE_M3_SPM: VendoredFile = {
-  url: `https://huggingface.co/BAAI/bge-m3/resolve/${BGE_M3_REVISION}/sentencepiece.bpe.model`,
-  sha256: "cfc8146abe2a0488e9e2a0c56de7952f7c11ab059eca145a0a727afce0db2865",
-  path: "vendor/bge-m3/sentencepiece.bpe.model",
+export const QWEN3_MERGES: VendoredFile = {
+  url: `https://huggingface.co/Qwen/Qwen3-Embedding-0.6B/resolve/${QWEN3_EMBEDDING_REVISION}/merges.txt`,
+  sha256: "8831e4f1a044471340f7c0a83d7bd71306a5b867e95fd870f74d0c5308a904d5",
+  path: "vendor/qwen3-embedding/merges.txt",
 };
 
-export const VENDORED: readonly VendoredFile[] = [BGE_M3_SPM];
+export const VENDORED: readonly VendoredFile[] = [QWEN3_MERGES];

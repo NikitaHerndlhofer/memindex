@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { type ChunkDraft, contentHash, type ItemDraft, isoTime, itemKey, turnKey } from "@memindex/model";
-import { bgeM3 } from "@memindex/tokenizer";
+import { qwen3 } from "@memindex/tokenizer";
 import { transcriptChunker } from "../src/index.ts";
 import { dictation } from "./configs.ts";
 
@@ -49,11 +49,11 @@ test("a prefix whose placeholder is missing renders as nothing", () => {
 
 test("the budget counts the prefix: a body that fits only without it is windowed", () => {
   let body = "word";
-  while (bgeM3.count(`[M] ${body} word`) <= 512) body += " word";
-  expect(bgeM3.count(`[M] ${body}`)).toBe(512);
+  while (qwen3.count(`[M] ${body} word`) <= 1024) body += " word";
+  expect(qwen3.count(`[M] ${body}`)).toBe(1024);
   expect(ofKind(dictation.chunk(item(body, { mode: "M" }, "raw")), "transcript")).toHaveLength(1);
   const longer = `${body} word`;
-  expect(bgeM3.count(longer)).toBeLessThanOrEqual(512);
+  expect(qwen3.count(longer)).toBeLessThanOrEqual(1024);
   expect(ofKind(dictation.chunk(item(longer, { mode: "M" }, "raw")), "transcript").length).toBeGreaterThan(1);
 });
 
@@ -65,7 +65,7 @@ test("long part: sentence-bounded windows within the budget, overlapping, each p
     expect(c.sub).toBe(i);
     expect(c.embed).toBe(true);
     expect(c.embedText).toBe(`[M] ${c.text}`);
-    expect(bgeM3.count(c.embedText)).toBeLessThanOrEqual(512);
+    expect(qwen3.count(c.embedText)).toBeLessThanOrEqual(1024);
     expect(c.text.startsWith("Sentence ")).toBe(true);
     expect(c.text.endsWith(".")).toBe(true);
   });
@@ -82,7 +82,7 @@ test("windows start at speaker labels before falling back to sentences", () => {
   const unlabeled = transcriptChunker({
     owner: "test",
     name: "dictation",
-    tokens: bgeM3,
+    tokens: qwen3,
     speakerLabel: null,
   });
   expect(unlabeled.id).not.toBe(dictation.id);
@@ -99,13 +99,13 @@ test("a kind prefix replaces the embed prefix for that kind, windows budgeted wi
   expect(rawChunks.length).toBeGreaterThan(2);
   rawChunks.forEach((c, i) => {
     expect(c).toMatchObject({ partIdx: 1, sub: i, embed: true, embedText: `[M raw] ${c.text}` });
-    expect(bgeM3.count(c.embedText)).toBeLessThanOrEqual(512);
+    expect(qwen3.count(c.embedText)).toBeLessThanOrEqual(1024);
     expect(c.text.endsWith(".")).toBe(true);
   });
 });
 
 test("keywordOnly kinds stay whole and unembedded, and are dropped when identical to an embedded part", () => {
-  const keyword = transcriptChunker({ owner: "test", name: "dictation", tokens: bgeM3 });
+  const keyword = transcriptChunker({ owner: "test", name: "dictation", tokens: qwen3 });
   const raw = sentences(400);
   expect(keyword.chunk(item("Clean text.", {}, raw)).map((c) => [c.kind, c.embed, c.text === raw])).toEqual([
     ["transcript", true, false],
@@ -126,15 +126,15 @@ test("options and the tokenizer change the id; owner and name are the readable p
   const same = transcriptChunker({
     owner: "test",
     name: "dictation",
-    tokens: bgeM3,
-    maxTokens: 512,
+    tokens: qwen3,
+    maxTokens: 1024,
     overlapTokens: 64,
     embedPrefix: "[{meta.mode}] ",
     kindPrefixes: { transcript_raw: "[{meta.mode} raw] " },
     keywordOnly: [],
   });
   expect(same.id).toBe(dictation.id);
-  const base = { owner: "test", name: "dictation", tokens: bgeM3 } as const;
+  const base = { owner: "test", name: "dictation", tokens: qwen3 } as const;
   expect(transcriptChunker({ ...base, maxTokens: 256 }).id).not.toBe(transcriptChunker(base).id);
   expect(transcriptChunker({ ...base, kindPrefixes: { transcript_raw: "[raw] " } }).id).not.toBe(
     transcriptChunker(base).id,

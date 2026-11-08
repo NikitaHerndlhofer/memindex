@@ -36,7 +36,7 @@ export interface SpeakerTurnChunkerOptions extends StockIdentity {
   readonly tokens: TokenCounter;
   /** Default "u". */
   readonly summaryTurn?: string;
-  /** No embedded chunk counts more tokens than this, prefix included. Default 512. */
+  /** No embedded chunk counts more tokens than this, prefix included. Default 1024. */
   readonly maxTokens?: number;
   /** Default 64. */
   readonly overlapTokens?: number;

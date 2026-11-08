@@ -1,5 +1,6 @@
 /**
- * Super Whisper's chunkers, sized in bge-m3 tokens: no embedded chunk exceeds 512, prefix included.
+ * Super Whisper's chunkers, sized in the embedding model's tokens (`EMBEDDING_MODEL`): no embedded chunk
+ * exceeds `chunkTokens`, prefix included.
  *
  *   dictation  each transcript version whole when `<prefix><text>` fits, else windows cut at speaker labels
  *              and sentence ends. The best transcript embeds as `[<mode>] <text>`, the raw one as
@@ -9,13 +10,13 @@
  */
 
 import { speakerTurnChunker, transcriptChunker } from "@memindex/chunkers";
-import { bgeM3 } from "@memindex/tokenizer";
+import { EMBEDDING_MODEL } from "@memindex/tokenizer";
 
 export const dictationChunker = transcriptChunker({
   owner: "superwhisper",
   name: "dictation",
-  tokens: bgeM3,
-  maxTokens: 512,
+  tokens: EMBEDDING_MODEL.tokens,
+  maxTokens: EMBEDDING_MODEL.chunkTokens,
   overlapTokens: 64,
   embedPrefix: "[{meta.mode}] ",
   kindPrefixes: { transcript_raw: "[{meta.mode} raw] " },
@@ -27,8 +28,8 @@ export const speakerChunker = speakerTurnChunker({
   name: "speaker",
   summary: dictationChunker,
   summaryTurn: "u",
-  tokens: bgeM3,
-  maxTokens: 512,
+  tokens: EMBEDDING_MODEL.tokens,
+  maxTokens: EMBEDDING_MODEL.chunkTokens,
   overlapTokens: 64,
   minEmbedWords: 4,
   embedPrefix: "[{speaker}] ",

@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { type ItemDraft, isoTime, itemKey, type Part, turnKey } from "@memindex/model";
-import { bgeM3 } from "@memindex/tokenizer";
+import { qwen3 } from "@memindex/tokenizer";
 import { partsChunker } from "../src/index.ts";
 import { argsPath, scrubText, toolIndexing } from "../src/tools.ts";
 import { chat } from "./configs.ts";
@@ -30,7 +30,7 @@ function item(...turns: Part[][]): ItemDraft {
 const condensing = partsChunker({
   owner: "test",
   name: "parts",
-  tokens: bgeM3,
+  tokens: qwen3,
   tools: { Bash: "call", Edit: { marker: "edited" }, "browser_*": "call", Slack: "full" },
   scrub: true,
 });
@@ -71,7 +71,7 @@ test("fields mode indexes the named argument values and drops the result; unpars
   const c = partsChunker({
     owner: "test",
     name: "parts",
-    tokens: bgeM3,
+    tokens: qwen3,
     tools: { Shell: { fields: ["description", "command"] } },
   });
   const chunks = c.chunk(
@@ -120,13 +120,13 @@ test("scrub drops colour codes and replaces base64 payloads, but keeps paths", (
 
 test("the tool policy and scrub are part of the chunker id; the default id is unchanged", () => {
   expect(condensing.id).not.toBe(chat.id);
-  expect(partsChunker({ owner: "test", name: "parts", tokens: bgeM3, tools: {}, scrub: false }).id).toBe(
+  expect(partsChunker({ owner: "test", name: "parts", tokens: qwen3, tools: {}, scrub: false }).id).toBe(
     chat.id,
   );
-  expect(partsChunker({ owner: "test", name: "parts", tokens: bgeM3, tools: { Bash: "full" } }).id).toBe(
+  expect(partsChunker({ owner: "test", name: "parts", tokens: qwen3, tools: { Bash: "full" } }).id).toBe(
     chat.id,
   );
   expect(
-    partsChunker({ owner: "test", name: "parts", tokens: bgeM3, tools: { Bash: "call" }, scrub: true }).id,
+    partsChunker({ owner: "test", name: "parts", tokens: qwen3, tools: { Bash: "call" }, scrub: true }).id,
   ).not.toBe(condensing.id);
 });
