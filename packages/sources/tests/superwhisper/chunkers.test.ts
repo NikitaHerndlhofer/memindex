@@ -15,7 +15,7 @@ const GOLDEN = JSON.parse(readFileSync(join(FIXTURES, "golden", "dictation.json"
 test("derived chunker ids, owned by the plugin", () => {
   expect([dictationChunker.id, speakerChunker.id] as string[]).toEqual([
     "superwhisper.dictation@2+f1561d",
-    "superwhisper.speaker@2+d56a2f",
+    "superwhisper.speaker@3+4ffa13",
   ]);
 });
 

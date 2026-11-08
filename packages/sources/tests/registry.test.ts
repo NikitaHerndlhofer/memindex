@@ -16,7 +16,7 @@ import { makeKit } from "./helpers.ts";
 
 const IDS = {
   dictation: "superwhisper.dictation@2+f1561d",
-  speaker: "superwhisper.speaker@2+d56a2f",
+  speaker: "superwhisper.speaker@3+4ffa13",
   parts: "agent-chat.parts@2+f535f3",
 };
 

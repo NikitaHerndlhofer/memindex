@@ -1,5 +1,5 @@
 {
-  "id": "test.speaker@2+34031e",
+  "id": "test.speaker@3+e10e1b",
   "input": {
     "key": "superwhisper:GOLDEN",
     "kind": "meeting",
@@ -48,6 +48,438 @@
           {
             "kind": "transcript",
             "text": "Point 0 is that the queue retries stay idempotent across workers. Point 1 is that the queue retries stay idempotent across workers. Point 2 is that the queue retries stay idempotent across workers. Point 3 is that the queue retries stay idempotent across workers. Point 4 is that the queue retries stay idempotent across workers. Point 5 is that the queue retries stay idempotent across workers. Point 6 is that the queue retries stay idempotent across workers. Point 7 is that the queue retries stay idempotent across workers. Point 8 is that the queue retries stay idempotent across workers. Point 9 is that the queue retries stay idempotent across workers. Point 10 is that the queue retries stay idempotent across workers. Point 11 is that the queue retries stay idempotent across workers. Point 12 is that the queue retries stay idempotent across workers. Point 13 is that the queue retries stay idempotent across workers. Point 14 is that the queue retries stay idempotent across workers. Point 15 is that the queue retries stay idempotent across workers. Point 16 is that the queue retries stay idempotent across workers. Point 17 is that the queue retries stay idempotent across workers. Point 18 is that the queue retries stay idempotent across workers. Point 19 is that the queue retries stay idempotent across workers. Point 20 is that the queue retries stay idempotent across workers. Point 21 is that the queue retries stay idempotent across workers. Point 22 is that the queue retries stay idempotent across workers. Point 23 is that the queue retries stay idempotent across workers. Point 24 is that the queue retries stay idempotent across workers. Point 25 is that the queue retries stay idempotent across workers. Point 26 is that the queue retries stay idempotent across workers. Point 27 is that the queue retries stay idempotent across workers. Point 28 is that the queue retries stay idempotent across workers. Point 29 is that the queue retries stay idempotent across workers. Point 30 is that the queue retries stay idempotent across workers. Point 31 is that the queue retries stay idempotent across workers. Point 32 is that the queue retries stay idempotent across workers. Point 33 is that the queue retries stay idempotent across workers. Point 34 is that the queue retries stay idempotent across workers. Point 35 is that the queue retries stay idempotent across workers. Point 36 is that the queue retries stay idempotent across workers. Point 37 is that the queue retries stay idempotent across workers. Point 38 is that the queue retries stay idempotent across workers. Point 39 is that the queue retries stay idempotent across workers. Point 40 is that the queue retries stay idempotent across workers. Point 41 is that the queue retries stay idempotent across workers. Point 42 is that the queue retries stay idempotent across workers. Point 43 is that the queue retries stay idempotent across workers. Point 44 is that the queue retries stay idempotent across workers. Point 45 is that the queue retries stay idempotent across workers. Point 46 is that the queue retries stay idempotent across workers. Point 47 is that the queue retries stay idempotent across workers. Point 48 is that the queue retries stay idempotent across workers. Point 49 is that the queue retries stay idempotent across workers. Point 50 is that the queue retries stay idempotent across workers. Point 51 is that the queue retries stay idempotent across workers. Point 52 is that the queue retries stay idempotent across workers. Point 53 is that the queue retries stay idempotent across workers. Point 54 is that the queue retries stay idempotent across workers. Point 55 is that the queue retries stay idempotent across workers. Point 56 is that the queue retries stay idempotent across workers. Point 57 is that the queue retries stay idempotent across workers. Point 58 is that the queue retries stay idempotent across workers. Point 59 is that the queue retries stay idempotent across workers. Point 60 is that the queue retries stay idempotent across workers. Point 61 is that the queue retries stay idempotent across workers. Point 62 is that the queue retries stay idempotent across workers. Point 63 is that the queue retries stay idempotent across workers. Point 64 is that the queue retries stay idempotent across workers. Point 65 is that the queue retries stay idempotent across workers. Point 66 is that the queue retries stay idempotent across workers. Point 67 is that the queue retries stay idempotent across workers. Point 68 is that the queue retries stay idempotent across workers. Point 69 is that the queue retries stay idempotent across workers. Point 70 is that the queue retries stay idempotent across workers. Point 71 is that the queue retries stay idempotent across workers. Point 72 is that the queue retries stay idempotent across workers. Point 73 is that the queue retries stay idempotent across workers. Point 74 is that the queue retries stay idempotent across workers. Point 75 is that the queue retries stay idempotent across workers. Point 76 is that the queue retries stay idempotent across workers. Point 77 is that the queue retries stay idempotent across workers. Point 78 is that the queue retries stay idempotent across workers. Point 79 is that the queue retries stay idempotent across workers. Point 80 is that the queue retries stay idempotent across workers. Point 81 is that the queue retries stay idempotent across workers. Point 82 is that the queue retries stay idempotent across workers. Point 83 is that the queue retries stay idempotent across workers. Point 84 is that the queue retries stay idempotent across workers. Point 85 is that the queue retries stay idempotent across workers. Point 86 is that the queue retries stay idempotent across workers. Point 87 is that the queue retries stay idempotent across workers. Point 88 is that the queue retries stay idempotent across workers. Point 89 is that the queue retries stay idempotent across workers."
+          }
+        ]
+      },
+      {
+        "role": "speaker",
+        "at": "1970-01-01T00:00:01.000Z",
+        "key": "s10",
+        "speaker": "Kim",
+        "parts": [
+          {
+            "kind": "transcript",
+            "text": "We should move the garden planning meeting to Friday. Friday works for me, Ana is away on Thursday. Do we still need the extra raised beds?"
+          }
+        ]
+      },
+      {
+        "role": "speaker",
+        "at": "1970-01-01T00:00:01.000Z",
+        "key": "s11",
+        "speaker": "Nikita",
+        "parts": [
+          {
+            "kind": "transcript",
+            "text": "Yes, two more by the fence. What about the budget for the soil? Roughly two hundred, and Ben offered to drive the truck. Good."
+          }
+        ]
+      },
+      {
+        "role": "speaker",
+        "at": "1970-01-01T00:00:01.000Z",
+        "key": "s12",
+        "speaker": "Kim",
+        "parts": [
+          {
+            "kind": "transcript",
+            "text": "Good."
+          }
+        ]
+      },
+      {
+        "role": "speaker",
+        "at": "1970-01-01T00:00:01.000Z",
+        "key": "s13",
+        "speaker": "Nikita",
+        "parts": [
+          {
+            "kind": "transcript",
+            "text": "Agreed, I will pick up lids on the way. We should move the garden planning meeting to Friday."
+          }
+        ]
+      },
+      {
+        "role": "speaker",
+        "at": "1970-01-01T00:00:01.000Z",
+        "key": "s14",
+        "speaker": "Kim",
+        "parts": [
+          {
+            "kind": "transcript",
+            "text": "Do we still need the extra raised beds? Yes, two more by the fence. What about the budget for the soil?"
+          }
+        ]
+      },
+      {
+        "role": "speaker",
+        "at": "1970-01-01T00:00:01.000Z",
+        "key": "s15",
+        "speaker": "Nikita",
+        "parts": [
+          {
+            "kind": "transcript",
+            "text": "Roughly two hundred, and Ben offered to drive the truck. Good. Let me write that down: Friday, two beds, soil budget two hundred. Also the compost bins need a lid before the rain starts next week, otherwise everything smells."
+          }
+        ]
+      },
+      {
+        "role": "speaker",
+        "at": "1970-01-01T00:00:01.000Z",
+        "key": "s16",
+        "speaker": "Kim",
+        "parts": [
+          {
+            "kind": "transcript",
+            "text": "Also the compost bins need a lid before the rain starts next week, otherwise everything smells."
+          }
+        ]
+      },
+      {
+        "role": "speaker",
+        "at": "1970-01-01T00:00:01.000Z",
+        "key": "s17",
+        "speaker": "Nikita",
+        "parts": [
+          {
+            "kind": "transcript",
+            "text": "Friday works for me, Ana is away on Thursday. Do we still need the extra raised beds?"
+          }
+        ]
+      },
+      {
+        "role": "speaker",
+        "at": "1970-01-01T00:00:01.000Z",
+        "key": "s18",
+        "speaker": "Kim",
+        "parts": [
+          {
+            "kind": "transcript",
+            "text": "What about the budget for the soil? Roughly two hundred, and Ben offered to drive the truck. Good."
+          }
+        ]
+      },
+      {
+        "role": "speaker",
+        "at": "1970-01-01T00:00:01.000Z",
+        "key": "s19",
+        "speaker": "Nikita",
+        "parts": [
+          {
+            "kind": "transcript",
+            "text": "Let me write that down: Friday, two beds, soil budget two hundred. Also the compost bins need a lid before the rain starts next week, otherwise everything smells. Agreed, I will pick up lids on the way. We should move the garden planning meeting to Friday."
+          }
+        ]
+      },
+      {
+        "role": "speaker",
+        "at": "1970-01-01T00:00:01.000Z",
+        "key": "s20",
+        "speaker": "Kim",
+        "parts": [
+          {
+            "kind": "transcript",
+            "text": "We should move the garden planning meeting to Friday."
+          }
+        ]
+      },
+      {
+        "role": "speaker",
+        "at": "1970-01-01T00:00:01.000Z",
+        "key": "s21",
+        "speaker": "Nikita",
+        "parts": [
+          {
+            "kind": "transcript",
+            "text": "Yes, two more by the fence. What about the budget for the soil?"
+          }
+        ]
+      },
+      {
+        "role": "speaker",
+        "at": "1970-01-01T00:00:01.000Z",
+        "key": "s22",
+        "speaker": "Kim",
+        "parts": [
+          {
+            "kind": "transcript",
+            "text": "Good. Let me write that down: Friday, two beds, soil budget two hundred. Also the compost bins need a lid before the rain starts next week, otherwise everything smells."
+          }
+        ]
+      },
+      {
+        "role": "speaker",
+        "at": "1970-01-01T00:00:01.000Z",
+        "key": "s23",
+        "speaker": "Nikita",
+        "parts": [
+          {
+            "kind": "transcript",
+            "text": "Agreed, I will pick up lids on the way. We should move the garden planning meeting to Friday. Friday works for me, Ana is away on Thursday. Do we still need the extra raised beds?"
+          }
+        ]
+      },
+      {
+        "role": "speaker",
+        "at": "1970-01-01T00:00:01.000Z",
+        "key": "s24",
+        "speaker": "Kim",
+        "parts": [
+          {
+            "kind": "transcript",
+            "text": "Do we still need the extra raised beds?"
+          }
+        ]
+      },
+      {
+        "role": "speaker",
+        "at": "1970-01-01T00:00:01.000Z",
+        "key": "s25",
+        "speaker": "Nikita",
+        "parts": [
+          {
+            "kind": "transcript",
+            "text": "Roughly two hundred, and Ben offered to drive the truck. Good."
+          }
+        ]
+      },
+      {
+        "role": "speaker",
+        "at": "1970-01-01T00:00:01.000Z",
+        "key": "s26",
+        "speaker": "Kim",
+        "parts": [
+          {
+            "kind": "transcript",
+            "text": "Also the compost bins need a lid before the rain starts next week, otherwise everything smells. Agreed, I will pick up lids on the way. We should move the garden planning meeting to Friday."
+          }
+        ]
+      },
+      {
+        "role": "speaker",
+        "at": "1970-01-01T00:00:01.000Z",
+        "key": "s27",
+        "speaker": "Nikita",
+        "parts": [
+          {
+            "kind": "transcript",
+            "text": "Friday works for me, Ana is away on Thursday. Do we still need the extra raised beds? Yes, two more by the fence. What about the budget for the soil?"
+          }
+        ]
+      },
+      {
+        "role": "speaker",
+        "at": "1970-01-01T00:00:01.000Z",
+        "key": "s28",
+        "speaker": "Kim",
+        "parts": [
+          {
+            "kind": "transcript",
+            "text": "What about the budget for the soil?"
+          }
+        ]
+      },
+      {
+        "role": "speaker",
+        "at": "1970-01-01T00:00:01.000Z",
+        "key": "s29",
+        "speaker": "Nikita",
+        "parts": [
+          {
+            "kind": "transcript",
+            "text": "Let me write that down: Friday, two beds, soil budget two hundred. Also the compost bins need a lid before the rain starts next week, otherwise everything smells."
+          }
+        ]
+      },
+      {
+        "role": "speaker",
+        "at": "1970-01-01T00:00:01.000Z",
+        "key": "s30",
+        "speaker": "Kim",
+        "parts": [
+          {
+            "kind": "transcript",
+            "text": "We should move the garden planning meeting to Friday. Friday works for me, Ana is away on Thursday. Do we still need the extra raised beds?"
+          }
+        ]
+      },
+      {
+        "role": "speaker",
+        "at": "1970-01-01T00:00:01.000Z",
+        "key": "s31",
+        "speaker": "Nikita",
+        "parts": [
+          {
+            "kind": "transcript",
+            "text": "Yes, two more by the fence. What about the budget for the soil? Roughly two hundred, and Ben offered to drive the truck. Good."
+          }
+        ]
+      },
+      {
+        "role": "speaker",
+        "at": "1970-01-01T00:00:01.000Z",
+        "key": "s32",
+        "speaker": "Kim",
+        "parts": [
+          {
+            "kind": "transcript",
+            "text": "Good."
+          }
+        ]
+      },
+      {
+        "role": "speaker",
+        "at": "1970-01-01T00:00:01.000Z",
+        "key": "s33",
+        "speaker": "Nikita",
+        "parts": [
+          {
+            "kind": "transcript",
+            "text": "Agreed, I will pick up lids on the way. We should move the garden planning meeting to Friday."
+          }
+        ]
+      },
+      {
+        "role": "speaker",
+        "at": "1970-01-01T00:00:01.000Z",
+        "key": "s34",
+        "speaker": "Kim",
+        "parts": [
+          {
+            "kind": "transcript",
+            "text": "Do we still need the extra raised beds? Yes, two more by the fence. What about the budget for the soil?"
+          }
+        ]
+      },
+      {
+        "role": "speaker",
+        "at": "1970-01-01T00:00:01.000Z",
+        "key": "s35",
+        "speaker": "Nikita",
+        "parts": [
+          {
+            "kind": "transcript",
+            "text": "Roughly two hundred, and Ben offered to drive the truck. Good. Let me write that down: Friday, two beds, soil budget two hundred. Also the compost bins need a lid before the rain starts next week, otherwise everything smells."
+          }
+        ]
+      },
+      {
+        "role": "speaker",
+        "at": "1970-01-01T00:00:01.000Z",
+        "key": "s36",
+        "speaker": "Kim",
+        "parts": [
+          {
+            "kind": "transcript",
+            "text": "Also the compost bins need a lid before the rain starts next week, otherwise everything smells."
+          }
+        ]
+      },
+      {
+        "role": "speaker",
+        "at": "1970-01-01T00:00:01.000Z",
+        "key": "s37",
+        "speaker": "Nikita",
+        "parts": [
+          {
+            "kind": "transcript",
+            "text": "Friday works for me, Ana is away on Thursday. Do we still need the extra raised beds?"
+          }
+        ]
+      },
+      {
+        "role": "speaker",
+        "at": "1970-01-01T00:00:01.000Z",
+        "key": "s38",
+        "speaker": "Kim",
+        "parts": [
+          {
+            "kind": "transcript",
+            "text": "What about the budget for the soil? Roughly two hundred, and Ben offered to drive the truck. Good."
+          }
+        ]
+      },
+      {
+        "role": "speaker",
+        "at": "1970-01-01T00:00:01.000Z",
+        "key": "s39",
+        "speaker": "Nikita",
+        "parts": [
+          {
+            "kind": "transcript",
+            "text": "Let me write that down: Friday, two beds, soil budget two hundred. Also the compost bins need a lid before the rain starts next week, otherwise everything smells. Agreed, I will pick up lids on the way. We should move the garden planning meeting to Friday."
+          }
+        ]
+      },
+      {
+        "role": "speaker",
+        "at": "1970-01-01T00:00:01.000Z",
+        "key": "s40",
+        "speaker": "Kim",
+        "parts": [
+          {
+            "kind": "transcript",
+            "text": "We should move the garden planning meeting to Friday."
+          }
+        ]
+      },
+      {
+        "role": "speaker",
+        "at": "1970-01-01T00:00:01.000Z",
+        "key": "s41",
+        "speaker": "Nikita",
+        "parts": [
+          {
+            "kind": "transcript",
+            "text": "Yes, two more by the fence. What about the budget for the soil?"
+          }
+        ]
+      },
+      {
+        "role": "speaker",
+        "at": "1970-01-01T00:00:01.000Z",
+        "key": "s42",
+        "speaker": "Kim",
+        "parts": [
+          {
+            "kind": "transcript",
+            "text": "Good. Let me write that down: Friday, two beds, soil budget two hundred. Also the compost bins need a lid before the rain starts next week, otherwise everything smells."
+          }
+        ]
+      },
+      {
+        "role": "speaker",
+        "at": "1970-01-01T00:00:01.000Z",
+        "key": "s43",
+        "speaker": "Nikita",
+        "parts": [
+          {
+            "kind": "transcript",
+            "text": "Agreed, I will pick up lids on the way. We should move the garden planning meeting to Friday. Friday works for me, Ana is away on Thursday. Do we still need the extra raised beds?"
+          }
+        ]
+      },
+      {
+        "role": "speaker",
+        "at": "1970-01-01T00:00:01.000Z",
+        "key": "s44",
+        "speaker": "Kim",
+        "parts": [
+          {
+            "kind": "transcript",
+            "text": "Do we still need the extra raised beds?"
+          }
+        ]
+      },
+      {
+        "role": "speaker",
+        "at": "1970-01-01T00:00:01.000Z",
+        "key": "s45",
+        "speaker": "Nikita",
+        "parts": [
+          {
+            "kind": "transcript",
+            "text": "Roughly two hundred, and Ben offered to drive the truck. Good."
           }
         ]
       }
@@ -120,11 +552,11 @@
       "sub": 0,
       "kind": "transcript",
       "toolName": null,
-      "text": "Yeah, okay.",
-      "embed": false,
+      "text": "[Kim] Yeah, okay.",
+      "embed": true,
       "id": "f12ebee90a29ae8743fc798a",
-      "embedText": "Yeah, okay.",
-      "contentHash": "59010ce880b3c0f5736127bd7f6054f182c21cbe52bacad694261effea6cd2f4"
+      "embedText": "[Kim] Yeah, okay.",
+      "contentHash": "8b52f542225e2df89b511a5bf7ee4f3e83e95fc13d35085cf66907a4726bd44b"
     },
     {
       "turnKey": "s3",
@@ -132,7 +564,7 @@
       "sub": 0,
       "kind": "transcript",
       "toolName": null,
-      "text": "Point 0 is that the queue retries stay idempotent across workers. Point 1 is that the queue retries stay idempotent across workers. Point 2 is that the queue retries stay idempotent across workers. Point 3 is that the queue retries stay idempotent across workers. Point 4 is that the queue retries stay idempotent across workers. Point 5 is that the queue retries stay idempotent across workers. Point 6 is that the queue retries stay idempotent across workers. Point 7 is that the queue retries stay idempotent across workers. Point 8 is that the queue retries stay idempotent across workers. Point 9 is that the queue retries stay idempotent across workers. Point 10 is that the queue retries stay idempotent across workers. Point 11 is that the queue retries stay idempotent across workers. Point 12 is that the queue retries stay idempotent across workers. Point 13 is that the queue retries stay idempotent across workers. Point 14 is that the queue retries stay idempotent across workers. Point 15 is that the queue retries stay idempotent across workers. Point 16 is that the queue retries stay idempotent across workers. Point 17 is that the queue retries stay idempotent across workers. Point 18 is that the queue retries stay idempotent across workers. Point 19 is that the queue retries stay idempotent across workers. Point 20 is that the queue retries stay idempotent across workers. Point 21 is that the queue retries stay idempotent across workers. Point 22 is that the queue retries stay idempotent across workers. Point 23 is that the queue retries stay idempotent across workers. Point 24 is that the queue retries stay idempotent across workers. Point 25 is that the queue retries stay idempotent across workers. Point 26 is that the queue retries stay idempotent across workers. Point 27 is that the queue retries stay idempotent across workers. Point 28 is that the queue retries stay idempotent across workers. Point 29 is that the queue retries stay idempotent across workers. Point 30 is that the queue retries stay idempotent across workers. Point 31 is that the queue retries stay idempotent across workers. Point 32 is that the queue retries stay idempotent across workers. Point 33 is that the queue retries stay idempotent across workers. Point 34 is that the queue retries stay idempotent across workers. Point 35 is that the queue retries stay idempotent across workers. Point 36 is that the queue retries stay idempotent across workers. Point 37 is that the queue retries stay idempotent across workers. Point 38 is that the queue retries stay idempotent across workers. Point 39 is that the queue retries stay idempotent across workers. Point 40 is that the queue retries stay idempotent across workers. Point 41 is that the queue retries stay idempotent across workers. Point 42 is that the queue retries stay idempotent across workers. Point 43 is that the queue retries stay idempotent across workers. Point 44 is that the queue retries stay idempotent across workers. Point 45 is that the queue retries stay idempotent across workers. Point 46 is that the queue retries stay idempotent across workers. Point 47 is that the queue retries stay idempotent across workers. Point 48 is that the queue retries stay idempotent across workers. Point 49 is that the queue retries stay idempotent across workers. Point 50 is that the queue retries stay idempotent across workers. Point 51 is that the queue retries stay idempotent across workers. Point 52 is that the queue retries stay idempotent across workers. Point 53 is that the queue retries stay idempotent across workers. Point 54 is that the queue retries stay idempotent across workers. Point 55 is that the queue retries stay idempotent across workers. Point 56 is that the queue retries stay idempotent across workers. Point 57 is that the queue retries stay idempotent across workers. Point 58 is that the queue retries stay idempotent across workers. Point 59 is that the queue retries stay idempotent across workers.",
+      "text": "[Nikita] Point 0 is that the queue retries stay idempotent across workers. Point 1 is that the queue retries stay idempotent across workers. Point 2 is that the queue retries stay idempotent across workers. Point 3 is that the queue retries stay idempotent across workers. Point 4 is that the queue retries stay idempotent across workers. Point 5 is that the queue retries stay idempotent across workers. Point 6 is that the queue retries stay idempotent across workers. Point 7 is that the queue retries stay idempotent across workers. Point 8 is that the queue retries stay idempotent across workers. Point 9 is that the queue retries stay idempotent across workers. Point 10 is that the queue retries stay idempotent across workers. Point 11 is that the queue retries stay idempotent across workers. Point 12 is that the queue retries stay idempotent across workers. Point 13 is that the queue retries stay idempotent across workers. Point 14 is that the queue retries stay idempotent across workers. Point 15 is that the queue retries stay idempotent across workers. Point 16 is that the queue retries stay idempotent across workers. Point 17 is that the queue retries stay idempotent across workers. Point 18 is that the queue retries stay idempotent across workers. Point 19 is that the queue retries stay idempotent across workers. Point 20 is that the queue retries stay idempotent across workers. Point 21 is that the queue retries stay idempotent across workers. Point 22 is that the queue retries stay idempotent across workers. Point 23 is that the queue retries stay idempotent across workers. Point 24 is that the queue retries stay idempotent across workers. Point 25 is that the queue retries stay idempotent across workers. Point 26 is that the queue retries stay idempotent across workers. Point 27 is that the queue retries stay idempotent across workers. Point 28 is that the queue retries stay idempotent across workers. Point 29 is that the queue retries stay idempotent across workers. Point 30 is that the queue retries stay idempotent across workers. Point 31 is that the queue retries stay idempotent across workers. Point 32 is that the queue retries stay idempotent across workers. Point 33 is that the queue retries stay idempotent across workers. Point 34 is that the queue retries stay idempotent across workers. Point 35 is that the queue retries stay idempotent across workers. Point 36 is that the queue retries stay idempotent across workers. Point 37 is that the queue retries stay idempotent across workers. Point 38 is that the queue retries stay idempotent across workers. Point 39 is that the queue retries stay idempotent across workers. Point 40 is that the queue retries stay idempotent across workers. Point 41 is that the queue retries stay idempotent across workers. Point 42 is that the queue retries stay idempotent across workers. Point 43 is that the queue retries stay idempotent across workers. Point 44 is that the queue retries stay idempotent across workers. Point 45 is that the queue retries stay idempotent across workers. Point 46 is that the queue retries stay idempotent across workers. Point 47 is that the queue retries stay idempotent across workers. Point 48 is that the queue retries stay idempotent across workers. Point 49 is that the queue retries stay idempotent across workers. Point 50 is that the queue retries stay idempotent across workers. Point 51 is that the queue retries stay idempotent across workers. Point 52 is that the queue retries stay idempotent across workers. Point 53 is that the queue retries stay idempotent across workers. Point 54 is that the queue retries stay idempotent across workers. Point 55 is that the queue retries stay idempotent across workers. Point 56 is that the queue retries stay idempotent across workers. Point 57 is that the queue retries stay idempotent across workers. Point 58 is that the queue retries stay idempotent across workers. Point 59 is that the queue retries stay idempotent across workers.",
       "embed": true,
       "id": "469f7efd3ab73d949b877cf3",
       "embedText": "[Nikita] Point 0 is that the queue retries stay idempotent across workers. Point 1 is that the queue retries stay idempotent across workers. Point 2 is that the queue retries stay idempotent across workers. Point 3 is that the queue retries stay idempotent across workers. Point 4 is that the queue retries stay idempotent across workers. Point 5 is that the queue retries stay idempotent across workers. Point 6 is that the queue retries stay idempotent across workers. Point 7 is that the queue retries stay idempotent across workers. Point 8 is that the queue retries stay idempotent across workers. Point 9 is that the queue retries stay idempotent across workers. Point 10 is that the queue retries stay idempotent across workers. Point 11 is that the queue retries stay idempotent across workers. Point 12 is that the queue retries stay idempotent across workers. Point 13 is that the queue retries stay idempotent across workers. Point 14 is that the queue retries stay idempotent across workers. Point 15 is that the queue retries stay idempotent across workers. Point 16 is that the queue retries stay idempotent across workers. Point 17 is that the queue retries stay idempotent across workers. Point 18 is that the queue retries stay idempotent across workers. Point 19 is that the queue retries stay idempotent across workers. Point 20 is that the queue retries stay idempotent across workers. Point 21 is that the queue retries stay idempotent across workers. Point 22 is that the queue retries stay idempotent across workers. Point 23 is that the queue retries stay idempotent across workers. Point 24 is that the queue retries stay idempotent across workers. Point 25 is that the queue retries stay idempotent across workers. Point 26 is that the queue retries stay idempotent across workers. Point 27 is that the queue retries stay idempotent across workers. Point 28 is that the queue retries stay idempotent across workers. Point 29 is that the queue retries stay idempotent across workers. Point 30 is that the queue retries stay idempotent across workers. Point 31 is that the queue retries stay idempotent across workers. Point 32 is that the queue retries stay idempotent across workers. Point 33 is that the queue retries stay idempotent across workers. Point 34 is that the queue retries stay idempotent across workers. Point 35 is that the queue retries stay idempotent across workers. Point 36 is that the queue retries stay idempotent across workers. Point 37 is that the queue retries stay idempotent across workers. Point 38 is that the queue retries stay idempotent across workers. Point 39 is that the queue retries stay idempotent across workers. Point 40 is that the queue retries stay idempotent across workers. Point 41 is that the queue retries stay idempotent across workers. Point 42 is that the queue retries stay idempotent across workers. Point 43 is that the queue retries stay idempotent across workers. Point 44 is that the queue retries stay idempotent across workers. Point 45 is that the queue retries stay idempotent across workers. Point 46 is that the queue retries stay idempotent across workers. Point 47 is that the queue retries stay idempotent across workers. Point 48 is that the queue retries stay idempotent across workers. Point 49 is that the queue retries stay idempotent across workers. Point 50 is that the queue retries stay idempotent across workers. Point 51 is that the queue retries stay idempotent across workers. Point 52 is that the queue retries stay idempotent across workers. Point 53 is that the queue retries stay idempotent across workers. Point 54 is that the queue retries stay idempotent across workers. Point 55 is that the queue retries stay idempotent across workers. Point 56 is that the queue retries stay idempotent across workers. Point 57 is that the queue retries stay idempotent across workers. Point 58 is that the queue retries stay idempotent across workers. Point 59 is that the queue retries stay idempotent across workers.",
@@ -144,11 +576,83 @@
       "sub": 1,
       "kind": "transcript",
       "toolName": null,
-      "text": "Point 57 is that the queue retries stay idempotent across workers. Point 58 is that the queue retries stay idempotent across workers. Point 59 is that the queue retries stay idempotent across workers. Point 60 is that the queue retries stay idempotent across workers. Point 61 is that the queue retries stay idempotent across workers. Point 62 is that the queue retries stay idempotent across workers. Point 63 is that the queue retries stay idempotent across workers. Point 64 is that the queue retries stay idempotent across workers. Point 65 is that the queue retries stay idempotent across workers. Point 66 is that the queue retries stay idempotent across workers. Point 67 is that the queue retries stay idempotent across workers. Point 68 is that the queue retries stay idempotent across workers. Point 69 is that the queue retries stay idempotent across workers. Point 70 is that the queue retries stay idempotent across workers. Point 71 is that the queue retries stay idempotent across workers. Point 72 is that the queue retries stay idempotent across workers. Point 73 is that the queue retries stay idempotent across workers. Point 74 is that the queue retries stay idempotent across workers. Point 75 is that the queue retries stay idempotent across workers. Point 76 is that the queue retries stay idempotent across workers. Point 77 is that the queue retries stay idempotent across workers. Point 78 is that the queue retries stay idempotent across workers. Point 79 is that the queue retries stay idempotent across workers. Point 80 is that the queue retries stay idempotent across workers. Point 81 is that the queue retries stay idempotent across workers. Point 82 is that the queue retries stay idempotent across workers. Point 83 is that the queue retries stay idempotent across workers. Point 84 is that the queue retries stay idempotent across workers. Point 85 is that the queue retries stay idempotent across workers. Point 86 is that the queue retries stay idempotent across workers. Point 87 is that the queue retries stay idempotent across workers. Point 88 is that the queue retries stay idempotent across workers. Point 89 is that the queue retries stay idempotent across workers.",
+      "text": "[Nikita] Point 57 is that the queue retries stay idempotent across workers. Point 58 is that the queue retries stay idempotent across workers. Point 59 is that the queue retries stay idempotent across workers. Point 60 is that the queue retries stay idempotent across workers. Point 61 is that the queue retries stay idempotent across workers. Point 62 is that the queue retries stay idempotent across workers. Point 63 is that the queue retries stay idempotent across workers. Point 64 is that the queue retries stay idempotent across workers. Point 65 is that the queue retries stay idempotent across workers. Point 66 is that the queue retries stay idempotent across workers. Point 67 is that the queue retries stay idempotent across workers. Point 68 is that the queue retries stay idempotent across workers. Point 69 is that the queue retries stay idempotent across workers. Point 70 is that the queue retries stay idempotent across workers. Point 71 is that the queue retries stay idempotent across workers. Point 72 is that the queue retries stay idempotent across workers. Point 73 is that the queue retries stay idempotent across workers. Point 74 is that the queue retries stay idempotent across workers. Point 75 is that the queue retries stay idempotent across workers. Point 76 is that the queue retries stay idempotent across workers. Point 77 is that the queue retries stay idempotent across workers. Point 78 is that the queue retries stay idempotent across workers. Point 79 is that the queue retries stay idempotent across workers. Point 80 is that the queue retries stay idempotent across workers. Point 81 is that the queue retries stay idempotent across workers. Point 82 is that the queue retries stay idempotent across workers. Point 83 is that the queue retries stay idempotent across workers. Point 84 is that the queue retries stay idempotent across workers. Point 85 is that the queue retries stay idempotent across workers. Point 86 is that the queue retries stay idempotent across workers. Point 87 is that the queue retries stay idempotent across workers. Point 88 is that the queue retries stay idempotent across workers. Point 89 is that the queue retries stay idempotent across workers.",
       "embed": true,
       "id": "02277bdafa54282edbda1787",
       "embedText": "[Nikita] Point 57 is that the queue retries stay idempotent across workers. Point 58 is that the queue retries stay idempotent across workers. Point 59 is that the queue retries stay idempotent across workers. Point 60 is that the queue retries stay idempotent across workers. Point 61 is that the queue retries stay idempotent across workers. Point 62 is that the queue retries stay idempotent across workers. Point 63 is that the queue retries stay idempotent across workers. Point 64 is that the queue retries stay idempotent across workers. Point 65 is that the queue retries stay idempotent across workers. Point 66 is that the queue retries stay idempotent across workers. Point 67 is that the queue retries stay idempotent across workers. Point 68 is that the queue retries stay idempotent across workers. Point 69 is that the queue retries stay idempotent across workers. Point 70 is that the queue retries stay idempotent across workers. Point 71 is that the queue retries stay idempotent across workers. Point 72 is that the queue retries stay idempotent across workers. Point 73 is that the queue retries stay idempotent across workers. Point 74 is that the queue retries stay idempotent across workers. Point 75 is that the queue retries stay idempotent across workers. Point 76 is that the queue retries stay idempotent across workers. Point 77 is that the queue retries stay idempotent across workers. Point 78 is that the queue retries stay idempotent across workers. Point 79 is that the queue retries stay idempotent across workers. Point 80 is that the queue retries stay idempotent across workers. Point 81 is that the queue retries stay idempotent across workers. Point 82 is that the queue retries stay idempotent across workers. Point 83 is that the queue retries stay idempotent across workers. Point 84 is that the queue retries stay idempotent across workers. Point 85 is that the queue retries stay idempotent across workers. Point 86 is that the queue retries stay idempotent across workers. Point 87 is that the queue retries stay idempotent across workers. Point 88 is that the queue retries stay idempotent across workers. Point 89 is that the queue retries stay idempotent across workers.",
       "contentHash": "2a90eeed6128b1df8250df78ec1032d1048a25034f6c2fe6aed1062bc5cc5b3d"
+    },
+    {
+      "turnKey": "s10",
+      "partIdx": 0,
+      "sub": 0,
+      "kind": "transcript",
+      "toolName": null,
+      "text": "[Kim] We should move the garden planning meeting to Friday. Friday works for me, Ana is away on Thursday. Do we still need the extra raised beds?\n[Nikita] Yes, two more by the fence. What about the budget for the soil? Roughly two hundred, and Ben offered to drive the truck. Good.\n[Kim] Good.\n[Nikita] Agreed, I will pick up lids on the way. We should move the garden planning meeting to Friday.\n[Kim] Do we still need the extra raised beds? Yes, two more by the fence. What about the budget for the soil?\n[Nikita] Roughly two hundred, and Ben offered to drive the truck. Good. Let me write that down: Friday, two beds, soil budget two hundred. Also the compost bins need a lid before the rain starts next week, otherwise everything smells.\n[Kim] Also the compost bins need a lid before the rain starts next week, otherwise everything smells.\n[Nikita] Friday works for me, Ana is away on Thursday. Do we still need the extra raised beds?",
+      "embed": true,
+      "id": "43c70300c896f0f8d242c919",
+      "embedText": "[Kim] We should move the garden planning meeting to Friday. Friday works for me, Ana is away on Thursday. Do we still need the extra raised beds?\n[Nikita] Yes, two more by the fence. What about the budget for the soil? Roughly two hundred, and Ben offered to drive the truck. Good.\n[Kim] Good.\n[Nikita] Agreed, I will pick up lids on the way. We should move the garden planning meeting to Friday.\n[Kim] Do we still need the extra raised beds? Yes, two more by the fence. What about the budget for the soil?\n[Nikita] Roughly two hundred, and Ben offered to drive the truck. Good. Let me write that down: Friday, two beds, soil budget two hundred. Also the compost bins need a lid before the rain starts next week, otherwise everything smells.\n[Kim] Also the compost bins need a lid before the rain starts next week, otherwise everything smells.\n[Nikita] Friday works for me, Ana is away on Thursday. Do we still need the extra raised beds?",
+      "contentHash": "be31bb74cbacf8d802e587c7d2888f1a8376713096f0da2b0b2045ccffc5475b"
+    },
+    {
+      "turnKey": "s16",
+      "partIdx": 0,
+      "sub": 0,
+      "kind": "transcript",
+      "toolName": null,
+      "text": "[Kim] Also the compost bins need a lid before the rain starts next week, otherwise everything smells.\n[Nikita] Friday works for me, Ana is away on Thursday. Do we still need the extra raised beds?\n[Kim] What about the budget for the soil? Roughly two hundred, and Ben offered to drive the truck. Good.\n[Nikita] Let me write that down: Friday, two beds, soil budget two hundred. Also the compost bins need a lid before the rain starts next week, otherwise everything smells. Agreed, I will pick up lids on the way. We should move the garden planning meeting to Friday.\n[Kim] We should move the garden planning meeting to Friday.\n[Nikita] Yes, two more by the fence. What about the budget for the soil?\n[Kim] Good. Let me write that down: Friday, two beds, soil budget two hundred. Also the compost bins need a lid before the rain starts next week, otherwise everything smells.",
+      "embed": true,
+      "id": "2773aa652631e2e20e3012ec",
+      "embedText": "[Kim] Also the compost bins need a lid before the rain starts next week, otherwise everything smells.\n[Nikita] Friday works for me, Ana is away on Thursday. Do we still need the extra raised beds?\n[Kim] What about the budget for the soil? Roughly two hundred, and Ben offered to drive the truck. Good.\n[Nikita] Let me write that down: Friday, two beds, soil budget two hundred. Also the compost bins need a lid before the rain starts next week, otherwise everything smells. Agreed, I will pick up lids on the way. We should move the garden planning meeting to Friday.\n[Kim] We should move the garden planning meeting to Friday.\n[Nikita] Yes, two more by the fence. What about the budget for the soil?\n[Kim] Good. Let me write that down: Friday, two beds, soil budget two hundred. Also the compost bins need a lid before the rain starts next week, otherwise everything smells.",
+      "contentHash": "d626a74a30fb0e1ce0fd2e113081346a91da22a1fc7d326401654f6f90c46ce6"
+    },
+    {
+      "turnKey": "s21",
+      "partIdx": 0,
+      "sub": 0,
+      "kind": "transcript",
+      "toolName": null,
+      "text": "[Nikita] Yes, two more by the fence. What about the budget for the soil?\n[Kim] Good. Let me write that down: Friday, two beds, soil budget two hundred. Also the compost bins need a lid before the rain starts next week, otherwise everything smells.\n[Nikita] Agreed, I will pick up lids on the way. We should move the garden planning meeting to Friday. Friday works for me, Ana is away on Thursday. Do we still need the extra raised beds?\n[Kim] Do we still need the extra raised beds?\n[Nikita] Roughly two hundred, and Ben offered to drive the truck. Good.\n[Kim] Also the compost bins need a lid before the rain starts next week, otherwise everything smells. Agreed, I will pick up lids on the way. We should move the garden planning meeting to Friday.\n[Nikita] Friday works for me, Ana is away on Thursday. Do we still need the extra raised beds? Yes, two more by the fence. What about the budget for the soil?\n[Kim] What about the budget for the soil?",
+      "embed": true,
+      "id": "99e3f25b4bb007dc8f327c3b",
+      "embedText": "[Nikita] Yes, two more by the fence. What about the budget for the soil?\n[Kim] Good. Let me write that down: Friday, two beds, soil budget two hundred. Also the compost bins need a lid before the rain starts next week, otherwise everything smells.\n[Nikita] Agreed, I will pick up lids on the way. We should move the garden planning meeting to Friday. Friday works for me, Ana is away on Thursday. Do we still need the extra raised beds?\n[Kim] Do we still need the extra raised beds?\n[Nikita] Roughly two hundred, and Ben offered to drive the truck. Good.\n[Kim] Also the compost bins need a lid before the rain starts next week, otherwise everything smells. Agreed, I will pick up lids on the way. We should move the garden planning meeting to Friday.\n[Nikita] Friday works for me, Ana is away on Thursday. Do we still need the extra raised beds? Yes, two more by the fence. What about the budget for the soil?\n[Kim] What about the budget for the soil?",
+      "contentHash": "df4fdf10dd215fae97e779d1fbbc9322936821c93c0d26f9e13af2faf8edcc95"
+    },
+    {
+      "turnKey": "s27",
+      "partIdx": 0,
+      "sub": 0,
+      "kind": "transcript",
+      "toolName": null,
+      "text": "[Nikita] Friday works for me, Ana is away on Thursday. Do we still need the extra raised beds? Yes, two more by the fence. What about the budget for the soil?\n[Kim] What about the budget for the soil?\n[Nikita] Let me write that down: Friday, two beds, soil budget two hundred. Also the compost bins need a lid before the rain starts next week, otherwise everything smells.\n[Kim] We should move the garden planning meeting to Friday. Friday works for me, Ana is away on Thursday. Do we still need the extra raised beds?\n[Nikita] Yes, two more by the fence. What about the budget for the soil? Roughly two hundred, and Ben offered to drive the truck. Good.\n[Kim] Good.\n[Nikita] Agreed, I will pick up lids on the way. We should move the garden planning meeting to Friday.\n[Kim] Do we still need the extra raised beds? Yes, two more by the fence. What about the budget for the soil?",
+      "embed": true,
+      "id": "de276f6eaa49f5991d25ce1b",
+      "embedText": "[Nikita] Friday works for me, Ana is away on Thursday. Do we still need the extra raised beds? Yes, two more by the fence. What about the budget for the soil?\n[Kim] What about the budget for the soil?\n[Nikita] Let me write that down: Friday, two beds, soil budget two hundred. Also the compost bins need a lid before the rain starts next week, otherwise everything smells.\n[Kim] We should move the garden planning meeting to Friday. Friday works for me, Ana is away on Thursday. Do we still need the extra raised beds?\n[Nikita] Yes, two more by the fence. What about the budget for the soil? Roughly two hundred, and Ben offered to drive the truck. Good.\n[Kim] Good.\n[Nikita] Agreed, I will pick up lids on the way. We should move the garden planning meeting to Friday.\n[Kim] Do we still need the extra raised beds? Yes, two more by the fence. What about the budget for the soil?",
+      "contentHash": "7e7b9e16999fe40981613dde482c5d79730953f8dc2a942935a6d6b40cdd229f"
+    },
+    {
+      "turnKey": "s32",
+      "partIdx": 0,
+      "sub": 0,
+      "kind": "transcript",
+      "toolName": null,
+      "text": "[Kim] Good.\n[Nikita] Agreed, I will pick up lids on the way. We should move the garden planning meeting to Friday.\n[Kim] Do we still need the extra raised beds? Yes, two more by the fence. What about the budget for the soil?\n[Nikita] Roughly two hundred, and Ben offered to drive the truck. Good. Let me write that down: Friday, two beds, soil budget two hundred. Also the compost bins need a lid before the rain starts next week, otherwise everything smells.\n[Kim] Also the compost bins need a lid before the rain starts next week, otherwise everything smells.\n[Nikita] Friday works for me, Ana is away on Thursday. Do we still need the extra raised beds?\n[Kim] What about the budget for the soil? Roughly two hundred, and Ben offered to drive the truck. Good.\n[Nikita] Let me write that down: Friday, two beds, soil budget two hundred. Also the compost bins need a lid before the rain starts next week, otherwise everything smells. Agreed, I will pick up lids on the way. We should move the garden planning meeting to Friday.",
+      "embed": true,
+      "id": "7ee204e3bba1ca0084183ebf",
+      "embedText": "[Kim] Good.\n[Nikita] Agreed, I will pick up lids on the way. We should move the garden planning meeting to Friday.\n[Kim] Do we still need the extra raised beds? Yes, two more by the fence. What about the budget for the soil?\n[Nikita] Roughly two hundred, and Ben offered to drive the truck. Good. Let me write that down: Friday, two beds, soil budget two hundred. Also the compost bins need a lid before the rain starts next week, otherwise everything smells.\n[Kim] Also the compost bins need a lid before the rain starts next week, otherwise everything smells.\n[Nikita] Friday works for me, Ana is away on Thursday. Do we still need the extra raised beds?\n[Kim] What about the budget for the soil? Roughly two hundred, and Ben offered to drive the truck. Good.\n[Nikita] Let me write that down: Friday, two beds, soil budget two hundred. Also the compost bins need a lid before the rain starts next week, otherwise everything smells. Agreed, I will pick up lids on the way. We should move the garden planning meeting to Friday.",
+      "contentHash": "f57c52d97a48e4e1daea49d4dc4624ce4b8720a22d6921ba5d03549e7ab17462"
+    },
+    {
+      "turnKey": "s39",
+      "partIdx": 0,
+      "sub": 0,
+      "kind": "transcript",
+      "toolName": null,
+      "text": "[Nikita] Let me write that down: Friday, two beds, soil budget two hundred. Also the compost bins need a lid before the rain starts next week, otherwise everything smells. Agreed, I will pick up lids on the way. We should move the garden planning meeting to Friday.\n[Kim] We should move the garden planning meeting to Friday.\n[Nikita] Yes, two more by the fence. What about the budget for the soil?\n[Kim] Good. Let me write that down: Friday, two beds, soil budget two hundred. Also the compost bins need a lid before the rain starts next week, otherwise everything smells.\n[Nikita] Agreed, I will pick up lids on the way. We should move the garden planning meeting to Friday. Friday works for me, Ana is away on Thursday. Do we still need the extra raised beds?\n[Kim] Do we still need the extra raised beds?\n[Nikita] Roughly two hundred, and Ben offered to drive the truck. Good.",
+      "embed": true,
+      "id": "c4ce80f1fbcff474c63323ce",
+      "embedText": "[Nikita] Let me write that down: Friday, two beds, soil budget two hundred. Also the compost bins need a lid before the rain starts next week, otherwise everything smells. Agreed, I will pick up lids on the way. We should move the garden planning meeting to Friday.\n[Kim] We should move the garden planning meeting to Friday.\n[Nikita] Yes, two more by the fence. What about the budget for the soil?\n[Kim] Good. Let me write that down: Friday, two beds, soil budget two hundred. Also the compost bins need a lid before the rain starts next week, otherwise everything smells.\n[Nikita] Agreed, I will pick up lids on the way. We should move the garden planning meeting to Friday. Friday works for me, Ana is away on Thursday. Do we still need the extra raised beds?\n[Kim] Do we still need the extra raised beds?\n[Nikita] Roughly two hundred, and Ben offered to drive the truck. Good.",
+      "contentHash": "19feaa9bb0632695c749ad8387dd599a1cf582289665cfff1e451323c683f7aa"
     }
   ]
 }

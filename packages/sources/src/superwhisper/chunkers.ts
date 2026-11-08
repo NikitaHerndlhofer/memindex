@@ -5,8 +5,9 @@
  *   dictation  each transcript version whole when `<prefix><text>` fits, else windows cut at speaker labels
  *              and sentence ends. The best transcript embeds as `[<mode>] <text>`, the raw one as
  *              `[<mode> raw] <text>`, and a raw transcript identical to the best one adds no chunks.
- *   meeting    speaker turns embedded as `[<speaker>] <text>`; the summary turn `u` goes through the
- *              dictation chunker, so a meeting without speaker segments chunks exactly like a dictation.
+ *   meeting    speaker turns packed into windows of `[<speaker>] <text>` lines; the summary turn `u` goes
+ *              through the dictation chunker, so a meeting without speaker segments chunks exactly like a
+ *              dictation.
  */
 
 import { speakerTurnChunker, transcriptChunker } from "@memindex/chunkers";
@@ -31,6 +32,4 @@ export const speakerChunker = speakerTurnChunker({
   tokens: EMBEDDING_MODEL.tokens,
   maxTokens: EMBEDDING_MODEL.chunkTokens,
   overlapTokens: 64,
-  minEmbedWords: 4,
-  embedPrefix: "[{speaker}] ",
 });
