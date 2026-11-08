@@ -5,7 +5,7 @@
  */
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -230,6 +230,25 @@ describe("supabase CLI is the migrator", () => {
   });
   afterAll(async () => {
     await admin.unsafe(`DROP DATABASE IF EXISTS ${scratch} WITH (FORCE)`);
+  });
+
+  test("a failing CLI reports its stdout as well as its stderr, with the database URL redacted", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "memindex-fake-supabase-"));
+    try {
+      const bin = join(dir, "supabase");
+      // The real CLI prints a deprecation warning on stderr and its error as JSON on stdout.
+      writeFileSync(
+        bin,
+        '#!/bin/sh\necho "Warning: --db-url is deprecated" >&2\necho "{\\"error\\":\\"config is wrong for $4\\"}"\nexit 1\n',
+      );
+      chmodSync(bin, 0o755);
+      const err = await migrateStore(scratchCfg, { supabaseBin: bin }).catch((e: unknown) => e);
+      expect(String(err)).toContain("Warning: --db-url is deprecated");
+      expect(String(err)).toContain("config is wrong for <db-url>");
+      expect(String(err)).not.toContain(scratchUrl);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   test("fresh database: behind until `supabase migration up`, then current; rerun is a no-op; ledger matches `db reset`", async () => {

@@ -81,7 +81,11 @@ export async function migrateStore(cfg: StoreConfig, opts: MigrateOptions = {}):
   }
   if (code !== 0) {
     throw new Error(
-      `supabase migration up failed (exit ${code}): ${(err || out).trim().replaceAll(url, "<db-url>")}`,
+      `supabase migration up failed (exit ${code}): ${[err, out]
+        .map((s) => s.trim())
+        .filter(Boolean)
+        .join("\n")
+        .replaceAll(url, "<db-url>")}`,
     );
   }
   const conn = connect(url, { max: 1 });
