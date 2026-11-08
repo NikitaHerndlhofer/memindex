@@ -325,6 +325,9 @@ enforcement, and that a settled watcher uses at most 1% CPU and 0.6 s of cputime
   outgrow the Docker VM's page cache. Unmeasured.
 - Concurrent ingest leaves databases 15-20% larger than sequential ingest on the subset (a full
   history database is 15-19 GB). Unexplained.
+- The 0.2.0 move to Qwen3-Embedding-0.6B with 1,024-token chunks was chosen from public benchmarks and has not
+  been scored on the search gate (disk headroom blocked the snapshot copy). Only the meeting windows have an
+  eval on this archive, and that one is dense-only. The title-match cutoff is still the bge-m3 value.
 - The watcher's maintenance slice re-chunked 886 of 7,188 items after the 0.2.0 swap and then did nothing: no
   log line, no error, `rechunk` pending unchanged across two watcher restarts, and the embedder spent hours on
   chunks the re-chunk would replace. `memindex jobs run --only rechunk` re-chunked all 6,302 left in 8.7 minutes,
