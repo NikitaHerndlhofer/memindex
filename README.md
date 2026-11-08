@@ -326,6 +326,9 @@ memindex install
 `memindex install` applies new migrations, refreshes the watcher's copy of the binary and restarts the
 watcher. `memindex doctor` fails with `fix: memindex install` when the watcher still runs an older copy.
 After an upgrade that re-chunks the archive, `memindex pace full` clears the re-embedding backlog sooner.
+`memindex jobs` shows the re-chunk: `rechunk` pending falls to 0 within about ten minutes, then `embed` drains. 0.2.2 re-chunks
+every diarized meeting into windows of speaker turns. If `rechunk` stays at the same number for an hour or more,
+run `memindex jobs run --only rechunk` once; it takes a few minutes and then the watcher embeds the new chunks.
 
 ## Embedding pace
 
@@ -412,6 +415,7 @@ bun scripts/eval-snapshot.ts --from postgresql://…/memindex     # once
 bun scripts/search-gate.ts --record-baseline                       # the current code, as the baseline
 bun scripts/search-gate.ts --candidate-bin "bun apps/memindex/src/cli.ts"   # a change, on a clone
 bun scripts/gate-model.ts                                          # a new embedding model or chunker
+bun scripts/eval-meeting-chunks.ts --variants turn,w256o64          # how diarized meetings are cut
 ```
 
 `--candidate-bin` clones the snapshot, migrates the clone with that binary, scores it and drops it (it
@@ -427,6 +431,14 @@ re-embed the copy (hours: the embedding of the whole snapshot), freezes it and r
 the snapshot's comment, so `baseline.json` applies to it. The copy is dropped afterwards (`--keep` leaves it) and an
 interrupted run continues with `--resume`.
 
+How diarized meetings are cut is scored on its own, because fewer than a third of the recordings have speaker
+turns and the gate has few meeting questions. `scripts/eval-meeting-chunks.ts` reads every diarized meeting of
+the live archive (read-only), cuts them with each variant (`turn` is one chunk per turn, `w<N>o<M>` windows of
+N tokens overlapping by M), embeds the chunks with the Ollama model and scores your gold questions by dense
+retrieval: how much of the answer turns come back within 1,500 tokens, the rank of the first hit, how much of
+the answer the top chunk holds, and whether the right meeting is in the top 5. It writes `runs/<time>.json`
+under `meeting-chunks/` in the eval dir.
+
 Re-record the baseline after every snapshot restore: a restored vector index is rebuilt with different
 approximate neighbours, so scores move without any code change.
 
@@ -438,6 +450,8 @@ The eval dir holds:
   `minQuotedQueries` or more eval queries, all from `since` on.
 - `gate.json`: the snapshot URL, rows per search, runs, tolerance, and per-set `floors` and `hub` ceilings.
 - `baseline.json`: written by `--record-baseline`.
+- `meeting-chunks/gold.json`: `{ "queries": [{ "id", "type", "query", "item_key", "turns": ["s12", "s15"] }] }`,
+  the turn keys that hold each answer. A question and the turn that answers it both count.
 
 ```json
 {

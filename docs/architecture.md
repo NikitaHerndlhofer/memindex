@@ -290,7 +290,9 @@ Measured on an M4 Pro (20-core GPU, 48 GB). Raw data and scripts are kept outsid
    re-embeds. `packages/sources/scripts/rechunk-estimate.ts` prices the re-embed; re-measure its
    `TOKENS_PER_SECOND` for the new model.
 4. Release. The first write-open replaces the old model's vectors, and the watcher re-chunks and re-embeds in the
-   background (see the README's upgrade note).
+   background (see the README's upgrade note). Check that `rechunk` pending reaches 0 before leaving the
+   embedder to run: it embeds whatever chunks exist, so a stalled re-chunk makes it embed chunks about to be
+   replaced.
 
 ## Verification
 
@@ -323,5 +325,11 @@ enforcement, and that a settled watcher uses at most 1% CPU and 0.6 s of cputime
   outgrow the Docker VM's page cache. Unmeasured.
 - Concurrent ingest leaves databases 15-20% larger than sequential ingest on the subset (a full
   history database is 15-19 GB). Unexplained.
+- The watcher's maintenance slice re-chunked 886 of 7,188 items after the 0.2.0 swap and then did nothing: no
+  log line, no error, `rechunk` pending unchanged across two watcher restarts, and the embedder spent hours on
+  chunks the re-chunk would replace. `memindex jobs run --only rechunk` re-chunked all 6,302 left in 8.7 minutes,
+  and the same job and the same watcher run to the end on a scratch copy of the stale superwhisper items. Cause
+  unknown; the watcher gives up maintenance for good after one slice that converges nothing
+  (`embed-duty.ts`), a candidate not yet confirmed.
 - Disk: halfvec(1024) is ~2 KB per vector (~1.3 GB for 630k) plus HNSW and the chat text. A
   Supabase Pro project includes 8 GB.

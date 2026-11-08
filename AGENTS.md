@@ -49,6 +49,10 @@ The archive is the only copy of data its sources already deleted. Treat it as pr
   snapshot; the live archive moves and contains the eval chats themselves.
 - A new embedding model or chunker needs vectors the snapshot lacks: `bun scripts/gate-model.ts` copies the
   snapshot, lets the candidate binary re-chunk and re-embed the copy (hours), gates it and drops it.
+- Meeting chunking is scored cheaper: `bun scripts/eval-meeting-chunks.ts --variants turn,w256o64` embeds the
+  chunker variants of every diarized live meeting (read-only, minutes) and scores gold-turn questions kept in
+  `eval-local/meeting-chunks/gold.json`. Dense retrieval only; confirm a winner on the live archive after the
+  re-chunk.
 - Name scratch databases `memindex_<purpose>` and drop them when done. Keep 25 GB free (`df -h /`)
   before copying a database.
 
@@ -66,6 +70,9 @@ The archive is the only copy of data its sources already deleted. Treat it as pr
 - `bun run release X.Y.Z` is the only way a change ships: tests, tag, GitHub release, tap,
   `brew upgrade`, `memindex install --yes`, `memindex doctor`. The local install gets changes only
   this way. Never apply a change to it by hand (no hand-run SQL, no dev build, no `jobs run`).
+- After a release that changes a chunker, watch `memindex jobs` until `rechunk` pending reaches 0. The watcher's
+  maintenance stalled once with 6,302 items pending (cause unknown, see docs/architecture.md); with the owner's
+  OK, `memindex jobs run --only rechunk` on the installed CLI is the one hand-run allowed for that.
 - A step users must take goes in the README or release notes, and we follow those notes too.
 
 ## Code
@@ -78,3 +85,5 @@ The archive is the only copy of data its sources already deleted. Treat it as pr
 
 - zsh doesn't split words in variables: `CMD="psql -h …"; $CMD` fails. Use a function or an array.
 - Subagents never commit, stash, reset or check out. The coordinating agent owns git.
+- `.agents/` and `.claude/` hold vendored agent skills (ponytail) that Biome skips; `bun run release` refuses
+  an untracked file, so commit or remove them first.
